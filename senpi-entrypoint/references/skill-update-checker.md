@@ -73,20 +73,26 @@ Confirm to the user that notifications are back on.
 
 ---
 
-## Background Cron
+## Background Cron (OpenClaw)
 
-Step 5 installs an hourly cron job that runs the checker with `--cron`.
-In cron mode the script is fully silent — no stdout, no agent interaction
-— and writes any found updates to $SENPI_STATE_DIR/pending-skill-updates.json` (default: `~/.config/senpi/pending-skill-updates.json` if `SENPI_STATE_DIR` is unset).
+Step 5 installs an hourly **OpenClaw cron** job named `senpi-skill-update-check`.
+Each run is an isolated agent turn that executes the checker script with
+`--cron` and produces no delivery. The script is fully silent and writes any
+found updates to `$SENPI_STATE_DIR/pending-skill-updates.json` (default:
+`~/.config/senpi/pending-skill-updates.json` if `SENPI_STATE_DIR` is unset).
 At the next session startup the entrypoint reads and clears that file, then
 surfaces the queued updates as described above.
 
-The opt-out flag (`skillUpdates.enabled: false`) also suppresses the cron
-— it exits immediately without writing to the pending file.
+The opt-out flag (`skillUpdates.enabled: false`) also suppresses the checker
+— the script exits immediately without writing to the pending file.
 
-**View or remove the cron entry:**
+**View, pause, or remove the OpenClaw cron job:**
 
 ```bash
-crontab -l | grep "check-skill-updates"          # view
-( crontab -l 2>/dev/null | grep -v "check-skill-updates.py" ) | crontab -   # remove
+openclaw cron list                              # view (look for senpi-skill-update-check)
+openclaw cron pause "senpi-skill-update-check"  # pause
+openclaw cron resume "senpi-skill-update-check" # resume
+openclaw cron remove "senpi-skill-update-check" # remove
 ```
+
+Jobs are stored in `$OPENCLAW_STATE_DIR/cron/jobs.json` (default: `~/.openclaw/cron/jobs.json` if `OPENCLAW_STATE_DIR` is unset).
