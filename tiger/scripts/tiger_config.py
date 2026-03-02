@@ -26,6 +26,11 @@ SCRIPTS_DIR = os.path.join(WORKSPACE, "scripts")
 STATE_DIR = os.path.join(WORKSPACE, "state")
 CONFIG_FILE = os.path.join(WORKSPACE, "tiger-config.json")
 
+_SENPI_SKILLS_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_LIB_DIR = os.path.join(_SENPI_SKILLS_ROOT, "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
 VERBOSE = os.environ.get("TIGER_VERBOSE") == "1"
 
 
@@ -566,6 +571,8 @@ def get_asset_candles_batch(assets, intervals=None, include_funding=False):
     raw = mcporter_call_batch(calls)
     results = {}
     for asset, result in zip(assets, raw):
+        if isinstance(result, dict) and "success" not in result:
+            result = {"success": True, "data": result}
         results[asset] = result
     return results
 
