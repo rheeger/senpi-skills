@@ -312,6 +312,9 @@ def main(args):
 
     for dir_name, dir_entry in github_skill_dirs.items():
         if dir_name in installed_names:
+            # Installed skills are already known to the user. Mark them as seen
+            # so uninstalling later doesn't surface them as "newly added".
+            seen_available.add(dir_name)
             continue
         if dir_name in seen_available:
             continue
