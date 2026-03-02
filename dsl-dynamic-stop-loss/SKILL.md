@@ -233,6 +233,8 @@ DSL_STATE_DIR=/data/workspace/dsl DSL_STRATEGY_ID=strat-abc-123 python3 scripts/
 
 No `DSL_ASSET` — the script discovers positions from MCP clearinghouse and state files in the strategy dir.
 
+**Clock-aligned schedule (OpenClaw):** If the cron platform uses an internal anchor for interval-based schedules (e.g. `everyMs`), runs can occur at irregular wall-clock times. For **regular 3-minute boundaries** (e.g. :00, :03, :06…), create the job with a **cron expression** instead of a raw interval. Example: `"schedule": { "kind": "cron", "expr": "*/3 * * * *", "tz": "UTC" }` (use the user's timezone if preferred). This avoids the need to remove and re-add the cron at a boundary.
+
 ## How to Set Up a New Position
 
 **Agent must complete all steps; cron is one per strategy, created automatically.**
