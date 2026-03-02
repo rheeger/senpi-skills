@@ -130,21 +130,23 @@ def _mcp_strategy_get(strategy_id: str) -> tuple[dict | None, str | None]:
         return None, str(e)
 
 
-def get_strategy_active_and_wallet(strategy_id: str) -> tuple[bool, str | None, str | None]:
+def get_strategy_active_and_wallet(strategy_id: str) -> tuple[bool, str | None, str | None, bool]:
     """Check if strategy is active via Senpi MCP strategy_get (not clearinghouse).
-    Returns (active, wallet, error_message).
-    active=True only when strategy.status is ACTIVE or PAUSED.
+    Returns (active, wallet, message, confirmed_inactive).
+    - active=True only when strategy.status is ACTIVE or PAUSED.
+    - confirmed_inactive=True only when we got a successful response and strategy is not active
+      (do not True on MCP/API errors — those must not trigger state cleanup).
     """
     strategy, err = _mcp_strategy_get(strategy_id)
     if err is not None:
-        return False, None, err
+        return False, None, err, False  # transient/API error: do not cleanup state
     status = (strategy.get("status") or "").strip().upper()
     if status not in DSL_ACTIVE_STATUSES:
-        return False, None, f"strategy status is {status!r} (not ACTIVE/PAUSED)"
+        return False, None, f"strategy status is {status!r} (not ACTIVE/PAUSED)", True
     wallet = (strategy.get("strategyWalletAddress") or "").strip()
     if not wallet:
-        return False, None, "strategy_get: no strategyWalletAddress"
-    return True, wallet, None
+        return False, None, "strategy_get: no strategyWalletAddress", True
+    return True, wallet, None, False
 
 
 def _mcp_clearinghouse(wallet: str) -> tuple[dict | None, str | None]:
@@ -240,11 +242,9 @@ def fetch_price_mcp(dex: str, lookup_symbol: str) -> tuple[float | None, str | N
         )
         data = None
         if r.returncode == 0 and r.stdout:
-            try:
-                raw = json.loads(r.stdout)
+            raw = _unwrap_mcporter_response(r.stdout)
+            if raw is not None:
                 data = _unwrap_mcp_response(raw)
-            except json.JSONDecodeError:
-                pass
         price_str = _parse_price_from_response(data, response_key) if data else None
 
         if price_str is None:
@@ -254,12 +254,10 @@ def fetch_price_mcp(dex: str, lookup_symbol: str) -> tuple[float | None, str | N
                 capture_output=True, text=True, timeout=15,
             )
             if r.returncode == 0 and r.stdout:
-                try:
-                    raw = json.loads(r.stdout)
+                raw = _unwrap_mcporter_response(r.stdout)
+                if raw is not None:
                     data = _unwrap_mcp_response(raw)
                     price_str = _parse_price_from_response(data, response_key)
-                except json.JSONDecodeError:
-                    pass
             elif r.returncode != 0 and data is None:
                 return None, (r.stderr or r.stdout or "non-zero exit")
 
@@ -368,6 +366,13 @@ def apply_tier_upgrades(
                 tier_floor = round(entry + (hw - entry) * tier["lockPct"] / 100, 4)
             else:
                 tier_floor = round(entry - (entry - hw) * tier["lockPct"] / 100, 4)
+            # Ratchet: never regress vs stored (e.g. v4 ROE-based floor may be higher for LONG)
+            stored = state.get("tierFloorPrice")
+            if stored is not None and isinstance(stored, (int, float)):
+                if is_long:
+                    tier_floor = max(tier_floor, float(stored))
+                else:
+                    tier_floor = min(tier_floor, float(stored))
             state["currentTierIndex"] = tier_idx
             state["tierFloorPrice"] = tier_floor
             if phase == 1 and tier_idx >= state.get("phase2TriggerTier", 0):
@@ -731,18 +736,29 @@ def main() -> None:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # 1. Strategy active? From Senpi MCP strategy_get (not clearinghouse).
-    active, wallet, active_error = get_strategy_active_and_wallet(strategy_id)
+    active, wallet, active_error, confirmed_inactive = get_strategy_active_and_wallet(strategy_id)
     if not active:
-        deleted = cleanup_strategy_state_dir(state_dir, strategy_id)
-        print(json.dumps({
-            "status": "strategy_inactive",
-            "strategy_id": strategy_id,
-            "message": "Strategy not active (Senpi MCP). State files cleaned. Agent: remove cron for this strategy.",
-            "reason": active_error,
-            "state_files_deleted": deleted,
-            "time": now,
-        }))
-        sys.exit(0)
+        if confirmed_inactive:
+            deleted = cleanup_strategy_state_dir(state_dir, strategy_id)
+            print(json.dumps({
+                "status": "strategy_inactive",
+                "strategy_id": strategy_id,
+                "message": "Strategy not active (Senpi MCP). State files cleaned. Agent: remove cron for this strategy.",
+                "reason": active_error,
+                "state_files_deleted": deleted,
+                "time": now,
+            }))
+            sys.exit(0)
+        else:
+            # Transient/API error (timeout, mcporter down, malformed response): do not delete state.
+            print(json.dumps({
+                "status": "error",
+                "error": "strategy_get_failed",
+                "strategy_id": strategy_id,
+                "message": active_error,
+                "time": now,
+            }))
+            sys.exit(1)
 
     # 2. Active positions from clearinghouse.
     coins, ch_error = get_active_position_coins(wallet)

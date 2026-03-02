@@ -22,8 +22,12 @@ When an entire strategy is shut down (all positions closed, or agent signals str
 
 **Script:** `scripts/dsl-cleanup.py`
 
+`DSL_STATE_DIR` is optional (defaults to `/data/workspace/dsl`); use the env var if set so it matches the value used by the cron.
+
 ```bash
-DSL_STATE_DIR=/data/workspace/dsl DSL_STRATEGY_ID=<strategy-uuid> python3 scripts/dsl-cleanup.py
+DSL_STRATEGY_ID=<strategy-uuid> python3 scripts/dsl-cleanup.py
+# Or, if overriding state dir:
+# DSL_STATE_DIR=/path/to/dsl DSL_STRATEGY_ID=<strategy-uuid> python3 scripts/dsl-cleanup.py
 ```
 
 **Behavior:**
@@ -73,10 +77,11 @@ Example blocked:
 
 ## File Layout After Cleanup
 
-Only active strategy dirs and active position files remain. No `_closed/`:
+Only active strategy dirs and active position files remain. No `_closed/`.
+Paths use `DSL_STATE_DIR` (default `/data/workspace/dsl` when unset):
 
 ```
-/data/workspace/dsl/
+$DSL_STATE_DIR/
   strat-abc-123/
     ETH.json
 ```
