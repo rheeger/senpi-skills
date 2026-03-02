@@ -33,7 +33,9 @@ node -e "
   try {
     s = JSON.parse(fs.readFileSync(p, 'utf8'));
   } catch (e) {
-    if (e.code !== 'ENOENT') throw e;
+    const isMissing = e && e.code === 'ENOENT';
+    const isCorrupt = e instanceof SyntaxError;
+    if (!isMissing && !isCorrupt) throw e;
     fs.mkdirSync(path.dirname(p), { recursive: true });
     s = {};
   }
@@ -59,7 +61,9 @@ node -e "
   try {
     s = JSON.parse(fs.readFileSync(p, 'utf8'));
   } catch (e) {
-    if (e.code !== 'ENOENT') throw e;
+    const isMissing = e && e.code === 'ENOENT';
+    const isCorrupt = e instanceof SyntaxError;
+    if (!isMissing && !isCorrupt) throw e;
     fs.mkdirSync(path.dirname(p), { recursive: true });
     s = {};
   }
