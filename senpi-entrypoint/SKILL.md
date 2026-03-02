@@ -10,8 +10,11 @@ description: >-
   Hyperliquid via Senpi.
 license: Apache-2.0
 compatibility: >-
-  Supports OpenClaw and Claude Code. Requires Node.js and shell access.
-  Skill update checker (Step 5) additionally requires Python 3.
+  Supports any editor using the Vercel skills CLI (Claude Code, Cursor, Cline,
+  OpenCode, etc.). Requires Node.js and shell access. Skill update checker
+  (Step 5) requires Python 3 and a global install via `npx skills add ... -g`;
+  it checks only the Vercel skills CLI global path (~/.agents/skills/) and
+  skips silently if the skill was not installed globally.
 metadata:
   author: Senpi
   version: "1.1.0"
@@ -157,8 +160,8 @@ skills and surfaces them to the user only when there is something relevant.
 
 ### Locate the script
 
-Find the `scripts/` directory for this skill — it is relative to wherever
-`senpi-entrypoint` was installed globally on this machine:
+The Vercel skills CLI installs global skills to `~/.agents/skills/`. Check
+that path for the `check-skill-updates.py` script:
 
 ```bash
 SENPI_ENTRYPOINT_SCRIPTS=$(node -e "
@@ -168,8 +171,8 @@ SENPI_ENTRYPOINT_SCRIPTS=$(node -e "
 " 2>/dev/null)
 ```
 
-If `SENPI_ENTRYPOINT_SCRIPTS` is empty, skip this step silently — the skill
-may not be installed globally yet.
+If `SENPI_ENTRYPOINT_SCRIPTS` is empty the skill was not installed globally
+(`npx skills add ... -g`) — skip this step silently.
 
 ### Run the check
 
