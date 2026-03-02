@@ -273,6 +273,59 @@ def fetch_price_mcp(dex: str, lookup_symbol: str) -> tuple[float | None, str | N
 
 
 # ---------------------------------------------------------------------------
+# State normalization (backfill missing phase1/phase2 for older state files)
+# ---------------------------------------------------------------------------
+
+# Schema defaults for phase config (see references/state-schema.md)
+DEFAULT_PHASE1_RETRACE = 0.03
+DEFAULT_PHASE1_BREACHES = 3
+DEFAULT_PHASE2_RETRACE = 0.015
+DEFAULT_PHASE2_BREACHES = 2
+
+
+def normalize_state_phase_config(state: dict) -> bool:
+    """Ensure phase1 and phase2 exist with required fields. Backfills missing keys from schema defaults.
+    Allows older state files (e.g. missing phase2) to run without KeyError.
+    Returns True if any keys were backfilled (caller may persist state file).
+    """
+    changed = False
+    if "phase1" not in state or not isinstance(state["phase1"], dict):
+        state["phase1"] = {}
+        changed = True
+    p1 = state["phase1"]
+    if "retraceThreshold" not in p1:
+        p1["retraceThreshold"] = DEFAULT_PHASE1_RETRACE
+        changed = True
+    if "consecutiveBreachesRequired" not in p1:
+        p1["consecutiveBreachesRequired"] = DEFAULT_PHASE1_BREACHES
+        changed = True
+    if "absoluteFloor" not in p1 or p1["absoluteFloor"] is None:
+        entry = state.get("entryPrice")
+        lev = max(1, state.get("leverage", 1))
+        is_long = (state.get("direction", "LONG").upper() == "LONG")
+        if entry is not None:
+            if is_long:
+                p1["absoluteFloor"] = round(entry * (1 - 0.03 / lev), 4)
+            else:
+                p1["absoluteFloor"] = round(entry * (1 + 0.03 / lev), 4)
+        else:
+            p1["absoluteFloor"] = 0.0
+        changed = True
+
+    if "phase2" not in state or not isinstance(state["phase2"], dict):
+        state["phase2"] = {}
+        changed = True
+    p2 = state["phase2"]
+    if "retraceThreshold" not in p2:
+        p2["retraceThreshold"] = DEFAULT_PHASE2_RETRACE
+        changed = True
+    if "consecutiveBreachesRequired" not in p2:
+        p2["consecutiveBreachesRequired"] = DEFAULT_PHASE2_BREACHES
+        changed = True
+    return changed
+
+
+# ---------------------------------------------------------------------------
 # Trading logic: high water, tiers, floor, breach
 # ---------------------------------------------------------------------------
 
@@ -557,6 +610,13 @@ def process_one_position(state_file: str, strategy_id: str, now: str) -> None:
             "strategy_id": strategy_id, "time": now,
         }))
         return
+
+    if normalize_state_phase_config(state):
+        try:
+            with open(state_file, "w") as f:
+                json.dump(state, f, indent=2)
+        except OSError:
+            pass
 
     if not state.get("active") and not state.get("pendingClose"):
         print(json.dumps({"status": "inactive", "asset": state.get("asset"), "strategy_id": strategy_id, "time": now}))
