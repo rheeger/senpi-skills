@@ -774,7 +774,8 @@ def get_lifecycle_adapter(**kwargs):
     def _save_state_cb(state):
         save_state(state)
 
-    def _create_dsl(asset, direction, entry_price, size, margin, leverage, pattern):
+    def _create_dsl(asset, direction, entry_price, size, margin=0, leverage=1,
+                    pattern="AUTO", **kwargs):
         return create_dsl_state(asset, direction, entry_price, size, margin,
                                 leverage, pattern, config)
 
