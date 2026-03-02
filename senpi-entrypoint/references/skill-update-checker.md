@@ -57,3 +57,23 @@ node -e "
 ```
 
 Confirm to the user that notifications are back on.
+
+---
+
+## Background Cron
+
+Step 5 installs an hourly cron job that runs the checker with `--cron`.
+In cron mode the script is fully silent — no stdout — and queues any found
+updates in `~/.config/senpi/pending-skill-updates.json`. The next time Step
+5 runs interactively it reads and clears that file instantly (no GitHub
+API call needed), then surfaces the updates exactly as described above.
+
+The opt-out flag (`skillUpdates.enabled: false`) also suppresses the cron
+— it exits immediately without writing to the pending file.
+
+**View or remove the cron entry:**
+
+```bash
+crontab -l | grep "check-skill-updates"          # view
+( crontab -l 2>/dev/null | grep -v "check-skill-updates.py" ) | crontab -   # remove
+```

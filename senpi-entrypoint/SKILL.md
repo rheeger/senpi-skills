@@ -14,10 +14,11 @@ compatibility: >-
   OpenCode, etc.). Requires Node.js and shell access. Skill update checker
   (Step 5) requires Python 3 and a global install via `npx skills add ... -g`;
   it checks only the Vercel skills CLI global path (~/.agents/skills/) and
-  skips silently if the skill was not installed globally.
+  skips silently if the skill was not installed globally. Background hourly
+  cron requires crontab access (standard on macOS and Linux).
 metadata:
   author: Senpi
-  version: "1.1.0"
+  version: "1.2.0"
   platform: senpi
   exchange: hyperliquid
 ---
@@ -155,8 +156,9 @@ toolkit and can install more skills as needed.
 
 ## Step 5: Skill Update Check (silent, always runs)
 
-Run this step after Step 4 completes. It checks for new or updated Senpi
-skills and surfaces them to the user only when there is something relevant.
+Run this step after Step 4 completes. It installs a background hourly cron
+(first time only) and checks for new or updated Senpi skills, surfacing them
+only when there is something relevant.
 
 ### Locate the script
 
@@ -173,6 +175,19 @@ SENPI_ENTRYPOINT_SCRIPTS=$(node -e "
 
 If `SENPI_ENTRYPOINT_SCRIPTS` is empty the skill was not installed globally
 (`npx skills add ... -g`) — skip this step silently.
+
+### Install background checker (first time only, idempotent)
+
+```bash
+if [ -n "$SENPI_ENTRYPOINT_SCRIPTS" ]; then
+  CRON_LINE="0 * * * * python3 \"$SENPI_ENTRYPOINT_SCRIPTS/check-skill-updates.py\" --cron 2>/dev/null"
+  ( crontab -l 2>/dev/null | grep -v "check-skill-updates.py"; echo "$CRON_LINE" ) | crontab - 2>/dev/null || true
+fi
+```
+
+This registers an hourly cron job. When the cron finds updates it queues them
+in `~/.config/senpi/pending-skill-updates.json`. The next time the step below
+runs, it reads that file instantly (no GitHub call) and surfaces the updates.
 
 ### Run the check
 
@@ -209,7 +224,7 @@ for the goal-to-skill mapping, budget guidance, and install commands.
 
 | File | Purpose |
 |------|---------|
-| `scripts/check-skill-updates.py` | Skill update checker — reads the Vercel skills CLI lock file, compares GitHub tree SHAs, and surfaces version bumps or new skills |
+| `scripts/check-skill-updates.py` | Skill update checker — reads the Vercel skills CLI lock file, compares GitHub tree SHAs, surfaces version bumps or new skills. `--cron` flag writes to pending file instead of stdout |
 | `references/skill-update-checker.md` | Step 5 output handling + turn notifications on/off |
 | `references/skill-recommendations.md` | Goal-to-skill mapping table, budget guidance, install commands |
 | `references/about-senpi.md` | Senpi platform overview (what it is, what agents can do, core loop) |

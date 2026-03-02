@@ -16,6 +16,7 @@ Output contract:
   OR { "heartbeat": "HEARTBEAT_OK" }  (on any error — never crash the agent)
 """
 
+import argparse
 import json
 import os
 import sys
@@ -31,6 +32,7 @@ GITHUB_RAW = "https://raw.githubusercontent.com"
 LOCK_FILE = os.path.expanduser("~/.agents/.skill-lock.json")
 CATALOG_FILE = os.path.expanduser("~/.config/senpi/skills-catalog.json")
 STATE_FILE = os.path.expanduser("~/.config/senpi/state.json")
+PENDING_FILE = os.path.expanduser("~/.config/senpi/pending-skill-updates.json")
 
 # Top-level repo directories that are never skills
 NON_SKILL_DIRS = {
@@ -186,16 +188,38 @@ def is_skill_dir(entry):
 # ---------------------------------------------------------------------------
 
 def main():
+    # 0. Parse runtime flags
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument(
+        "--cron", action="store_true",
+        help="Background mode: write results to pending file instead of stdout",
+    )
+    args, _ = parser.parse_known_args()
+
     # 1. Check opt-out flag in Senpi state
     state = load_json(STATE_FILE)
     if state.get("skillUpdates", {}).get("enabled") is False:
-        print(json.dumps({"heartbeat": "HEARTBEAT_OK"}))
+        if not args.cron:
+            print(json.dumps({"heartbeat": "HEARTBEAT_OK"}))
         return
+
+    # 1b. Normal mode only: surface any updates queued by a previous cron run.
+    #     Reading the pending file means no GitHub API call is needed this session.
+    if not args.cron:
+        pending = load_json(PENDING_FILE, {})
+        if pending.get("success"):
+            try:
+                os.remove(PENDING_FILE)
+            except OSError:
+                pass
+            print(json.dumps(pending))
+            return
 
     # 2. Read Vercel skills CLI global lock file
     lock = load_json(LOCK_FILE)
     if not lock:
-        print(json.dumps({"heartbeat": "HEARTBEAT_OK"}))
+        if not args.cron:
+            print(json.dumps({"heartbeat": "HEARTBEAT_OK"}))
         return
 
     all_installed = lock.get("skills", {})
@@ -222,7 +246,8 @@ def main():
     repo_contents = github_get(f"{GITHUB_API}/repos/{SENPI_REPO}/contents/")
     if not repo_contents:
         # Can't reach GitHub — exit silently, don't fail the agent
-        print(json.dumps({"heartbeat": "HEARTBEAT_OK"}))
+        if not args.cron:
+            print(json.dumps({"heartbeat": "HEARTBEAT_OK"}))
         return
 
     # Build a map of { dir_name -> {"sha": "<tree-sha>", ...} }
@@ -311,9 +336,15 @@ def main():
 
     # 8. Output
     if not updated_skills and not new_skills:
-        print(json.dumps({"heartbeat": "HEARTBEAT_OK"}))
+        if not args.cron:
+            print(json.dumps({"heartbeat": "HEARTBEAT_OK"}))
     else:
-        print(json.dumps({"success": True, "updatedSkills": updated_skills, "newSkills": new_skills}))
+        result = {"success": True, "updatedSkills": updated_skills, "newSkills": new_skills}
+        if args.cron:
+            # Queue for the next interactive session to surface
+            atomic_write(PENDING_FILE, result)
+        else:
+            print(json.dumps(result))
 
 
 if __name__ == "__main__":
