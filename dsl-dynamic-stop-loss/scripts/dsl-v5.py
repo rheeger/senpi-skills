@@ -233,7 +233,7 @@ def fetch_price_mcp(dex: str, lookup_symbol: str) -> tuple[float | None, str | N
         is_xyz = dex.lower() == "xyz"
         response_key = f"xyz:{lookup_symbol}" if is_xyz else lookup_symbol
 
-        args_mgp = {"assets": [lookup_symbol], "dex": dex}
+        args_mgp = {"assets": [response_key], "dex": dex}
         r = subprocess.run(
             ["mcporter", "call", "senpi", "market_get_prices", "--args", json.dumps(args_mgp)],
             capture_output=True, text=True, timeout=15,

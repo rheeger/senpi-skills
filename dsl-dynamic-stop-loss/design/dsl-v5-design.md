@@ -221,15 +221,17 @@ else:
 
 ### Mcporter Call Pattern
 
+For **main** dex use the bare symbol in `assets` (no prefix). For **xyz** dex use the prefixed asset (e.g. `xyz:SILVER`). Response keys match.
+
 ```python
+response_key = f"xyz:{lookup_symbol}" if dex == "xyz" else lookup_symbol
 result = subprocess.run(
     ["mcporter", "call", "senpi", "market_get_prices",
-     "--args", json.dumps({"assets": [lookup_symbol], "dex": dex})],
+     "--args", json.dumps({"assets": [response_key], "dex": dex})],
     capture_output=True, text=True, timeout=15
 )
 mcp_response = json.loads(result.stdout)
-# Response price map keys are bare symbols regardless of dex
-price = float(mcp_response["prices"][lookup_symbol])
+price = float(mcp_response["prices"][response_key])
 ```
 
 ### close_position Call for xyz Assets
