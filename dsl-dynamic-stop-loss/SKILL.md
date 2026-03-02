@@ -38,12 +38,12 @@ Automated trailing stop loss for leveraged perp positions on Hyperliquid (main a
 
 ```
 Script handles:              Agent handles:
-✅ Price monitoring           📢 Telegram alerts
-✅ High water tracking        🧹 Cron cleanup (disable after close; run strategy cleanup when all closed)
-✅ Tier upgrades              📊 Portfolio reporting
-✅ Breach detection           🔄 Retry awareness (pendingClose alerts)
-✅ Position closing (via mcporter, with retry)   ⏰ Set up cron automatically when user sets up DSL
-✅ State deactivation
+✅ Strategy active check (MCP strategy_get)   📢 Telegram alerts
+✅ Reconcile state vs positions (delete orphan state files)   🧹 On strategy_inactive: remove cron, run cleanup
+✅ Price monitoring           📊 Portfolio reporting
+✅ High water + tier upgrades  🔄 Retry awareness (pendingClose alerts)
+✅ Breach + close (mcporter)  ⏰ One cron per strategy when user sets up DSL
+✅ State delete on close
 ✅ Error handling (fetch failures)
 ```
 
@@ -116,42 +116,45 @@ For LONGs, "best" = maximum. For SHORTs, "best" = minimum.
 
 ## Architecture
 
+**Cron is per strategy, not per position.** One cron per strategy; the script uses MCP clearinghouse as the source of truth for active positions and reconciles state files to it.
+
 ```
-┌──────────────────────────────────────────┐
-│ Cron: every 3-5 min (per position)       │
-├──────────────────────────────────────────┤
-│ scripts/dsl-v5.py                        │
-│ • Reads state (v5: strategy dir + asset) │
-│ • Fetches price via MCP (main + xyz)     │
-│ • Direction-aware (LONG + SHORT)         │
-│ • Updates high water mark                │
-│ • Checks tier upgrades (ROE-based)       │
-│ • Per-tier retrace override              │
-│ • Calculates effective floor             │
-│ • Detects breaches (with decay modes)    │
-│ • ON BREACH: closes via mcporter w/retry │
-│ • Deletes state file on close (no archive)   │
-│ • pendingClose if close fails                 │
-│ • Outputs enriched JSON status                │
-├──────────────────────────────────────────┤
-│ Agent reads JSON output:                 │
-│ • closed=true → alert user, disable cron (script already deleted state file) │
-│ • pending_close=true → alert, will retry │
-│ • tier_changed=true → notify user        │
-│ • status=error → log, check failures     │
-│ • Otherwise → silent                     │
-└──────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Cron: every 3-5 min (per strategy) — env: DSL_STATE_DIR, DSL_STRATEGY_ID  │
+├──────────────────────────────────────────────────────────────────────────┤
+│ scripts/dsl-v5.py (each run)                                              │
+│ 1. MCP: strategy_get(strategy_id -> uuid) → strategy status from Senpi (not clearinghouse). │
+│    If status not ACTIVE/PAUSED → delete all state files; print strategy_inactive;   │
+│    agent removes cron for this strategy.                                         │
+│ 2. Wallet from strategy_get response; MCP: strategy_get_clearinghouse_state(wallet) │
+│    → set of active position coins (main + xyz).                                   │
+│ 3. Reconcile: delete state files whose asset is not in active positions  │
+│    (position was closed outside DSL).                                     │
+│ 4. For each active position that has a state file:                        │
+│    • Fetch price via MCP (market_get_prices / allMids)                     │
+│    • Update high water, tier upgrades (ROE-based), effective floor         │
+│    • Detect breaches (with decay modes)                                   │
+│    • ON BREACH: close via mcporter w/retry; delete state file on success  │
+│    • Print one JSON line per position (ndjson)                            │
+├──────────────────────────────────────────────────────────────────────────┤
+│ Agent reads output (one line per position, or one strategy-level line):  │
+│ • strategy_inactive → remove cron for this strategy; run cleanup if needed│
+│ • closed=true → alert user (script already deleted state file)             │
+│ • pending_close=true → alert, will retry                                  │
+│ • tier_changed=true → notify user                                         │
+│ • status=error → log, check failures                                      │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `scripts/dsl-v5.py` | Core DSL engine — monitors, closes, deletes state on close, outputs JSON |
+| `scripts/dsl-v5.py` | Strategy-scoped DSL: MCP clearinghouse + reconcile state, then per-position monitor/close, outputs ndjson |
 | `scripts/dsl-cleanup.py` | Strategy-level cleanup — deletes strategy dir when all positions closed |
 | State file (JSON) | Per-position config + runtime state; path: `{DSL_STATE_DIR}/{strategyId}/{asset}.json` |
 
-Use `DSL_STATE_DIR` + `DSL_STRATEGY_ID` + `DSL_ASSET` per position. See [references/state-schema.md](references/state-schema.md) for path conventions. Cleanup: [references/cleanup.md](references/cleanup.md).
+Use `DSL_STATE_DIR` + `DSL_STRATEGY_ID` only for cron (no per-position env). See [references/state-schema.md](references/state-schema.md) for path conventions. Cleanup: [references/cleanup.md](references/cleanup.md).
 
 ## State File Schema
 
@@ -206,13 +209,14 @@ Minimal required fields to create a new state file:
 
 ## Output JSON
 
-The script prints a single JSON line per run. See [references/output-schema.md](references/output-schema.md) for the complete schema.
+The script prints **one JSON line per position** (ndjson), or **one strategy-level line** when the strategy is inactive or has no state files. See [references/output-schema.md](references/output-schema.md) for the complete schema.
 
 Key fields for agent decision-making:
 
-| Field | Agent action |
-|-------|-------------|
-| `closed: true` | Alert user, disable cron |
+| Field / status | Agent action |
+|----------------|--------------|
+| `status: "strategy_inactive"` | Remove cron for this strategy; run strategy cleanup |
+| `closed: true` | Alert user (script already deleted state file) |
 | `pending_close: true` | Alert — close failed, retrying next tick |
 | `tier_changed: true` | Notify user with tier details |
 | `status: "error"` | Log; alert if `consecutive_failures >= 3` |
@@ -221,42 +225,42 @@ Key fields for agent decision-making:
 
 ## Cron Setup
 
-Per-position cron (every 3-5 min). **The agent must create this cron automatically when setting up DSL** — do not leave cron setup to the user.
+**One cron per strategy** (every 3–5 min). **The agent must create this cron automatically when setting up DSL for a strategy** — do not leave cron setup to the user. Do **not** create a separate cron per position.
 
 ```
-DSL_STATE_DIR=/data/workspace/dsl DSL_STRATEGY_ID=strat-abc-123 DSL_ASSET=ETH python3 scripts/dsl-v5.py
+DSL_STATE_DIR=/data/workspace/dsl DSL_STRATEGY_ID=strat-abc-123 python3 scripts/dsl-v5.py
 ```
 
-For xyz dex: `DSL_ASSET=xyz:SILVER` (state file: `xyz--SILVER.json`). Stagger multiple positions by offsetting start times (:00, :01, :02).
+No `DSL_ASSET` — the script discovers positions from MCP clearinghouse and state files in the strategy dir.
 
 ## How to Set Up a New Position
 
-**Agent must complete all steps; cron setup is automatic, not optional.**
+**Agent must complete all steps; cron is one per strategy, created automatically.**
 
 1. Open position via Senpi API (`create_position`) if not already open.
-2. **Create state directory and file** (see "State directory and file creation" below) — pay close attention to path and filename so the cron can find the state.
-3. **Create the cron job automatically** (every 3–5 min) for this position. User must not have to set up cron manually.
+2. **Create state directory and file** (see "State directory and file creation" below) — pay close attention to path and filename. Ensure the state file’s `wallet` and `strategyId` match the strategy (script uses wallet to call clearinghouse).
+3. **Cron:** One cron per strategy. If this is the first position for this strategy, create the cron (every 3–5 min) with `DSL_STATE_DIR` and `DSL_STRATEGY_ID` only. If the strategy already has a cron, do not add another; the same cron run will pick up the new position via clearinghouse and its state file.
 4. DSL handles monitoring and close from there.
 
 ### State directory and file creation
 
 - **Base directory:** Use `DSL_STATE_DIR` (e.g. `/data/workspace/dsl`). Ensure it exists; create it if missing.
 - **Strategy directory:** `{DSL_STATE_DIR}/{strategyId}` — create this directory if it does not exist. One directory per strategy.
-- **State filename (must match cron's `DSL_ASSET`):**
+- **State filename:**
   - Main dex: `{asset}.json` (e.g. `ETH` → `ETH.json`, `HYPE` → `HYPE.json`).
   - xyz dex: replace colon with double-dash — `xyz:SILVER` → `xyz--SILVER.json`, `xyz:AAPL` → `xyz--AAPL.json`.
-- **Full path:** `{DSL_STATE_DIR}/{strategyId}/{filename}.json`. The script reads state from this path using env vars `DSL_STATE_DIR`, `DSL_STRATEGY_ID`, `DSL_ASSET`; the filename is derived from `DSL_ASSET` (xyz assets: colon → double-dash).
-- **State file contents:** Include all required fields from the schema. **Double-check `direction`** (LONG/SHORT) — it controls all floor and breach math. **Calculate `absoluteFloor`** correctly for the direction (see Absolute Floor Calculation below). Set `highWaterPrice` to entry price, `currentBreachCount` to 0, `currentTierIndex` to -1, `tierFloorPrice` to null, `floorPrice` to the absolute floor.
+- **Full path:** `{DSL_STATE_DIR}/{strategyId}/{filename}.json`. The script finds state files by listing the strategy dir and matching assets to clearinghouse positions.
+- **State file contents:** Include all required fields from the schema, including **`wallet`** (used for clearinghouse and close). **Double-check `direction`** (LONG/SHORT). **Calculate `absoluteFloor`** correctly for the direction (see Absolute Floor Calculation below). Set `highWaterPrice` to entry price, `currentBreachCount` to 0, `currentTierIndex` to -1, `tierFloorPrice` to null, `floorPrice` to the absolute floor.
 
 ### When a Position Closes
 
 1. ✅ Script closes position via `senpi:close_position` (coin with `xyz:` prefix as-is; with retry)
 2. ✅ Script deletes the state file (no archive)
-3. 🤖 **Agent:** On `closed=true` in script output — disable this position's cron immediately; script has already deleted the state file.
-4. 🤖 **Agent:** Send alert to user.
-5. 🤖 **Agent:** When all positions in a strategy are closed (all crons for that strategy disabled), run strategy cleanup so the strategy directory is removed. Cleanup works only when run after all position crons are disabled — see [references/cleanup.md](references/cleanup.md).
+3. 🤖 **Agent:** On `closed=true` in script output — alert user. No need to disable a “position cron” (cron is per strategy and keeps running).
+4. 🤖 **Agent:** On `status: "strategy_inactive"` — remove the cron for that strategy and run strategy cleanup so the strategy directory is removed — see [references/cleanup.md](references/cleanup.md).
+5. 🤖 **Agent:** When the strategy has no state files left (e.g. all positions closed), the next run will output strategy_inactive; then agent removes cron and runs cleanup.
 
-If close fails, script sets `pendingClose: true` and retries next cron tick.
+If close fails, script sets `pendingClose: true` and retries on the next cron tick.
 
 ## Customization
 
@@ -264,6 +268,8 @@ See [references/customization.md](references/customization.md) for conservative/
 
 ## API Dependencies
 
+- **Strategy active**: `senpi:strategy_get` via mcporter (by `strategy_id`); status must be ACTIVE or PAUSED for DSL to run
+- **Positions**: `senpi:strategy_get_clearinghouse_state` via mcporter (by strategy wallet from strategy_get)
 - **Price**: `senpi:market_get_prices` or `senpi:allMids` via mcporter (main + xyz dex)
 - **Close position**: `senpi:close_position` via mcporter (pass `coin` with `xyz:` prefix for xyz assets)
 
@@ -272,8 +278,8 @@ See [references/customization.md](references/customization.md) for conservative/
 ## Setup Checklist (agent responsibilities)
 
 1. Ensure required scripts and mcporter (Senpi auth) are available.
-2. **State:** Create base dir if needed; create strategy dir `{DSL_STATE_DIR}/{strategyId}`; create state file with correct filename (main: `{asset}.json`, xyz: `xyz--SYMBOL.json`). See [references/state-schema.md](references/state-schema.md).
-3. **Cron:** Set up cron automatically for each position (every 3–5 min) — user must not do this manually.
-4. **Alerts:** Read script output; on `closed=true`, disable that position's cron and alert user.
-5. **Cleanup:** When all positions in a strategy are closed, run strategy cleanup so the strategy directory is removed — see [references/cleanup.md](references/cleanup.md).
+2. **State:** Create base dir if needed; create strategy dir `{DSL_STATE_DIR}/{strategyId}`; create state file per position with correct filename (main: `{asset}.json`, xyz: `xyz--SYMBOL.json`). See [references/state-schema.md](references/state-schema.md). Each state file must include `wallet` (strategy wallet).
+3. **Cron:** One cron per strategy (every 3–5 min), env `DSL_STATE_DIR` and `DSL_STRATEGY_ID` only — user must not set up cron manually.
+4. **Alerts:** Read script output (ndjson); on `closed=true` alert user; on `strategy_inactive` remove cron for that strategy and run cleanup.
+5. **Cleanup:** On `strategy_inactive` or when strategy has no positions left, run strategy cleanup so the strategy directory is removed — see [references/cleanup.md](references/cleanup.md).
 6. If `pending_close=true`, script auto-retries on next tick; alert user.

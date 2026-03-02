@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""DSL v5 — Strategy-scoped state, MCP price fetch, delete on close.
-v5 over v4:
-  - State path: DSL_STATE_DIR / DSL_STRATEGY_ID / {asset}.json (required)
-  - Asset filename: xyz:SILVER → xyz--SILVER.json (filesystem-safe)
-  - Price via MCP: senpi market_get_prices or allMids with dex for xyz assets
-  - On close: delete state file (no archive)
-State schema unchanged from v4.
+"""DSL v5 — Strategy-scoped cron, MCP clearinghouse + price, delete on close.
+Cron is per strategy (DSL_STATE_DIR + DSL_STRATEGY_ID only). Each run:
+1. Check if strategy is active via MCP; if not, cleanup all state files and output strategy_inactive.
+2. Get active positions from MCP clearinghouse; delete state files for positions that no longer exist.
+3. For each remaining position with a state file: fetch price, update tiers, breach, close if needed, delete state on close.
+Output: one JSON line per position (ndjson), or one line for strategy-level outcome (inactive / no_positions).
 """
 from __future__ import annotations
 
@@ -30,17 +29,42 @@ def asset_to_filename(asset: str) -> str:
     return asset
 
 
-def resolve_state_file() -> tuple[str, str | None]:
+def filename_to_asset(filename: str) -> str | None:
+    """xyz--SILVER.json → xyz:SILVER; ETH.json → ETH."""
+    if not filename.endswith(".json"):
+        return None
+    base = filename[:-5]
+    if "--" in base and not base.startswith("xyz--"):
+        return None
+    if base.startswith("xyz--"):
+        return "xyz:" + base[5:]
+    return base
+
+
+def resolve_state_file(state_dir: str, strategy_id: str, asset: str) -> tuple[str, str | None]:
     """Return (state_file_path, error_message). error_message is None if valid."""
-    state_dir = os.environ.get("DSL_STATE_DIR", DEFAULT_STATE_DIR)
-    strategy_id = os.environ.get("DSL_STRATEGY_ID", "").strip()
-    asset = os.environ.get("DSL_ASSET", "").strip()
     if not strategy_id or not asset:
-        return "", "DSL_STRATEGY_ID and DSL_ASSET required"
+        return "", "strategy_id and asset required"
     path = os.path.join(state_dir, strategy_id, f"{asset_to_filename(asset)}.json")
     if not os.path.isfile(path):
         return path, "state_file_not_found"
     return path, None
+
+
+def list_strategy_state_files(state_dir: str, strategy_id: str) -> list[tuple[str, str]]:
+    """Return list of (path, asset) for each .json in strategy dir. asset from filename."""
+    out = []
+    strategy_dir = os.path.join(state_dir, strategy_id)
+    if not os.path.isdir(strategy_dir):
+        return out
+    for name in os.listdir(strategy_dir):
+        path = os.path.join(strategy_dir, name)
+        if not name.endswith(".json") or not os.path.isfile(path):
+            continue
+        asset = filename_to_asset(name)
+        if asset is not None:
+            out.append((path, asset))
+    return out
 
 
 def dex_and_lookup_symbol(asset: str) -> tuple[str, str]:
@@ -48,6 +72,132 @@ def dex_and_lookup_symbol(asset: str) -> tuple[str, str]:
     if asset.startswith("xyz:"):
         return "xyz", asset.split(":", 1)[1]
     return "", asset
+
+
+# ---------------------------------------------------------------------------
+# Strategy & clearinghouse (MCP)
+# ---------------------------------------------------------------------------
+
+# Strategy statuses that allow DSL to run (Senpi MCP strategy_get).
+DSL_ACTIVE_STATUSES = ("ACTIVE", "PAUSED")
+
+
+def _unwrap_mcporter_response(stdout_str: str) -> dict | None:
+    """Unwrap mcporter MCP response. May be { content: [{ type, text: '<json>' }] } or direct { success, data }.
+    Returns the inner payload (parsed content[0].text or raw) for further use.
+    """
+    try:
+        raw = json.loads(stdout_str)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    content = raw.get("content")
+    if isinstance(content, list) and len(content) > 0:
+        first = content[0]
+        if isinstance(first, dict):
+            text = first.get("text")
+            if isinstance(text, str) and text.strip():
+                try:
+                    return json.loads(text)
+                except json.JSONDecodeError:
+                    return None
+    return raw
+
+
+def _mcp_strategy_get(strategy_id: str) -> tuple[dict | None, str | None]:
+    """Call senpi strategy_get via mcporter. Returns (strategy dict with status, strategyWalletAddress, ...), error."""
+    try:
+        r = subprocess.run(
+            ["mcporter", "call", "senpi", "strategy_get", "--args", json.dumps({"strategy_id": strategy_id})],
+            capture_output=True, text=True, timeout=20,
+        )
+        if r.returncode != 0:
+            return None, (r.stderr or r.stdout or "non-zero exit")
+        raw = _unwrap_mcporter_response(r.stdout)
+        if not raw:
+            return None, "strategy_get: invalid or empty response"
+        if raw.get("success") is False:
+            err = raw.get("error", {})
+            msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+            return None, msg
+        data = raw.get("data") or raw
+        strategy = data.get("strategy") if isinstance(data, dict) else None
+        if not strategy or not isinstance(strategy, dict):
+            return None, "strategy_get: no strategy in response"
+        return strategy, None
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        return None, str(e)
+
+
+def get_strategy_active_and_wallet(strategy_id: str) -> tuple[bool, str | None, str | None]:
+    """Check if strategy is active via Senpi MCP strategy_get (not clearinghouse).
+    Returns (active, wallet, error_message).
+    active=True only when strategy.status is ACTIVE or PAUSED.
+    """
+    strategy, err = _mcp_strategy_get(strategy_id)
+    if err is not None:
+        return False, None, err
+    status = (strategy.get("status") or "").strip().upper()
+    if status not in DSL_ACTIVE_STATUSES:
+        return False, None, f"strategy status is {status!r} (not ACTIVE/PAUSED)"
+    wallet = (strategy.get("strategyWalletAddress") or "").strip()
+    if not wallet:
+        return False, None, "strategy_get: no strategyWalletAddress"
+    return True, wallet, None
+
+
+def _mcp_clearinghouse(wallet: str) -> tuple[dict | None, str | None]:
+    """Call senpi strategy_get_clearinghouse_state via mcporter. Single call returns data.main + data.xyz.
+    Returns (data dict with main/xyz and assetPositions, error)."""
+    try:
+        r = subprocess.run(
+            ["mcporter", "call", "senpi", "strategy_get_clearinghouse_state", "--args", json.dumps({"strategy_wallet": wallet})],
+            capture_output=True, text=True, timeout=20,
+        )
+        if r.returncode != 0:
+            return None, (r.stderr or r.stdout or "non-zero exit")
+        raw = _unwrap_mcporter_response(r.stdout)
+        if not raw:
+            return None, "clearinghouse: invalid or empty response"
+        data = raw.get("data") if isinstance(raw.get("data"), dict) else raw
+        return data, None
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        return None, str(e)
+
+
+def get_active_position_coins(wallet: str) -> tuple[set[str], str | None]:
+    """Get active position coins from clearinghouse. One call returns main + xyz (data.main, data.xyz)."""
+    coins = set()
+    data, err = _mcp_clearinghouse(wallet)
+    if err is not None:
+        return set(), err
+    for section in ("main", "xyz"):
+        if not data or section not in data:
+            continue
+        for p in data.get(section, {}).get("assetPositions", []):
+            pos = p.get("position", {})
+            coin = pos.get("coin")
+            if coin and float(pos.get("szi", 0)) != 0:
+                coins.add(coin)
+    return coins, None
+
+
+def cleanup_strategy_state_dir(state_dir: str, strategy_id: str) -> int:
+    """Delete all .json state files in strategy dir. Return count deleted."""
+    deleted = 0
+    strategy_dir = os.path.join(state_dir, strategy_id)
+    if not os.path.isdir(strategy_dir):
+        return 0
+    for name in os.listdir(strategy_dir):
+        path = os.path.join(strategy_dir, name)
+        if name.endswith(".json") and os.path.isfile(path):
+            try:
+                os.remove(path)
+                deleted += 1
+            except OSError:
+                pass
+    return deleted
 
 
 # ---------------------------------------------------------------------------
@@ -393,26 +543,23 @@ def build_output(
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Per-position run
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    state_file, path_error = resolve_state_file()
-    if path_error:
-        err = {"status": "error", "error": path_error}
-        if path_error == "state_file_not_found":
-            err["path"] = state_file
-        # stdout so agent can see it (e.g. after close-and-delete, cron keeps running until disabled)
-        print(json.dumps(err))
-        sys.exit(1)
-
-    with open(state_file) as f:
-        state = json.load(f)
-
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def process_one_position(state_file: str, strategy_id: str, now: str) -> None:
+    """Load state, fetch price, update tiers/breach, close if needed, save or delete, print one JSON line."""
+    try:
+        with open(state_file) as f:
+            state = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        print(json.dumps({
+            "status": "error", "error": "state_file_read_failed", "path": state_file,
+            "strategy_id": strategy_id, "time": now,
+        }))
+        return
 
     if not state.get("active") and not state.get("pendingClose"):
-        print(json.dumps({"status": "inactive"}))
+        print(json.dumps({"status": "inactive", "asset": state.get("asset"), "strategy_id": strategy_id, "time": now}))
         return
 
     direction = state.get("direction", "LONG").upper()
@@ -420,7 +567,6 @@ def main() -> None:
     asset = state["asset"]
     dex, lookup_symbol = dex_and_lookup_symbol(asset)
 
-    # Fetch price
     price, fetch_error = fetch_price_mcp(dex, lookup_symbol)
     if fetch_error is not None:
         fails = state.get("consecutiveFetchFailures", 0) + 1
@@ -439,12 +585,13 @@ def main() -> None:
             "status": "error",
             "error": f"price_fetch_failed: {fetch_error}",
             "asset": state.get("asset"),
+            "strategy_id": strategy_id,
             "consecutive_failures": fails,
             "deactivated": fails >= max_failures,
             "pending_close": state.get("pendingClose", False),
             "time": now,
         }))
-        sys.exit(1)
+        return
 
     state["consecutiveFetchFailures"] = 0
     state["lastPrice"] = price
@@ -506,7 +653,61 @@ def main() -> None:
         close_result=close_result,
         now=now,
     )
+    out["strategy_id"] = strategy_id
     print(json.dumps(out))
+
+
+# ---------------------------------------------------------------------------
+# Main (strategy-scoped)
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    state_dir = os.environ.get("DSL_STATE_DIR", DEFAULT_STATE_DIR)
+    strategy_id = os.environ.get("DSL_STRATEGY_ID", "").strip()
+    if not strategy_id:
+        print(json.dumps({"status": "error", "error": "DSL_STRATEGY_ID required", "time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}))
+        sys.exit(1)
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # 1. Strategy active? From Senpi MCP strategy_get (not clearinghouse).
+    active, wallet, active_error = get_strategy_active_and_wallet(strategy_id)
+    if not active:
+        deleted = cleanup_strategy_state_dir(state_dir, strategy_id)
+        print(json.dumps({
+            "status": "strategy_inactive",
+            "strategy_id": strategy_id,
+            "message": "Strategy not active (Senpi MCP). State files cleaned. Agent: remove cron for this strategy.",
+            "reason": active_error,
+            "state_files_deleted": deleted,
+            "time": now,
+        }))
+        sys.exit(0)
+
+    # 2. Active positions from clearinghouse.
+    coins, ch_error = get_active_position_coins(wallet)
+    if ch_error is not None:
+        print(json.dumps({
+            "status": "error",
+            "error": "clearinghouse_failed",
+            "strategy_id": strategy_id,
+            "message": ch_error,
+            "time": now,
+        }))
+        sys.exit(1)
+
+    state_files = list_strategy_state_files(state_dir, strategy_id)
+    for path, asset in list(state_files):
+        if asset not in coins:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    for coin in sorted(coins):
+        state_file, path_error = resolve_state_file(state_dir, strategy_id, coin)
+        if path_error is None:
+            process_one_position(state_file, strategy_id, now)
 
 
 if __name__ == "__main__":

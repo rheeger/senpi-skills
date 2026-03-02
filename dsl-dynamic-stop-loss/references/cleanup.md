@@ -9,7 +9,12 @@ When `dsl-v5.py` reports `closed=true` (breach + successful close or deactivatio
 - The script **deletes** the state file for that position.
 - No `_closed/` archive; the file is removed.
 
-**Agent:** Disable this position's cron job. The script has already removed the state file.
+**Agent:** Alert user. (Cron is per strategy; no per-position cron to disable.)
+
+When `dsl-v5.py` reports `status: "strategy_inactive"` (strategy not active or clearinghouse failed, or no state files):
+
+- The script has **deleted** all state files in the strategy dir (when inactive) or reports no state files.
+- **Agent:** Remove the cron job for this strategy and run Level 2 cleanup below.
 
 ## Level 2: Strategy Cleanup
 
@@ -61,9 +66,10 @@ Example blocked:
 
 | Event | Agent action |
 |-------|--------------|
-| `closed=true` in dsl-v5.py output | Disable this position's cron; script already deleted state file |
-| All crons for a strategy disabled | Run `dsl-cleanup.py` for that strategy |
-| `strategy_close_strategy` called | After all positions report `closed=true`, run `dsl-cleanup.py` |
+| `closed=true` in dsl-v5.py output | Alert user; script already deleted state file |
+| `status: "strategy_inactive"` in dsl-v5.py output | Remove cron for that strategy; run `dsl-cleanup.py` for that strategy |
+| All positions in strategy closed (no state files left) | Next run will output strategy_inactive; then remove cron and run `dsl-cleanup.py` |
+| `strategy_close_strategy` called | After strategy is inactive, run `dsl-cleanup.py` |
 
 ## File Layout After Cleanup
 
