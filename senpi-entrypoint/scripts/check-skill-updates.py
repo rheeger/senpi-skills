@@ -231,7 +231,7 @@ def parse_frontmatter_field(skill_md_text, field):
         if i == 0 and line.strip() == "---":
             in_frontmatter = True
             continue
-        if in_frontmatter and line.strip() == "---":
+        if in_frontmatter and line.rstrip() == "---":
             break
         if not in_frontmatter:
             continue
@@ -291,7 +291,7 @@ def _parse_nested_frontmatter_field(skill_md_text, parent, child):
         if i == 0 and line.strip() == "---":
             in_frontmatter = True
             continue
-        if in_frontmatter and line.strip() == "---":
+        if in_frontmatter and line.rstrip() == "---":
             break
         if not in_frontmatter:
             continue
