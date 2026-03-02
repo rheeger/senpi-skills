@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from tiger_config import (
     load_config, load_state, get_all_instruments,
-    get_asset_candles, get_sm_markets, load_oi_history, output
+    get_asset_candles, get_asset_candles_batch, get_sm_markets, load_oi_history, output
 )
 from tiger_lib import (
     parse_candles, rsi, sma, atr, volume_ratio,
@@ -21,7 +21,7 @@ from tiger_lib import (
 )
 
 
-def analyze_funding(asset: str, context: dict, config: dict, sm_data: dict, oi_hist: dict) -> dict:
+def analyze_funding(asset: str, context: dict, config: dict, sm_data: dict, oi_hist: dict, preloaded_candles: dict = None) -> dict:
     """Analyze funding rate opportunity for a single asset."""
     funding_rate = float(context.get("funding", 0))
     funding_annualized = funding_rate * 3 * 365 * 100  # per-8h → annualized %
@@ -41,8 +41,10 @@ def analyze_funding(asset: str, context: dict, config: dict, sm_data: dict, oi_h
     daily_funding_pct_margin = abs(funding_rate) * 3 * leverage * 100
     weekly_funding_pct_margin = daily_funding_pct_margin * 7
 
-    # Fetch candles for technical alignment check
-    result = get_asset_candles(asset, ["1h", "4h"])
+    if preloaded_candles and asset in preloaded_candles:
+        result = preloaded_candles[asset]
+    else:
+        result = get_asset_candles(asset, ["1h", "4h"])
     if not result.get("success") and not result.get("data"):
         return None
 
@@ -178,9 +180,12 @@ def main():
     candidates.sort(key=lambda x: x[2], reverse=True)
     candidates = candidates[:8]  # Reduced from 15 — prevents API timeouts (~4s per candle fetch)
 
+    asset_names = [name for name, _, _ in candidates]
+    preloaded = get_asset_candles_batch(asset_names)
+
     signals = []
     for name, ctx, _ in candidates:
-        result = analyze_funding(name, ctx, config, sm_data, oi_hist)
+        result = analyze_funding(name, ctx, config, sm_data, oi_hist, preloaded)
         if result:
             signals.append(result)
 

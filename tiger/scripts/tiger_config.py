@@ -542,6 +542,34 @@ def get_asset_candles(asset, intervals=None, include_funding=False):
                          include_funding=include_funding)
 
 
+def get_asset_candles_batch(assets, intervals=None, include_funding=False):
+    """Fetch candle data for multiple assets in parallel via the gate batch endpoint.
+
+    Returns dict {asset: result} keyed by asset name.
+    """
+    if intervals is None:
+        intervals = ["1h", "4h"]
+    try:
+        from senpi_state.mcporter import mcporter_call_batch
+    except ImportError:
+        results = {}
+        for asset in assets:
+            results[asset] = get_asset_candles(asset, intervals, include_funding)
+        return results
+
+    calls = [
+        {"tool": "market_get_asset_data", "asset": a,
+         "candle_intervals": intervals,
+         "include_order_book": False, "include_funding": include_funding}
+        for a in assets
+    ]
+    raw = mcporter_call_batch(calls)
+    results = {}
+    for asset, result in zip(assets, raw):
+        results[asset] = result
+    return results
+
+
 def get_prices(assets=None):
     """Fetch current prices."""
     kwargs = {}

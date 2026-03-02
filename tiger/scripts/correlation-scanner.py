@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from tiger_config import (
     load_config, load_state, save_state, get_all_instruments,
-    get_asset_candles, get_sm_markets, output
+    get_asset_candles, get_asset_candles_batch, get_sm_markets, output
 )
 from tiger_lib import (
     parse_candles, rsi, sma, atr, volume_ratio, confluence_score
@@ -76,9 +76,13 @@ def check_btc_move(config: dict, state: dict) -> dict:
 
 
 def check_alt_lag(asset: str, btc_direction: str, btc_move_4h: float,
-                  instruments_map: dict, sm_data: dict, config: dict) -> dict:
+                  instruments_map: dict, sm_data: dict, config: dict,
+                  preloaded_candles: dict = None) -> dict:
     """Check if an alt is lagging behind BTC's move."""
-    result = get_asset_candles(asset, ["1h", "4h"])
+    if preloaded_candles and asset in preloaded_candles:
+        result = preloaded_candles[asset]
+    else:
+        result = get_asset_candles(asset, ["1h", "4h"])
     if not result.get("success") and not result.get("data"):
         return None
 
@@ -240,33 +244,16 @@ def main():
             seen.add(a)
             unique_scan.append(a)
 
-    signals = []
-    # SPEED: Scan HIGH_CORR_ALTS first (top 6), these are most likely to lag
-    # Only scan extended list if we haven't found actionable signals
-    # Reduced from 10+10 to 6+2 to prevent API timeouts (~4s per candle fetch)
-    fast_scan = unique_scan[:6]
-    extended_scan = unique_scan[6:]
+    preloaded = get_asset_candles_batch(unique_scan)
 
-    for asset in fast_scan:
+    signals = []
+    for asset in unique_scan:
         result = check_alt_lag(
             asset, btc["direction"], btc["move_4h_pct"],
-            instruments_map, sm_data, config
+            instruments_map, sm_data, config, preloaded
         )
         if result:
             signals.append(result)
-
-    # Only scan extended list if no strong signals found in fast scan
-    min_score = config["min_confluence_score"].get(state.get("aggression", "NORMAL"), 2.0)
-    strong_fast = [s for s in signals if s["score"] >= min_score and s.get("window_quality") != "CLOSING"]
-    
-    if not strong_fast:
-        for asset in extended_scan[:2]:
-            result = check_alt_lag(
-                asset, btc["direction"], btc["move_4h_pct"],
-                instruments_map, sm_data, config
-            )
-            if result:
-                signals.append(result)
 
     signals.sort(key=lambda x: x["score"], reverse=True)
 

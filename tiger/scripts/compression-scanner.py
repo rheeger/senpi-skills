@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from tiger_config import (
     load_config, load_state, save_state, get_all_instruments,
-    get_asset_candles, load_oi_history, output, STATE_DIR,
+    get_asset_candles, get_asset_candles_batch, load_oi_history, output, STATE_DIR,
     load_prescreened_candidates
 )
 from tiger_lib import (
@@ -23,10 +23,12 @@ from tiger_lib import (
 )
 
 
-def scan_asset(asset: str, context: dict, config: dict, oi_hist: dict) -> dict:
+def scan_asset(asset: str, context: dict, config: dict, oi_hist: dict, preloaded_candles: dict = None) -> dict:
     """Analyze a single asset for compression breakout potential."""
-    # Fetch candles
-    result = get_asset_candles(asset, ["1h", "4h"])
+    if preloaded_candles and asset in preloaded_candles:
+        result = preloaded_candles[asset]
+    else:
+        result = get_asset_candles(asset, ["1h", "4h"])
     if not result.get("success") and not result.get("data"):
         return None
 
@@ -173,10 +175,13 @@ def main():
         candidates.sort(key=lambda x: float(x[1].get("dayNtlVlm", 0)), reverse=True)
         candidates = candidates[:12]
 
+    asset_names = [name for name, _, _ in candidates]
+    preloaded = get_asset_candles_batch(asset_names)
+
     signals = []
     for name, ctx, max_lev in candidates:
         ctx["max_leverage"] = max_lev
-        result = scan_asset(name, ctx, config, oi_hist)
+        result = scan_asset(name, ctx, config, oi_hist, preloaded)
         if result:
             signals.append(result)
 
