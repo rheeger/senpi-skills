@@ -264,7 +264,7 @@ cron_templates = {
         "payload": {
             "kind": "agentTurn",
             "model": mid_model,
-            "message": f"WOLF DSL: Run `PYTHONUNBUFFERED=1 python3 {SCRIPTS_DIR}/dsl-combined.py`, parse JSON.\n\nFor each entry in `results`: if `status==\"closed\"` -> alert Telegram ({tg}) with asset, direction, strategyKey, close_reason, upnl. If `phase1_autocut: true` -> note timeout cut. If `status==\"pending_close\"` -> alert user (retry next run).\nIf `any_closed: true` -> note freed slot(s) for next Emerging Movers run. Else HEARTBEAT_OK."
+            "message": f"WOLF DSL: Run `PYTHONUNBUFFERED=1 python3 {SCRIPTS_DIR}/dsl-combined.py`, parse JSON.\nSend each message in `notifications` to Telegram ({tg}).\nIf `notifications` is empty → HEARTBEAT_OK."
         }
     },
     "sm_flip": {
@@ -284,7 +284,7 @@ cron_templates = {
         "payload": {
             "kind": "agentTurn",
             "model": budget_model,
-            "message": f"WOLF Watchdog: Run `PYTHONUNBUFFERED=1 timeout 45 python3 {SCRIPTS_DIR}/wolf-monitor.py`, parse JSON.\n\nCheck each strategy: crypto_liq_buffer_pct<50% -> WARNING (alert Telegram only); <30% -> CRITICAL (close the position with lowest ROE% in that strategy, then alert Telegram ({tg})). XYZ liq_distance_pct<15% -> alert Telegram.\nIf no alerts -> HEARTBEAT_OK."
+            "message": f"WOLF Watchdog: Run `PYTHONUNBUFFERED=1 timeout 45 python3 {SCRIPTS_DIR}/wolf-monitor.py`, parse JSON.\nFor each item in `action_required`: close the specified position (coin + strategyKey), then alert Telegram ({tg}) with what was closed and why.\nIgnore all other alerts in the output — they are informational only.\nIf `action_required` is empty → HEARTBEAT_OK."
         }
     },
     "health_check": {
@@ -294,7 +294,7 @@ cron_templates = {
         "payload": {
             "kind": "agentTurn",
             "model": mid_model,
-            "message": f"WOLF Health Check: Run `PYTHONUNBUFFERED=1 python3 {SCRIPTS_DIR}/job-health-check.py`, parse JSON.\n\nThe script auto-fixes most issues (check the `action` field per issue):\n- auto_created -> DSL was missing, script created it. Alert Telegram ({tg}).\n- auto_deactivated -> Orphan DSL deactivated (position closed externally). No alert needed.\n- auto_replaced -> Direction mismatch fixed with fresh DSL. Alert Telegram ({tg}).\n- updated_state -> Size/entry/leverage reconciled to match on-chain. No alert needed.\n- skipped_fetch_error -> Orphan check skipped due to API error. No alert needed (transient).\n- alert_only -> Script could not auto-fix. Handle manually:\n  - NO_WALLET -> CRITICAL, needs manual config. Alert Telegram ({tg}).\n  - DSL_INACTIVE -> CRITICAL, set `active: true` in the DSL state file. Alert Telegram ({tg}).\nIf no issues -> HEARTBEAT_OK."
+            "message": f"WOLF Health Check: Run `PYTHONUNBUFFERED=1 python3 {SCRIPTS_DIR}/job-health-check.py`, parse JSON.\nSend each message in `notifications` to Telegram ({tg}).\nIf `notifications` is empty → HEARTBEAT_OK."
         }
     },
 }

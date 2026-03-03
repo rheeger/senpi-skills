@@ -558,7 +558,7 @@ def main():
 
     # --- Build notifications for LLM mandate ---
     NOTIFY_ACTIONS = {"auto_created", "auto_replaced"}
-    NOTIFY_TYPES = {"NO_WALLET", "DSL_INACTIVE"}
+    NOTIFY_TYPES = {"NO_WALLET", "DSL_INACTIVE", "SCHEMA_INVALID"}
 
     notifications = []
     for issue in all_issues:
