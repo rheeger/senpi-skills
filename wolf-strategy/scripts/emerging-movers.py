@@ -350,6 +350,9 @@ alerts.sort(key=lambda a: (
     len(a["reasons"])
 ), reverse=True)
 
+for idx, alert in enumerate(alerts):
+    alert["signalIndex"] = idx
+
 # ─── Slot availability per strategy (clearinghouse-backed) ───
 import glob as globmod
 

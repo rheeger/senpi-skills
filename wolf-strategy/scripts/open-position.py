@@ -110,7 +110,7 @@ def main():
                         help="Strategy key (e.g. wolf-abc123)")
     parser.add_argument("--asset", required=True,
                         help="Asset symbol (e.g. HYPE, BTC, xyz:AAPL)")
-    parser.add_argument("--direction", required=True, choices=["LONG", "SHORT"],
+    parser.add_argument("--direction", required=False, default=None, choices=["LONG", "SHORT"],
                         help="Trade direction")
     parser.add_argument("--leverage", required=False, type=float, default=None,
                         help="Leverage multiplier (optional — auto-calculated from tradingRisk if omitted)")
@@ -122,14 +122,31 @@ def main():
                         help="Scanner mode: use reduced retries/timeouts for faster execution")
     parser.add_argument("--close-asset", default=None, dest="close_asset",
                         help="Asset to close before opening (rotation). Handled atomically under lock.")
+    parser.add_argument("--signal-index", type=int, default=None, dest="signal_index",
+                        help="Read direction/conviction from Nth alert in scanner output. Overrides --direction/--conviction.")
     args = parser.parse_args()
 
     strategy_key = args.strategy
     asset = args.asset
-    direction = args.direction.upper()
     leverage = args.leverage
-    conviction = args.conviction
     margin_override = args.margin
+
+    # Resolve direction/conviction from scanner output if --signal-index provided
+    if args.signal_index is not None:
+        scanner_output_file = os.path.join(WORKSPACE, "emerging-movers-output.json")
+        try:
+            with open(scanner_output_file) as f:
+                scanner_output = json.load(f)
+            signal = scanner_output["alerts"][args.signal_index]
+            direction = signal["direction"].upper()
+            conviction = signal.get("conviction", 0.5)
+        except (FileNotFoundError, json.JSONDecodeError, IndexError, KeyError) as e:
+            fail("signal_index_failed", detail=str(e), signalIndex=args.signal_index)
+    else:
+        if not args.direction:
+            fail("missing_direction", detail="--direction is required when --signal-index is not used")
+        direction = args.direction.upper()
+        conviction = args.conviction
 
     # 1. Load strategy config
     try:
