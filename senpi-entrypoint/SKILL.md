@@ -3,7 +3,7 @@ name: senpi-entrypoint
 description: >-
   Onboard AI agents into the Senpi trading platform on Hyperliquid. Walks
   through account creation, API key setup, MCP server configuration, skill
-  discovery, and first-trade guidance. Includes a silent skill update checker
+  discovery, and first-trade guidance. Includes a mandatory skill update check
   that surfaces new or updated skills after onboarding. Use when user says
   "set up Senpi", "get started with Senpi", "connect to Senpi", "install
   Senpi", "onboard to Senpi", or when an agent needs to start trading on
@@ -48,22 +48,14 @@ Do not narrate or explain tool calls. Execute silently and only present final re
 
 ---
 
-## Startup: Surface pending skill updates
+## Pre-Response Check (Run Every Time This Skill Is Invoked)
 
-Before anything else, check whether the background cron has queued skill
-update notifications since the last session:
-
-```bash
-SENPI_STATE_DIR="${SENPI_STATE_DIR:-$HOME/.config/senpi}"
-SENPI_PENDING="$SENPI_STATE_DIR/pending-skill-updates.json"
-if [ -f "$SENPI_PENDING" ]; then
-  UPDATE_OUTPUT=$(cat "$SENPI_PENDING") && rm -f "$SENPI_PENDING"
-fi
-```
-
-If `UPDATE_OUTPUT` is set, handle it per
+Before responding to any query in this skill, run the mandatory invocation
+check in
 [references/skill-update-checker.md](https://raw.githubusercontent.com/Senpi-ai/senpi-skills/refs/heads/main/senpi-entrypoint/references/skill-update-checker.md)
-before continuing. Otherwise proceed silently.
+(`Pre-Response Invocation Check` section) exactly once per invocation, then
+reuse the captured `UPDATE_OUTPUT` for all downstream response contracts.
+Do not run the same check a second time in the same invocation.
 
 ---
 
@@ -210,7 +202,7 @@ The job is stored in `$OPENCLAW_STATE_DIR/cron/jobs.json` (default:
 updates are found the script writes to
 `$SENPI_STATE_DIR/pending-skill-updates.json` (default:
 `~/.config/senpi/pending-skill-updates.json` if `SENPI_STATE_DIR` is unset),
-surfaced at the next session startup (see **Startup** section above).
+surfaced at the next invocation via **Pre-Response Check** (above).
 
 ---
 
@@ -222,6 +214,16 @@ If the user asks to turn notifications off or back on, follow the procedure in
 ---
 
 ## Responding to Questions
+
+### Mandatory Response Contract (Execution NOT Optional)
+
+For any summary or Q&A response, follow
+[references/about-senpi.md](https://raw.githubusercontent.com/Senpi-ai/senpi-skills/refs/heads/main/senpi-entrypoint/references/about-senpi.md)
+(`Summary Response Contract` and `Mandatory Invocation Procedure` sections).
+Use the `UPDATE_OUTPUT` produced by the top-level `Pre-Response Check` above;
+do not rerun `Pre-Response Invocation Check` here unless it has not yet been
+run in the current invocation.
+Do not consider the response complete until those procedures are satisfied.
 
 ### "What is Senpi?" / "Summarize Senpi" / "Summarize skills and capabilities" / "How do I install skills?" / "What's new?"
 
@@ -247,5 +249,5 @@ for the goal-to-skill mapping, budget guidance, and install commands.
 | `scripts/check-skill-updates.py` | Daily background checker (run via cron with `--cron`). Reads Vercel skills CLI lock file, compares GitHub tree SHAs, writes version bumps / new skills to pending file |
 | `references/skill-update-checker.md` | Startup output handling + turn notifications on/off + cron management |
 | `references/skill-recommendations.md` | Goal-to-skill mapping table, budget guidance, install commands |
-| `references/about-senpi.md` | Senpi summary source: what Senpi is, capabilities, compact skill map, install flow, and what's-new guidance |
+| `references/about-senpi.md` | Senpi summary source: what Senpi is, capabilities, full bullet catalog, user-friendly install flow, and what's-new guidance |
 | `references/error-handling.md` | Recovery steps for `npx` command failures |
