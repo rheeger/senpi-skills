@@ -249,6 +249,7 @@ def process_position(state_file, state, price, strategy_cfg):
     closed = False
     close_result = None
     close_reason = None
+    notif_msg = None
 
     if should_close:
         wallet = state.get("wallet", strategy_cfg.get("wallet", ""))
@@ -327,6 +328,7 @@ def process_position(state_file, state, price, strategy_cfg):
         "close_reason": close_reason,
         "tier_changed": tier_changed,
         "phase1_autocut": phase1_autocut,
+        "notification": notif_msg,
     }
     if phase1_autocut:
         result["elapsed_minutes"] = round(elapsed_minutes)
@@ -468,7 +470,7 @@ for sf, cfg in all_state_entries:
 any_closed = len(closed_positions) > 0
 any_tier_change = any(r.get("tier_changed") for r in results)
 
-notifications = []
+notifications = [r["notification"] for r in results if r.get("notification")]
 
 print(json.dumps({
     "status": "ok",
