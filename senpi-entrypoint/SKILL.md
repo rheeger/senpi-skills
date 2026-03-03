@@ -12,7 +12,7 @@ license: Apache-2.0
 compatibility: "Node.js, shell, Python 3, OpenClaw (optional — Step 5 cron)"
 metadata:
   author: Senpi
-  version: "1.2.0"
+  version: "1.2.1"
   platform: senpi
   exchange: hyperliquid
 ---
@@ -223,6 +223,29 @@ If the user asks to turn notifications off or back on, follow the procedure in
 
 ## Responding to Questions
 
+### "What is Senpi?" / "Summarize Senpi" / "Summarize skills and capabilities" / "How do I install skills?" / "What's new?"
+
+Use [references/about-senpi.md](https://raw.githubusercontent.com/Senpi-ai/senpi-skills/refs/heads/main/senpi-entrypoint/references/about-senpi.md)
+as the single source for the summary. This is **explicit-ask only** — do not
+auto-insert this summary into normal onboarding steps.
+
+Default response order (keep compact and actionable):
+1. **What Senpi is** (short definition)
+2. **Core platform capabilities** (what users/agents can do)
+3. **Skills snapshot** (compact, grouped/high-signal list)
+4. **Install guidance** (what can be installed now; offer to perform installs for them)
+5. **What's new** (only from queued startup `UPDATE_OUTPUT`, if present)
+
+For "what's new", do not run a forced live check. Reuse startup-queued updates
+handled via
+[references/skill-update-checker.md](https://raw.githubusercontent.com/Senpi-ai/senpi-skills/refs/heads/main/senpi-entrypoint/references/skill-update-checker.md).
+If there are no queued updates, return a neutral status and offer to run:
+- a global skill update
+- a fresh live skill catalog fetch
+
+Do not tell users to run CLI commands themselves. Execute commands on the user's
+behalf whenever they ask to install, update, or refresh.
+
 ### "What skills should I install?" / "What should I use for [goal]?"
 
 Consult
@@ -238,5 +261,5 @@ for the goal-to-skill mapping, budget guidance, and install commands.
 | `scripts/check-skill-updates.py` | Daily background checker (run via cron with `--cron`). Reads Vercel skills CLI lock file, compares GitHub tree SHAs, writes version bumps / new skills to pending file |
 | `references/skill-update-checker.md` | Startup output handling + turn notifications on/off + cron management |
 | `references/skill-recommendations.md` | Goal-to-skill mapping table, budget guidance, install commands |
-| `references/about-senpi.md` | Senpi platform overview (what it is, what agents can do, core loop) |
+| `references/about-senpi.md` | Senpi summary source: what Senpi is, capabilities, compact skill map, install flow, and what's-new guidance |
 | `references/error-handling.md` | Recovery steps for `npx` command failures |
