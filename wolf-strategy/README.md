@@ -1,4 +1,4 @@
-# WOLF Strategy v6.0
+# WOLF Strategy v6.1
 
 Fully autonomous multi-strategy trading for Hyperliquid perps. The WOLF hunts for its human — scans, enters, exits, and rotates positions without asking permission. Manages multiple strategies simultaneously, each with independent wallets, budgets, slots, and DSL configs.
 
@@ -15,6 +15,7 @@ Fully autonomous multi-strategy trading for Hyperliquid perps. The WOLF hunts fo
 | `scripts/dsl-combined.py` | DSL v4 combined runner — trailing stops for all positions, all strategies |
 | `scripts/sm-flip-check.py` | SM conviction flip detector (multi-strategy) |
 | `scripts/wolf-monitor.py` | Watchdog — per-strategy margin buffer + position health |
+| `scripts/open-position.py` | **Atomic position opener** — opens position + creates DSL state in one step |
 | `scripts/job-health-check.py` | Per-strategy orphan DSL / state validation |
 | `references/cron-templates.md` | Cron MANDATE templates with multi-strategy signal routing |
 | `references/state-schema.md` | Registry schema, DSL state schema, scanner config |
@@ -30,6 +31,13 @@ Fully autonomous multi-strategy trading for Hyperliquid perps. The WOLF hunts fo
 - **Shared config loader** (`wolf_config.py`) — all scripts use same module for config, paths, legacy migration
 - **Backward compatible** — auto-migrates legacy `wolf-strategy.json` and old state files on first run
 
+## What's New in v6.1
+
+- **Reduced leverage ranges** — aggressive caps at 75% of max leverage (was 100%), moderate at 50% (was 75%), conservative at 25% (was 50%). Prevents over-leveraging on high-max-leverage assets.
+- **Risk-based leverage** — dynamic per-position leverage computed from `tradingRisk` × `maxLeverage` × signal `conviction` (replaces hardcoded leverage)
+- **Rotation cooldown** — positions younger than 45 min can't be rotated out, preventing churning brand-new entries
+- **Atomic position opening** — `open-position.py` opens position + creates DSL state in one step; no manual DSL JSON creation needed
+
 ## Quick Start
 
 1. Download all files (or clone this folder)
@@ -41,6 +49,7 @@ Fully autonomous multi-strategy trading for Hyperliquid perps. The WOLF hunts fo
 
 | Version | Date | Changes |
 |---------|------|---------|
+| v6.1 | 2026-03-03 | Reduced leverage ranges, risk-based dynamic leverage, rotation cooldown (45min), atomic open-position.py |
 | v6.0 | 2026-02-24 | Multi-strategy support, strategy registry, per-strategy state dirs, signal routing, shared config loader |
 | v5.0 | 2026-02-24 | FIRST_JUMP signal priority, combined DSL runner, 90s scanner interval, Phase 1 auto-cut, 7x min leverage |
 | v4.0 | 2026-02-24 | Complete rewrite — all scripts bundled, setup wizard, cron mandates, tighter DSL tiers, entry filters fixed |
