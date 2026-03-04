@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 # ---------------------------------------------------------------------------
 
 DEFAULT_STATE_DIR = "/data/workspace/dsl"
+MCPORTER_BIN = os.environ.get("MCPORTER_CMD", "mcporter")
 
 
 def asset_to_filename(asset: str) -> str:
@@ -109,7 +110,7 @@ def _mcp_strategy_get(strategy_id: str) -> tuple[dict | None, str | None]:
     """Call senpi strategy_get via mcporter. Returns (strategy dict with status, strategyWalletAddress, ...), error."""
     try:
         r = subprocess.run(
-            ["mcporter", "call", "senpi", "strategy_get", "--args", json.dumps({"strategy_id": strategy_id})],
+            [MCPORTER_BIN, "call", "senpi", "strategy_get", "--args", json.dumps({"strategy_id": strategy_id})],
             capture_output=True, text=True, timeout=20,
         )
         if r.returncode != 0:
@@ -154,7 +155,7 @@ def _mcp_clearinghouse(wallet: str) -> tuple[dict | None, str | None]:
     Returns (data dict with main/xyz and assetPositions, error)."""
     try:
         r = subprocess.run(
-            ["mcporter", "call", "senpi", "strategy_get_clearinghouse_state", "--args", json.dumps({"strategy_wallet": wallet})],
+            [MCPORTER_BIN, "call", "senpi", "strategy_get_clearinghouse_state", "--args", json.dumps({"strategy_wallet": wallet})],
             capture_output=True, text=True, timeout=20,
         )
         if r.returncode != 0:
@@ -237,7 +238,7 @@ def fetch_price_mcp(dex: str, lookup_symbol: str) -> tuple[float | None, str | N
 
         args_mgp = {"assets": [response_key], "dex": dex}
         r = subprocess.run(
-            ["mcporter", "call", "senpi", "market_get_prices", "--args", json.dumps(args_mgp)],
+            [MCPORTER_BIN, "call", "senpi", "market_get_prices", "--args", json.dumps(args_mgp)],
             capture_output=True, text=True, timeout=15,
         )
         data = None
@@ -250,7 +251,7 @@ def fetch_price_mcp(dex: str, lookup_symbol: str) -> tuple[float | None, str | N
         if price_str is None:
             args_am = {"dex": dex} if dex else {}
             r = subprocess.run(
-                ["mcporter", "call", "senpi", "allMids", "--args", json.dumps(args_am)],
+                [MCPORTER_BIN, "call", "senpi", "allMids", "--args", json.dumps(args_am)],
                 capture_output=True, text=True, timeout=15,
             )
             if r.returncode == 0 and r.stdout:
@@ -450,7 +451,7 @@ def _mcp_edit_position(
     }
     try:
         r = subprocess.run(
-            ["mcporter", "call", "senpi", "edit_position", "--args", json.dumps(args)],
+            [MCPORTER_BIN, "call", "senpi", "edit_position", "--args", json.dumps(args)],
             capture_output=True, text=True, timeout=30,
         )
         raw = _unwrap_mcporter_response(r.stdout) if r.stdout else None
@@ -489,7 +490,7 @@ def _mcp_strategy_get_open_orders(wallet: str, dex: str = "") -> tuple[list[dict
     args = {"strategy_wallet": wallet, "dex": dex}
     try:
         r = subprocess.run(
-            ["mcporter", "call", "senpi", "strategy_get_open_orders", "--args", json.dumps(args)],
+            [MCPORTER_BIN, "call", "senpi", "strategy_get_open_orders", "--args", json.dumps(args)],
             capture_output=True, text=True, timeout=20,
         )
         if r.returncode != 0:
@@ -596,7 +597,7 @@ def try_close_position(
     for attempt in range(close_retries):
         try:
             cr = subprocess.run(
-                ["mcporter", "call", "senpi", "close_position", "--args",
+                [MCPORTER_BIN, "call", "senpi", "close_position", "--args",
                  json.dumps({"strategyWalletAddress": wallet, "coin": coin, "reason": reason})],
                 capture_output=True, text=True, timeout=30,
             )
