@@ -206,6 +206,33 @@ def get_all_active_positions():
     return positions
 
 
+_mcporter_bin_cache = None
+
+
+def _resolve_mcporter():
+    """Resolve mcporter binary, preferring the gate wrapper for auth injection.
+
+    Priority: MCPORTER_CMD env var > auto-discovered wrapper > bare mcporter.
+    The gate wrapper routes senpi calls through mcporter-gate/handler.py which
+    injects the auth token from the passkey gate vault.
+    """
+    global _mcporter_bin_cache
+    if _mcporter_bin_cache is not None:
+        return _mcporter_bin_cache
+    explicit = os.environ.get("MCPORTER_CMD")
+    if explicit:
+        _mcporter_bin_cache = explicit
+        return explicit
+    here = os.path.dirname(os.path.abspath(__file__))
+    wrapper = os.path.normpath(os.path.join(
+        here, "..", "..", "..", "runtime", "bin", "mcporter-senpi-wrapper.sh"))
+    if os.path.isfile(wrapper):
+        _mcporter_bin_cache = wrapper
+        return wrapper
+    _mcporter_bin_cache = "mcporter"
+    return "mcporter"
+
+
 def mcporter_call(tool, retries=3, timeout=30, **kwargs):
     """Call a Senpi MCP tool via mcporter. Returns the `data` portion of the response.
 
@@ -235,7 +262,7 @@ def mcporter_call(tool, retries=3, timeout=30, **kwargs):
         else:
             args.append(f"{k}={v}")
 
-    mcporter_bin = os.environ.get("MCPORTER_CMD", "mcporter")
+    mcporter_bin = _resolve_mcporter()
     cmd_str = " ".join(
         [shlex.quote(mcporter_bin), "call", shlex.quote(f"senpi.{tool}")]
         + [shlex.quote(a) for a in args]

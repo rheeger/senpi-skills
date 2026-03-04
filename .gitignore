@@ -1,3 +1,5 @@
 config/mcporter.json
 design/*
 .env
+__pycache__/
+*.pyc

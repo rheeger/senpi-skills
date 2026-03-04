@@ -37,7 +37,7 @@ metadata:
 │           Python Scripts                  │
 │  tiger_lib.py  tiger_config.py           │
 │  5 scanners / goal-engine / risk /       │
-│  exit / oi-tracker / dsl-v4              │
+│  exit / oi-tracker / dsl-v5              │
 ├──────────────────────────────────────────┤
 │           Senpi MCP (via mcporter)        │
 │  market_list_instruments                  │
@@ -80,30 +80,30 @@ metadata:
 
 BB squeeze with OI accumulation → price breaks bands.
 
-| Factor | Weight | Threshold |
-|--------|--------|-----------|
-| BB squeeze (4h) | 0.25 | Width < `bbSqueezePercentile` (default: 35th) |
-| BB breakout (1h) | 0.25 | Price closes outside 1h BB |
-| OI building | 0.20 | OI rising > 5% in 1h |
-| OI-price divergence | 0.15 | OI rising, price flat |
-| Volume surge | 0.15 | Short vol > 1.5× long avg |
-| RSI not extreme | 0.10 | RSI 30-70 |
-| Funding aligned | 0.10 | Funding favors direction |
-| ATR expanding | 0.05 | ATR > 2% |
+| Factor              | Weight | Threshold                                     |
+| ------------------- | ------ | --------------------------------------------- |
+| BB squeeze (4h)     | 0.25   | Width < `bbSqueezePercentile` (default: 35th) |
+| BB breakout (1h)    | 0.25   | Price closes outside 1h BB                    |
+| OI building         | 0.20   | OI rising > 5% in 1h                          |
+| OI-price divergence | 0.15   | OI rising, price flat                         |
+| Volume surge        | 0.15   | Short vol > 1.5× long avg                     |
+| RSI not extreme     | 0.10   | RSI 30-70                                     |
+| Funding aligned     | 0.10   | Funding favors direction                      |
+| ATR expanding       | 0.05   | ATR > 2%                                      |
 
 ### 2. BTC Correlation Lag
 
 BTC moves significantly → high-corr alts haven't caught up.
 
-| Factor | Weight | Threshold |
-|--------|--------|-----------|
-| BTC significant move | 0.20 | > `btcCorrelationMovePct` (default: 2%) in 1-4h |
-| Alt lagging | 0.25 | Lag ratio ≥ 0.5 |
-| Volume quiet | 0.15 | Alt volume not spiked yet |
-| RSI safe | 0.10 | Not at extremes |
-| SM aligned | 0.15 | Smart money direction matches |
-| High correlation | 0.10 | Asset in known high-corr list |
-| Sufficient leverage | 0.05 | Max leverage ≥ `minLeverage` |
+| Factor               | Weight | Threshold                                       |
+| -------------------- | ------ | ----------------------------------------------- |
+| BTC significant move | 0.20   | > `btcCorrelationMovePct` (default: 2%) in 1-4h |
+| Alt lagging          | 0.25   | Lag ratio ≥ 0.5                                 |
+| Volume quiet         | 0.15   | Alt volume not spiked yet                       |
+| RSI safe             | 0.10   | Not at extremes                                 |
+| SM aligned           | 0.15   | Smart money direction matches                   |
+| High correlation     | 0.10   | Asset in known high-corr list                   |
+| Sufficient leverage  | 0.05   | Max leverage ≥ `minLeverage`                    |
 
 Window quality: STRONG (lag > 0.7), MODERATE (0.5-0.7), CLOSING (0.4-0.5).
 
@@ -111,15 +111,15 @@ Window quality: STRONG (lag > 0.7), MODERATE (0.5-0.7), CLOSING (0.4-0.5).
 
 Strong price move with volume confirmation.
 
-| Factor | Weight | Threshold |
-|--------|--------|-----------|
-| 1h move | 0.25 | > 1.5% |
-| 2h move | 0.15 | > 2.5% |
-| Volume surge | 0.20 | Ratio > 1.5× |
-| 4h trend aligned | 0.15 | Move matches 4h direction |
-| RSI not extreme | 0.10 | 30-70 |
-| SMA aligned | 0.10 | Price correct side of SMA20 |
-| ATR healthy | 0.05 | > 1.5% |
+| Factor           | Weight | Threshold                   |
+| ---------------- | ------ | --------------------------- |
+| 1h move          | 0.25   | > 1.5%                      |
+| 2h move          | 0.15   | > 2.5%                      |
+| Volume surge     | 0.20   | Ratio > 1.5×                |
+| 4h trend aligned | 0.15   | Move matches 4h direction   |
+| RSI not extreme  | 0.10   | 30-70                       |
+| SMA aligned      | 0.10   | Price correct side of SMA20 |
+| ATR healthy      | 0.05   | > 1.5%                      |
 
 **DSL note:** Tighter Phase 1 retrace (0.012) — momentum reversals are fast.
 
@@ -127,30 +127,30 @@ Strong price move with volume confirmation.
 
 Overextended asset with exhaustion signals → counter-trend.
 
-| Factor | Weight | Threshold |
-|--------|--------|-----------|
-| RSI extreme (4h) | 0.20 | > `rsiOverbought` or < `rsiOversold` (required) |
-| RSI extreme (1h) | 0.15 | Confirms 4h |
-| RSI divergence | 0.20 | Divergence aligned with reversal |
-| Price extended | 0.10 | > 10% move in 24h |
-| Volume exhaustion | 0.15 | Declining volume on extension |
-| At extreme BB | 0.10 | Price beyond BB bands |
-| OI crowded | 0.15 | OI 15%+ above avg |
-| Funding pays us | 0.10 | Collect funding in our direction |
+| Factor            | Weight | Threshold                                       |
+| ----------------- | ------ | ----------------------------------------------- |
+| RSI extreme (4h)  | 0.20   | > `rsiOverbought` or < `rsiOversold` (required) |
+| RSI extreme (1h)  | 0.15   | Confirms 4h                                     |
+| RSI divergence    | 0.20   | Divergence aligned with reversal                |
+| Price extended    | 0.10   | > 10% move in 24h                               |
+| Volume exhaustion | 0.15   | Declining volume on extension                   |
+| At extreme BB     | 0.10   | Price beyond BB bands                           |
+| OI crowded        | 0.15   | OI 15%+ above avg                               |
+| Funding pays us   | 0.10   | Collect funding in our direction                |
 
 ### 5. Funding Rate Arb
 
 Extreme funding → go opposite the crowd, collect income.
 
-| Factor | Weight | Threshold |
-|--------|--------|-----------|
-| Extreme funding | 0.25 | Annualized > `minFundingAnnualizedPct` (default: 30%) |
-| Trend aligned | 0.20 | SMA20 supports direction |
-| RSI safe | 0.15 | Not extreme against us |
-| OI stable | 0.15 | Funding source not collapsing |
-| SM aligned | 0.10 | Smart money on our side |
-| High daily yield | 0.10 | > 5% daily yield on margin |
-| Volume healthy | 0.05 | > $10M daily |
+| Factor           | Weight | Threshold                                             |
+| ---------------- | ------ | ----------------------------------------------------- |
+| Extreme funding  | 0.25   | Annualized > `minFundingAnnualizedPct` (default: 30%) |
+| Trend aligned    | 0.20   | SMA20 supports direction                              |
+| RSI safe         | 0.15   | Not extreme against us                                |
+| OI stable        | 0.15   | Funding source not collapsing                         |
+| SM aligned       | 0.10   | Smart money on our side                               |
+| High daily yield | 0.10   | > 5% daily yield on margin                            |
+| Volume healthy   | 0.05   | > $10M daily                                          |
 
 **DSL note:** Wider retrace tiers (0.02+) — edge is income, not price direction. Risk Guardian auto-exits if funding flips.
 
@@ -160,57 +160,57 @@ Extreme funding → go opposite the crowd, collect income.
 
 `goal-engine.py` runs hourly. Calculates required daily return and sets aggression:
 
-| Aggression | Daily Rate Needed | Min Confluence | Trailing Lock | Behavior |
-|------------|-------------------|----------------|---------------|----------|
-| CONSERVATIVE | < 8% | 0.70 | 80% | Take profits early |
-| NORMAL | 8-15% | 0.40 | 60% | Standard operation |
-| ELEVATED | 15-25% | 0.40 | 40% | Wider entries, lower threshold |
-| ABORT | > 25% | 999 (never) | 90% | Stop new entries, tighten all |
+| Aggression   | Daily Rate Needed | Min Confluence | Trailing Lock | Behavior                       |
+| ------------ | ----------------- | -------------- | ------------- | ------------------------------ |
+| CONSERVATIVE | < 8%              | 0.70           | 80%           | Take profits early             |
+| NORMAL       | 8-15%             | 0.40           | 60%           | Standard operation             |
+| ELEVATED     | 15-25%            | 0.40           | 40%           | Wider entries, lower threshold |
+| ABORT        | > 25%             | 999 (never)    | 90%           | Stop new entries, tighten all  |
 
 ---
 
-## DSL v4 — Trailing Stop System
+## DSL v5 — Trailing Stop System
 
-Per-position DSL state file. Combined runner (`dsl-v4.py`) checks all active positions every 30s.
+Per-strategy DSL runner. `dsl-v5.py` is strategy-scoped (via `DSL_STATE_DIR` + `DSL_STRATEGY_ID`), checks clearinghouse for active positions, and auto-cleans orphaned state files.
 
-**IMPORTANT**: The DSL cron must first check `activePositions` in TIGER state. If no positions are open, output `HEARTBEAT_OK` immediately and do NOT invoke `dsl-v4.py`. This prevents unnecessary session spam when TIGER is idle.
+**IMPORTANT**: DSL v5 handles position existence checking internally via MCP clearinghouse — no need for the cron to pre-check `activePositions`. If no positions exist, dsl-v5 outputs `no_positions` and exits.
 
 **Phase 1** (pre-Tier 1): Absolute floor. 3 consecutive breaches → close. Max duration: 90 minutes.
 
 **Phase 2** (Tier 1+): Trailing tiers.
 
 | Tier | ROE Trigger | Lock % of High-Water | Retrace | Breaches |
-|------|-------------|---------------------|---------|----------|
-| 1 | 5% | 20% | 1.5% | 2 |
-| 2 | 10% | 50% | 1.2% | 2 |
-| 3 | 20% | 70% | 1.0% | 2 |
-| 4 | 35% | 80% | 0.8% | 1 |
+| ---- | ----------- | -------------------- | ------- | -------- |
+| 1    | 5%          | 20%                  | 1.5%    | 2        |
+| 2    | 10%         | 50%                  | 1.2%    | 2        |
+| 3    | 20%         | 70%                  | 1.0%    | 2        |
+| 4    | 35%         | 80%                  | 0.8%    | 1        |
 
 **Stagnation TP:** ROE ≥ 8% + high-water stale 1h → auto-close.
 
 ### DSL Tuning by Pattern
 
-| Pattern | Phase 1 Retrace | Tier Widths | Notes |
-|---------|----------------|-------------|-------|
-| COMPRESSION | 0.015 (standard) | Standard | Watch for false breakouts |
-| CORRELATION_LAG | 0.015 | Standard | Tight absolute floor — window closes fast |
-| MOMENTUM | 0.012 (tighter) | Standard | Fast reversals |
-| MEAN_REVERSION | 0.015 | Medium | Expect 2-3 ATR move |
-| FUNDING_ARB | 0.020+ (wider) | Wider | Income-based, needs room |
+| Pattern         | Phase 1 Retrace  | Tier Widths | Notes                                     |
+| --------------- | ---------------- | ----------- | ----------------------------------------- |
+| COMPRESSION     | 0.015 (standard) | Standard    | Watch for false breakouts                 |
+| CORRELATION_LAG | 0.015            | Standard    | Tight absolute floor — window closes fast |
+| MOMENTUM        | 0.012 (tighter)  | Standard    | Fast reversals                            |
+| MEAN_REVERSION  | 0.015            | Medium      | Expect 2-3 ATR move                       |
+| FUNDING_ARB     | 0.020+ (wider)   | Wider       | Income-based, needs room                  |
 
 ---
 
 ## Risk Management
 
-| Rule | Limit | Config Key | Default |
-|------|-------|-----------|---------|
-| Max single trade loss | 5% of balance | `maxSingleLossPct` | 5 |
-| Max daily loss | 12% of day-start balance | `maxDailyLossPct` | 12 |
-| Max drawdown from peak | 20% | `maxDrawdownPct` | 20 |
-| Max concurrent positions | 3 | `maxSlots` | 3 |
-| OI collapse exit | OI drops > 25% in 1h | `oiCollapseThresholdPct` | 25 |
-| Funding reversal exit | Funding flips on FUNDING_ARB | — | Auto |
-| Deadline proximity | Final 24h → tighten all stops | — | Auto |
+| Rule                     | Limit                         | Config Key               | Default |
+| ------------------------ | ----------------------------- | ------------------------ | ------- |
+| Max single trade loss    | 5% of balance                 | `maxSingleLossPct`       | 5       |
+| Max daily loss           | 12% of day-start balance      | `maxDailyLossPct`        | 12      |
+| Max drawdown from peak   | 20%                           | `maxDrawdownPct`         | 20      |
+| Max concurrent positions | 3                             | `maxSlots`               | 3       |
+| OI collapse exit         | OI drops > 25% in 1h          | `oiCollapseThresholdPct` | 25      |
+| Funding reversal exit    | Funding flips on FUNDING_ARB  | —                        | Auto    |
+| Deadline proximity       | Final 24h → tighten all stops | —                        | Auto    |
 
 All percentage values are whole numbers (5 = 5%).
 
@@ -229,17 +229,17 @@ All percentage values are whole numbers (5 = 5%).
 
 ## API Dependencies
 
-| Tool | Used By | Purpose |
-|------|---------|---------|
-| `market_list_instruments` | all scanners, oi-tracker | Asset discovery, OI, funding, volume |
-| `market_get_asset_data` | all scanners | Candles (1h, 4h), funding |
-| `market_get_prices` | correlation-scanner, risk-guardian | BTC price, alt prices |
-| `leaderboard_get_markets` | correlation, funding scanners | SM alignment |
-| `account_get_portfolio` | goal-engine | Portfolio balance |
-| `strategy_get_clearinghouse_state` | goal-engine, risk-guardian | Margin, positions |
-| `create_position` | tiger-enter.py | Open positions |
-| `close_position` | tiger-close.py, dsl-v4 | Close positions |
-| `edit_position` | risk-guardian | Resize positions |
+| Tool                               | Used By                            | Purpose                              |
+| ---------------------------------- | ---------------------------------- | ------------------------------------ |
+| `market_list_instruments`          | all scanners, oi-tracker           | Asset discovery, OI, funding, volume |
+| `market_get_asset_data`            | all scanners                       | Candles (1h, 4h), funding            |
+| `market_get_prices`                | correlation-scanner, risk-guardian | BTC price, alt prices                |
+| `leaderboard_get_markets`          | correlation, funding scanners      | SM alignment                         |
+| `account_get_portfolio`            | goal-engine                        | Portfolio balance                    |
+| `strategy_get_clearinghouse_state` | goal-engine, risk-guardian         | Margin, positions                    |
+| `create_position`                  | tiger-enter.py                     | Open positions                       |
+| `close_position`                   | tiger-close.py, dsl-v5             | Close positions                      |
+| `edit_position`                    | risk-guardian                      | Resize positions                     |
 
 ---
 
@@ -255,6 +255,7 @@ python3 scripts/tiger-enter.py --coin SOL --direction SHORT --leverage 7 \
 ```
 
 What it does:
+
 1. Guards: rejects if halted, no slots, or duplicate position
 2. Calls `create_position` via mcporter
 3. Creates `dsl-{ASSET}.json` with correct per-pattern tier presets
@@ -271,6 +272,7 @@ python3 scripts/tiger-close.py --coin SOL --reason "DSL Tier 2 breach"
 ```
 
 What it does:
+
 1. Calls `close_position` via mcporter (handles `CLOSE_NO_POSITION` gracefully)
 2. Deactivates `dsl-{ASSET}.json` (sets `active: false`, `closedAt`, `closeReason`)
 3. Removes from `activePositions` in `tiger-state.json`
@@ -283,6 +285,7 @@ Returns JSON: `{"success": true, "action": "POSITION_CLOSED", "coin": "SOL", "pn
 ### Shared Library
 
 Both scripts use `lib/senpi_state/` — a shared library providing:
+
 - `atomic_write()` — crash-safe JSON writes
 - `mcporter_call()` — unified MCP wrapper with retry
 - `TradeJournal` — append-only JSONL event audit trail
@@ -295,6 +298,7 @@ Both scripts use `lib/senpi_state/` — a shared library providing:
 See `references/state-schema.md` for full schema with field descriptions.
 
 Key state files:
+
 ```
 state/{instanceKey}/
 ├── tiger-state.json              # Positions, aggression, safety, daily stats
@@ -315,27 +319,28 @@ All state files include `version`, `active`, `instanceKey`, `createdAt`, `update
 See `references/cron-templates.md` for ready-to-use OpenClaw cron payloads.
 
 **Silence Policy — CRITICAL**: When a cron fires and the result is HEARTBEAT_OK, NO_POSITIONS, or no actionable signals:
+
 - Do NOT notify Telegram
 - Do NOT reply in chat
 - Do NOT explain what the cron did
 - Do NOT summarize the scan results
 - Produce NO output of any kind — complete silence
-Only speak (chat or Telegram) when something actionable happens: trade opened, trade closed, aggression changed, risk halt triggered, or an error that needs attention. Idle cycles = total silence.
+  Only speak (chat or Telegram) when something actionable happens: trade opened, trade closed, aggression changed, risk halt triggered, or an error that needs attention. Idle cycles = total silence.
 
-| # | Job | Interval | Script | Model Tier |
-|---|-----|----------|--------|------------|
-| 0 | Prescreener | 5 min | `prescreener.py` | Tier 1 |
-| 1 | Compression Scanner | 5 min | `compression-scanner.py` | Tier 1 |
-| 2 | Correlation Scanner | 3 min | `correlation-scanner.py` | Tier 1 |
-| 3 | Momentum Scanner | 5 min | `momentum-scanner.py` | Tier 1 |
-| 4 | Reversion Scanner | 5 min | `reversion-scanner.py` | Tier 1 |
-| 5 | Funding Scanner | 30 min | `funding-scanner.py` | Tier 1 |
-| 6 | OI Tracker | 5 min | `oi-tracker.py` | Tier 1 |
-| 7 | Goal Engine | 1 hour | `goal-engine.py` | Tier 2 |
-| 8 | Risk Guardian | 5 min | `risk-guardian.py` | Tier 2 |
-| 9 | Exit Checker | 5 min | `tiger-exit.py` | Tier 2 |
-| 10 | DSL Combined | 30 sec | `dsl-v4.py` | Tier 1 |
-| 11 | ROAR Analyst | 8 hour | `roar-analyst.py` | Tier 2 |
+| #   | Job                 | Interval | Script                   | Model Tier |
+| --- | ------------------- | -------- | ------------------------ | ---------- |
+| 0   | Prescreener         | 5 min    | `prescreener.py`         | Tier 1     |
+| 1   | Compression Scanner | 5 min    | `compression-scanner.py` | Tier 1     |
+| 2   | Correlation Scanner | 3 min    | `correlation-scanner.py` | Tier 1     |
+| 3   | Momentum Scanner    | 5 min    | `momentum-scanner.py`    | Tier 1     |
+| 4   | Reversion Scanner   | 5 min    | `reversion-scanner.py`   | Tier 1     |
+| 5   | Funding Scanner     | 30 min   | `funding-scanner.py`     | Tier 1     |
+| 6   | OI Tracker          | 5 min    | `oi-tracker.py`          | Tier 1     |
+| 7   | Goal Engine         | 1 hour   | `goal-engine.py`         | Tier 2     |
+| 8   | Risk Guardian       | 5 min    | `risk-guardian.py`       | Tier 2     |
+| 9   | Exit Checker        | 5 min    | `tiger-exit.py`          | Tier 2     |
+| 10  | DSL Trailing Stops  | 3 min    | `dsl-v5.py`              | Tier 1     |
+| 11  | ROAR Analyst        | 8 hour   | `roar-analyst.py`        | Tier 2     |
 
 **Tier 1** (fast/cheap): threshold checks, data collection, DSL math. Runs `isolated` with `delivery.mode: "none"` and explicit model (`claude-haiku-4-5`).
 **Tier 2** (capable): aggression decisions, risk judgment, exit evaluation. Runs `isolated` with `delivery.mode: "announce"` and explicit model (`claude-sonnet-4-5`). OpenClaw auto-suppresses HEARTBEAT_OK — only real content gets delivered.
@@ -350,6 +355,7 @@ Scanners are staggered by 1-2 minutes to avoid mcporter rate limits (see cron-te
 ROAR is TIGER's meta-optimizer. It runs every 8 hours (+ ad-hoc every 5th trade), analyzes TIGER's trade log, and tunes execution parameters within bounded ranges. User intent (budget, target, risk limits) is never touched.
 
 **What ROAR tunes** (within hard min/max bounds):
+
 - Per-pattern confluence thresholds (0.25–0.85)
 - Scanner thresholds (BB squeeze percentile, BTC correlation move, funding annualized)
 - DSL retrace thresholds per phase (0.008–0.03)
@@ -358,6 +364,7 @@ ROAR is TIGER's meta-optimizer. It runs every 8 hours (+ ad-hoc every 5th trade)
 **What ROAR never touches** (protected): budget, target, deadline, max_slots, max_leverage, maxDrawdownPct, maxDailyLossPct, maxSingleLossPct.
 
 **Rules engine** (6 rules):
+
 1. Win rate < 40% over 10+ trades → raise pattern confluence threshold by 0.05
 2. Win rate > 70% over 10+ trades → lower threshold by 0.03 to catch more signals
 3. Avg DSL exit tier < 2 → loosen phase1 retrace by 0.002 (let positions run)
@@ -373,12 +380,12 @@ Scripts: `roar-analyst.py` (engine), `roar_config.py` (bounds, state, revert log
 
 ## Expected Performance
 
-| Metric | Target |
-|--------|--------|
-| Trades per day | 2-8 |
-| Win rate | 55-65% |
-| Profit factor | 1.8-2.5 |
-| Best conditions | Volatile with clear setups (squeeze→breakout) |
+| Metric           | Target                                                |
+| ---------------- | ----------------------------------------------------- |
+| Trades per day   | 2-8                                                   |
+| Win rate         | 55-65%                                                |
+| Profit factor    | 1.8-2.5                                               |
+| Best conditions  | Volatile with clear setups (squeeze→breakout)         |
 | Worst conditions | Low-vol grind (few signals), choppy (false breakouts) |
 
 ---
@@ -396,15 +403,15 @@ Scripts: `roar-analyst.py` (engine), `roar_config.py` (bounds, state, revert log
 
 ## Optimization Levers
 
-| Lever | Config Key | Conservative | Default | Aggressive |
-|-------|-----------|-------------|---------|------------|
-| Confluence threshold (NORMAL) | `minConfluenceScore.NORMAL` | 0.55 | 0.40 | 0.35 |
-| BB squeeze percentile | `bbSqueezePercentile` | 25 | 35 | 45 |
-| BTC corr move % | `btcCorrelationMovePct` | 3 | 2 | 1.5 |
-| Max leverage | `maxLeverage` | 7 | 10 | 15 |
-| Max slots | `maxSlots` | 2 | 3 | 4 |
-| Daily loss halt % | `maxDailyLossPct` | 8 | 12 | 15 |
-| Trailing lock (NORMAL) | `trailingLockPct.NORMAL` | 0.80 | 0.60 | 0.40 |
+| Lever                         | Config Key                  | Conservative | Default | Aggressive |
+| ----------------------------- | --------------------------- | ------------ | ------- | ---------- |
+| Confluence threshold (NORMAL) | `minConfluenceScore.NORMAL` | 0.55         | 0.40    | 0.35       |
+| BB squeeze percentile         | `bbSqueezePercentile`       | 25           | 35      | 45         |
+| BTC corr move %               | `btcCorrelationMovePct`     | 3            | 2       | 1.5        |
+| Max leverage                  | `maxLeverage`               | 7            | 10      | 15         |
+| Max slots                     | `maxSlots`                  | 2            | 3       | 4          |
+| Daily loss halt %             | `maxDailyLossPct`           | 8            | 12      | 15         |
+| Trailing lock (NORMAL)        | `trailingLockPct.NORMAL`    | 0.80         | 0.60    | 0.40       |
 
 ---
 
@@ -425,8 +432,8 @@ Scripts: `roar-analyst.py` (engine), `roar_config.py` (bounds, state, revert log
 
 ### Operational
 
-- **DSL state file `active` field**: MUST include `active: true` or `dsl-v4.py` returns `{"status": "inactive"}` (line 22 check). This is the #1 gotcha when setting up new positions.
-- **DSL invocation syntax**: `DSL_STATE_FILE=/path/to/file.json python3 scripts/dsl-v4.py COIN`
+- **DSL state file `active` field**: MUST include `active: true` or dsl-v5 skips the position.
+- **DSL invocation syntax**: `DSL_STATE_DIR=/path/to/state DSL_STRATEGY_ID=<uuid> python3 dsl-dynamic-stop-loss/scripts/dsl-v5.py`
 - **API latency**: `market_get_asset_data` ~4s/call, `market_list_instruments` ~6s. Max 8 assets per 55s scan window.
 - **Correlation scanner timeouts**: Frequently times out — skip after consecutive timeouts rather than waste 55s per attempt.
 - **Compression scanner signals**: Requires `breakout: true` AND a `direction` to be actionable — a high compression score alone is not enough.

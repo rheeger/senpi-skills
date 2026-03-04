@@ -84,7 +84,7 @@ def check_exposure(new_direction, new_notional, active_trades, budget, max_pct):
 
 ### 2. DSL Monitor (every 2-3 minutes per position)
 
-Uses DSL v4 recipe (script: `/data/workspace/scripts/dsl-v4.py`). Stagger crons to avoid overlapping.
+Uses DSL v5 (script: `dsl-dynamic-stop-loss/scripts/dsl-v5.py`). Strategy-scoped, auto-discovers positions from clearinghouse.
 
 **Agent behavior for DSL output:**
 
@@ -134,11 +134,13 @@ IF SM conviction = 0 for your position's direction:
 ```
 
 **FLIP_WARNING (conviction 2-3):**
+
 - Alert user once, then suppress duplicates for 30 minutes
 - Note in portfolio updates instead of spamming separate alerts
 - If conviction persists at 3 for >1 hour, it's a stronger signal — still requires hourly trend check
 
 **Why these rules exist:**
+
 - BTC SM conviction 4 flipped direction 3 times in 2 hours on one session — pure chop on 1-minute noise
 - Each flip costs close + open fees (~1.26% of margin at 7x round-trip)
 - 3 flips = ~3.8% margin lost to fees alone, plus slippage
@@ -177,6 +179,7 @@ Max lev: ETH=25x SOL=20x (using 7x each)
 ```
 
 Additions over v5:
+
 - Cross-margin buffer percentage
 - Max leverage available vs used
 - Conviction collapse warnings
@@ -185,13 +188,12 @@ Additions over v5:
 
 If `rules.schedule` is configured, the scanner cron interval adjusts by hour:
 
-| Session | Hours (UTC) | Scan Interval | Notes |
-|---|---|---|---|
-| High activity | 13-20 | 10 min | US market overlap, highest volume |
-| Medium activity | 6-12, 21-22 | 15 min | EU/Asia sessions |
-| Low activity | 0-5, 23 | 30 min | Low volume, wider DSL stops |
+| Session         | Hours (UTC) | Scan Interval | Notes                             |
+| --------------- | ----------- | ------------- | --------------------------------- |
+| High activity   | 13-20       | 10 min        | US market overlap, highest volume |
+| Medium activity | 6-12, 21-22 | 15 min        | EU/Asia sessions                  |
+| Low activity    | 0-5, 23     | 30 min        | Low volume, wider DSL stops       |
 
 During low-activity hours, widen DSL Phase 1 retrace by 20% to avoid stops from thin-book wicks.
 
 ---
-

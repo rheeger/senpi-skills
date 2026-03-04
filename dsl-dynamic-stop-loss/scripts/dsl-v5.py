@@ -20,7 +20,22 @@ from datetime import datetime, timezone
 # ---------------------------------------------------------------------------
 
 DEFAULT_STATE_DIR = "/data/workspace/dsl"
-MCPORTER_BIN = os.environ.get("MCPORTER_CMD", "mcporter")
+
+
+def _resolve_mcporter():
+    """Resolve mcporter binary, preferring the gate wrapper for auth injection."""
+    explicit = os.environ.get("MCPORTER_CMD")
+    if explicit:
+        return explicit
+    here = os.path.dirname(os.path.abspath(__file__))
+    wrapper = os.path.normpath(os.path.join(
+        here, "..", "..", "..", "runtime", "bin", "mcporter-senpi-wrapper.sh"))
+    if os.path.isfile(wrapper):
+        return wrapper
+    return "mcporter"
+
+
+MCPORTER_BIN = _resolve_mcporter()
 
 
 def asset_to_filename(asset: str) -> str:

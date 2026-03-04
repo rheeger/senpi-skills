@@ -34,6 +34,22 @@ Uses: leaderboard_get_markets (single API call)
 import json, subprocess, sys, os
 from datetime import datetime, timezone
 
+
+def _resolve_mcporter():
+    """Resolve mcporter binary, preferring the gate wrapper for auth injection."""
+    explicit = os.environ.get("MCPORTER_CMD")
+    if explicit:
+        return explicit
+    here = os.path.dirname(os.path.abspath(__file__))
+    wrapper = os.path.normpath(os.path.join(
+        here, "..", "..", "..", "runtime", "bin", "mcporter-senpi-wrapper.sh"))
+    if os.path.isfile(wrapper):
+        return wrapper
+    return "mcporter"
+
+
+MCPORTER_BIN = _resolve_mcporter()
+
 HISTORY_FILE = os.environ.get("EMERGING_HISTORY", "/data/workspace/emerging-movers-history.json")
 MAX_HISTORY = 60
 TOP_N = 50  # v2: track top 50 (was 25)
@@ -53,7 +69,7 @@ except (FileNotFoundError, json.JSONDecodeError):
 # ─── Fetch current market concentration ───
 try:
     r = subprocess.run(
-        ["mcporter", "call", "senpi", "leaderboard_get_markets", "limit=100"],
+        [MCPORTER_BIN, "call", "senpi", "leaderboard_get_markets", "limit=100"],
         capture_output=True, text=True, timeout=30
     )
     result = json.loads(r.stdout)

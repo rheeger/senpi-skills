@@ -3,6 +3,7 @@
 All crons use OpenClaw cron system. Templates follow [OpenClaw cron best practices](https://docs.openclaw.ai/automation/cron-jobs).
 
 Replace:
+
 - `{SCRIPTS}` → full scripts path (default: `$TIGER_WORKSPACE/scripts`)
 - `{TELEGRAM_CHAT_ID}` → Telegram chat ID (e.g., `-1001234567890` or `-1001234567890:topic:123`)
 
@@ -19,6 +20,7 @@ Replace:
 ## Notification Policy
 
 OpenClaw's announce delivery handles this automatically:
+
 - `HEARTBEAT_OK` responses are **never delivered** (auto-suppressed by OpenClaw)
 - Only real content (trades, closures, risk alerts) gets announced
 - `delivery.mode: "none"` jobs produce no output at all
@@ -27,10 +29,10 @@ OpenClaw's announce delivery handles this automatically:
 
 ## Model Tier Reference
 
-| Tier | Use | Example Models |
-|------|-----|----------------|
-| Tier 1 (fast/cheap) | Scanners, OI tracker, DSL math | `anthropic/claude-haiku-4-5`, `openai/gpt-4o-mini` |
-| Tier 2 (capable) | Goal engine, risk guardian, exit evaluation | `anthropic/claude-sonnet-4-5-20250929`, `openai/gpt-4o` |
+| Tier                | Use                                         | Example Models                                          |
+| ------------------- | ------------------------------------------- | ------------------------------------------------------- |
+| Tier 1 (fast/cheap) | Scanners, OI tracker, DSL math              | `anthropic/claude-haiku-4-5`, `openai/gpt-4o-mini`      |
+| Tier 2 (capable)    | Goal engine, risk guardian, exit evaluation | `anthropic/claude-sonnet-4-5-20250929`, `openai/gpt-4o` |
 
 ---
 
@@ -273,19 +275,20 @@ Every 5 minutes (runs with risk guardian). Isolated with announce.
 
 ---
 
-## Cron 10: DSL Combined — Tier 1 (Main Session)
+## Cron 10: DSL Trailing Stops — Tier 1 (Isolated)
 
-Every 30 seconds. Runs in **main session** (needs position state context). Uses `systemEvent`.
+Every 3 minutes. Strategy-scoped DSL v5 runner. Isolated session with Haiku.
 
 ```json
 {
-  "name": "TIGER — DSL Trailing Stops",
-  "schedule": { "kind": "every", "everyMs": 30000 },
-  "sessionTarget": "main",
-  "wakeMode": "now",
+  "name": "TIGER — DSL Trailing Stops (3min)",
+  "schedule": { "kind": "every", "everyMs": 180000 },
+  "sessionTarget": "isolated",
+  "wakeMode": "next-heartbeat",
   "payload": {
-    "kind": "systemEvent",
-    "text": "TIGER DSL: First check TIGER state file for activePositions. If activePositions is empty (no open positions), output HEARTBEAT_OK immediately and STOP — do NOT run dsl-v4.py. Do NOT send any Telegram messages.\nOnly if positions exist: for each active position's DSL state file, run `python3 {SCRIPTS}/dsl-v4.py` with DSL_STATE_FILE pointed at that file, parse JSON.\nDSL is self-contained — auto-closes via close_position on breach.\nOnly send Telegram message to {TELEGRAM_CHAT_ID} if: position closed by DSL breach or tier upgrade occurred.\nRoutine trailing (no close, no tier change): output HEARTBEAT_OK. Do NOT send Telegram."
+    "kind": "agentTurn",
+    "model": "anthropic/claude-haiku-4-5",
+    "message": "TIGER DSL: Run `MCPORTER_CMD={WRAPPER} DSL_STATE_DIR={WORKSPACE}/state DSL_STRATEGY_ID={STRATEGY_ID} NPM_CONFIG_CACHE=/tmp/npm-cache PYTHONUNBUFFERED=1 python3 {SENPI_SKILLS}/dsl-dynamic-stop-loss/scripts/dsl-v5.py`, parse JSON.\nDSL v5 is self-contained — checks clearinghouse for positions, auto-cleans orphaned state, auto-closes on breach.\nOnly send Telegram message to {TELEGRAM_CHAT_ID} if: position closed by DSL breach or tier upgrade occurred.\nIf no positions or routine trailing: output HEARTBEAT_OK.\n\nERROR PROTOCOL: If ANY script fails, output exactly ONE line: ERROR_HALT | <ScriptName> | <ErrorType> | <one-line cause>. Do NOT retry, do NOT write multi-paragraph diagnostics."
   }
 }
 ```
@@ -322,13 +325,13 @@ Every 8 hours. Meta-optimizer that tunes TIGER's execution parameters. Isolated 
 
 Scanners are offset to avoid simultaneous mcporter calls:
 
-| Offset | Cron |
-|--------|------|
-| :00 | Compression Scanner |
-| :01 | Momentum Scanner |
-| :02 | Reversion Scanner |
-| :03 | OI Tracker |
-| :04 | Risk Guardian + Exit Checker |
+| Offset | Cron                         |
+| ------ | ---------------------------- |
+| :00    | Compression Scanner          |
+| :01    | Momentum Scanner             |
+| :02    | Reversion Scanner            |
+| :03    | OI Tracker                   |
+| :04    | Risk Guardian + Exit Checker |
 
 Correlation (3min) and Funding (30min) run on their own cadence. DSL runs every 30s in main session.
 
@@ -350,17 +353,17 @@ DSL stays in main session because it's the only cron that needs awareness of the
 
 ## Cron Creation Checklist
 
-| # | Name | Interval (ms) | Session | Delivery | Model Tier | Purpose |
-|---|------|---------------|---------|----------|------------|---------|
-| 0 | tiger-prescreen | 300000 (5m) | isolated | none | Tier 1 | Asset prescreening |
-| 1 | tiger-compression | 300000 (5m) | isolated | none | Tier 1 | BB squeeze breakout |
-| 2 | tiger-correlation | 180000 (3m) | isolated | none | Tier 1 | BTC lag detection |
-| 3 | tiger-momentum | 300000 (5m) | isolated | none | Tier 1 | Price move + volume |
-| 4 | tiger-reversion | 300000 (5m) | isolated | none | Tier 1 | Overextension fade |
-| 5 | tiger-funding | 1800000 (30m) | isolated | none | Tier 1 | Funding arb |
-| 6 | tiger-oi | 300000 (5m) | isolated | none | Tier 1 | Data collection |
-| 7 | tiger-goal | 3600000 (1h) | isolated | announce | Tier 2 | Aggression |
-| 8 | tiger-risk | 300000 (5m) | isolated | announce | Tier 2 | Risk limits |
-| 9 | tiger-exit | 300000 (5m) | isolated | announce | Tier 2 | Pattern exits |
-| 10 | tiger-dsl | 30000 (30s) | **main** | — | Tier 1 | Trailing stops |
-| 11 | tiger-roar | 28800000 (8h) | isolated | announce | Tier 2 | Meta-optimizer |
+| #   | Name              | Interval (ms) | Session  | Delivery | Model Tier | Purpose             |
+| --- | ----------------- | ------------- | -------- | -------- | ---------- | ------------------- |
+| 0   | tiger-prescreen   | 300000 (5m)   | isolated | none     | Tier 1     | Asset prescreening  |
+| 1   | tiger-compression | 300000 (5m)   | isolated | none     | Tier 1     | BB squeeze breakout |
+| 2   | tiger-correlation | 180000 (3m)   | isolated | none     | Tier 1     | BTC lag detection   |
+| 3   | tiger-momentum    | 300000 (5m)   | isolated | none     | Tier 1     | Price move + volume |
+| 4   | tiger-reversion   | 300000 (5m)   | isolated | none     | Tier 1     | Overextension fade  |
+| 5   | tiger-funding     | 1800000 (30m) | isolated | none     | Tier 1     | Funding arb         |
+| 6   | tiger-oi          | 300000 (5m)   | isolated | none     | Tier 1     | Data collection     |
+| 7   | tiger-goal        | 3600000 (1h)  | isolated | announce | Tier 2     | Aggression          |
+| 8   | tiger-risk        | 300000 (5m)   | isolated | announce | Tier 2     | Risk limits         |
+| 9   | tiger-exit        | 300000 (5m)   | isolated | announce | Tier 2     | Pattern exits       |
+| 10  | tiger-dsl         | 30000 (30s)   | **main** | —        | Tier 1     | Trailing stops      |
+| 11  | tiger-roar        | 28800000 (8h) | isolated | announce | Tier 2     | Meta-optimizer      |
