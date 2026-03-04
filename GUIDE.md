@@ -1265,6 +1265,178 @@ def handler(_meta, _config, data):      # interface requires these params
 
 ---
 
+## 13. LLM Guardrails — Constraining Agent Behavior
+
+Cron jobs run LLM agents in isolated sessions with no memory. Under reasoning pressure, agents ignore soft mandate instructions, hallucinate values, and re-derive parameters the script already computed. The fix is always the same: **move the decision into script code and pass the result to the agent as a fait accompli.**
+
+### 13.1 Pass Indices, Not Values
+
+When a scanner script produces signals (direction, conviction, asset), don't pass the raw values through the LLM for it to "use." It will re-interpret them.
+
+```python
+# BAD — scanner says LONG 0.8, LLM opens SHORT 0.5
+output["signals"] = [
+    {"asset": "XPL", "direction": "LONG", "conviction": 0.8}
+]
+# Mandate: "Open positions based on the signals above"
+# Result: LLM reasons its way to a different direction and conviction
+
+# GOOD — signal-index pattern
+output["signals"] = [
+    {"index": 0, "asset": "XPL", "direction": "LONG", "conviction": 0.8}
+]
+# Mandate: "For each signal, call open-position.py --signal-index <index>"
+# open-position.py reads direction/conviction from the saved scanner output
+```
+
+**The script that consumes the value reads it from a file/database, not from the LLM's retelling of it.** The LLM only passes an index or ID to identify which record to use.
+
+**Why mandate hardening doesn't work:** Adding "you MUST use the scanner values" to a mandate is insufficient. LLMs ignore soft instructions under reasoning pressure — if the model's chain-of-thought concludes a different direction is better, it will override. Code enforcement is the only reliable guard.
+
+### 13.2 Script-Owned Notifications
+
+See [9.6 Notification Decision Ownership](#96-notification-decision-ownership) for the core pattern: scripts build a `notifications[]` array, agents just send them.
+
+**Additional pattern — direct notification from script:**
+
+For critical events (position closures, liquidation alerts), bypass the LLM entirely by calling `send_notification()` directly from the script:
+
+```python
+# In the script itself, not via LLM
+from senpi_utils import send_notification
+
+def close_position(strategy_id, asset, reason):
+    result = mcporter_call("close_position", ...)
+    if result["success"]:
+        # Notify directly — LLM never involved
+        send_notification(f"CLOSED {asset}: {reason} | PnL: {result['pnl']}")
+    return result
+```
+
+Use this for events where the notification is mandatory and the LLM adds no value in deciding whether to send it.
+
+### 13.3 Enforce Cooldowns in Code
+
+Time-based rules ("wait 45 minutes before rotating") belong in script code, not mandate text. LLMs have no reliable sense of time and will violate timing constraints.
+
+```python
+# In open-position.py (the execution script, not the mandate)
+MIN_POSITION_AGE_MINUTES = 45
+
+def check_rotation_eligible(dsl):
+    created_at = datetime.fromisoformat(dsl["createdAt"])
+    age_minutes = (datetime.now(timezone.utc) - created_at).total_seconds() / 60
+    if age_minutes < MIN_POSITION_AGE_MINUTES:
+        return False, f"Position only {age_minutes:.0f}min old (min: {MIN_POSITION_AGE_MINUTES})"
+    return True, None
+```
+
+**Also enforce in scanner output:**
+
+```python
+# Scanner surfaces only eligible positions — LLM can't pick ineligible ones
+output["rotationEligibleCoins"] = [
+    coin for coin in open_positions
+    if get_position_age_minutes(coin) >= MIN_POSITION_AGE_MINUTES
+]
+output["hasRotationCandidate"] = len(output["rotationEligibleCoins"]) > 0
+```
+
+**Same-run anti-rotation:** The mandate should explicitly forbid rotating positions opened in the same cron run. This is one of the few timing rules that works in mandates because it requires no clock — just "did I open this 5 minutes ago in this same session?"
+
+### 13.4 Cross-Verify State Sources
+
+When multiple sources of truth exist (local state files, on-chain data, API responses), cross-verify and use the most conservative count.
+
+```python
+# BAD — trust only DSL file count
+open_slots = MAX_POSITIONS - len(dsl_files)
+
+# GOOD — cross-verify against on-chain state
+dsl_count = len([d for d in dsl_files if not is_stale_approximate(d)])
+on_chain_count = len(clearinghouse_positions)
+actual_open = max(dsl_count, on_chain_count)  # conservative
+open_slots = MAX_POSITIONS - actual_open
+```
+
+**Why `max()` not `min()`:** Using the higher count is conservative — it prevents opening too many positions. Stale DSL files, orphan positions, or delayed API data can all cause undercounting.
+
+**Grace periods for stale state:** Exclude approximate/stale DSLs from slot counting after a configurable grace period, but only if the on-chain data confirms they don't exist.
+
+### 13.5 Approximate State + Deferred Reconciliation
+
+Clearinghouse data can be delayed after a position open — entryPx may be 0, margin may be incomplete. Don't block on perfect data at creation time.
+
+```python
+# At position creation time
+dsl = {
+    "asset": asset,
+    "direction": direction,
+    "approximate": True,   # flag for incomplete data
+    "createdAt": now_iso(),
+    # entryPx, margin etc. filled by health check later
+}
+atomic_write(dsl_path, dsl)
+
+# In health check cron (runs every few minutes)
+for dsl in load_all_dsls():
+    if dsl.get("approximate"):
+        on_chain = get_clearinghouse_position(dsl["asset"])
+        if on_chain and on_chain["entryPx"] > 0:
+            dsl.update(on_chain_to_dsl(on_chain))
+            dsl["approximate"] = False
+            atomic_write(dsl_path, dsl)
+```
+
+**Anti-recreation cycle:** Track recently deactivated DSLs and prevent auto-creation for a cooldown period (e.g., 15 minutes). Without this, a closed position's DSL gets recreated from on-chain data before the chain fully settles.
+
+### 13.6 Pre-Filter Non-Actionable Output
+
+If the agent can't act on information (no open slots, no rotation candidates, no signals), don't include it in the output. This saves LLM reasoning tokens and prevents the agent from attempting impossible actions within the cron timeout.
+
+```python
+# If no slots and nothing to rotate, suppress everything
+if open_slots <= 0 and not has_rotation_candidate:
+    output["alerts"] = []
+    output["signals"] = []
+    output["summary"] = "No capacity and no rotation candidates. Nothing actionable."
+```
+
+**Rule of thumb:** Every item in the script output should map to a concrete action the agent can take. If it's informational-only, it belongs in a log file, not the output.
+
+### 13.7 Include Ready-to-Use Values
+
+Script output should contain values exactly as the API expects them — no transformation required from the LLM. LLMs will strip prefixes, change casing, or "normalize" identifiers in ways that break API calls.
+
+```python
+# BAD — LLM strips the xyz: prefix, breaking equity positions
+output["asset"] = "xyz:AAPL"
+# Mandate: "Use the asset name from the scanner"
+# LLM: "The asset is AAPL" (stripped prefix)
+
+# GOOD — explicit field name signals "use as-is"
+output["qualifiedAsset"] = "xyz:AAPL"
+# Mandate: "Pass qualifiedAsset directly to open-position.py --asset"
+```
+
+**Also applies to:** leverage values (output the number, not "10x"), margin amounts (output the dollar value, not a percentage to calculate from), order parameters (output the full `--args` JSON blob).
+
+### 13.8 Use Structured JSON for Complex Args
+
+When passing complex arguments (arrays, nested objects) to scripts via CLI, use a single JSON blob instead of flattened key=value pairs.
+
+```bash
+# BAD — key=value breaks for arrays and nested structures
+mcporter --tool close_position orders=[{"oid":"abc"}] asset=BTC
+
+# GOOD — single JSON blob
+mcporter --tool close_position --args '{"orders": [{"oid": "abc"}], "asset": "BTC"}'
+```
+
+**Pattern:** Use `--args '{...}'` for any API call with non-scalar parameters.
+
+---
+
 ## Quick Reference Checklist
 
 Before shipping a new skill, verify:
@@ -1303,3 +1475,9 @@ Before shipping a new skill, verify:
 - [ ] Operational parameters (leverage, margin, sizing) computed by script from config, not hardcoded tiers
 - [ ] Isolation decision verified: cron only uses main session if cross-run memory is genuinely required
 - [ ] 2-tier model (Mid/Budget) used by default; Primary tier justified in cron docs if used
+- [ ] Critical parameters passed via index/ID, not raw values through LLM
+- [ ] Time-based rules (cooldowns, throttles) enforced in script, not mandate
+- [ ] State cross-verified across sources (files vs on-chain), using conservative (`max`) counts
+- [ ] Non-actionable output suppressed when agent can't act (no slots, no candidates)
+- [ ] Script output includes ready-to-use values — no LLM transformation needed (e.g., `qualifiedAsset`)
+- [ ] Complex CLI args use `--args '{...}'` JSON blob, not flattened key=value pairs
