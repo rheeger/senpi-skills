@@ -1,7 +1,7 @@
 ---
 name: fox-strategy
 description: >-
-  FOX v0.1 — Fully autonomous multi-strategy trading for Hyperliquid perps via Senpi MCP.
+  FOX v0.2 — Fully autonomous multi-strategy trading for Hyperliquid perps via Senpi MCP.
   Forked from Wolf v7 + v7.1 data-driven optimizations (14-trade analysis: 2W/12L).
   Tighter absolute floor (0.02/lev, ~20% max ROE loss), aggressive Phase 1 timing
   (30min hard timeout, 15min weak peak, 10min dead weight), green-in-10 floor tightening,
@@ -17,13 +17,13 @@ compatibility: >-
   Depends on dsl-dynamic-stop-loss skill for trailing stops.
 metadata:
   author: jason-goldberg
-  version: "0.1"
+  version: "0.2"
   platform: senpi
   exchange: hyperliquid
 
 ---
 
-# FOX v0.1 — Autonomous Multi-Strategy Trading
+# FOX v0.2 — Autonomous Multi-Strategy Trading
 
 The FOX hunts for its human. It scans, enters, exits, and rotates positions autonomously — no permission needed. When criteria are met, it acts. Speed is edge.
 
@@ -125,10 +125,12 @@ This adds to the registry without disrupting running strategies. Disable with `e
 
 ### 4. Tiered Margin System
 - **Max entries**: 6 (flat, no dynamic slots)
-- **Entries 1-2**: $1450 margin, $1500 budget
-- **Entries 3-4**: $950 margin, $1000 budget
-- **Entries 5-6**: $450 margin, $500 budget
+- **Entries 1-2**: 22% of budget per trade (44% total)
+- **Entries 3-4**: 15% of budget per trade (30% total)
+- **Entries 5-6**: 7% of budget per trade (14% total)
+- All 6 slots at max fill use ~88% of budget, leaving a 12% buffer
 - Scanner reads tier based on current entry count from `fox-trade-counter.json`
+- Margin amounts are calculated at setup from the user's budget — never hardcoded
 
 ### 5. BTC 1h Bias Alignment
 - Check BTC hourly trend from regime data before entry
@@ -528,22 +530,25 @@ Disqualified assets appear in output with `reason` and `wouldHaveScored` for tra
 
 ---
 
-## Budget Scaling v7 — Tiered Margin System
+## Budget Scaling — Tiered Margin System
 
-**v7 uses tiered margin based on entry count (not budget-based slots):**
+**Margin per trade is a percentage of the user's budget, not a fixed dollar amount.** This ensures the system scales correctly for any budget size — a $2,000 account and a $20,000 account both allocate the same proportions.
 
-| Entry Count | Margin per Trade | Budget per Strategy | Leverage | Notes |
-|-------------|-----------------|-------------------|----------|--------|
-| 1-2 | $1,450 | $1,500 | 10x | Higher margin for early entries |
-| 3-4 | $950 | $1,000 | 10x | Medium margin for mid entries |
-| 5-6 | $450 | $500 | 10x | Lower margin for final entries |
+| Entry Count | Margin % of Budget | Example ($6,500 budget) | Leverage | Notes |
+|-------------|-------------------|------------------------|----------|-------|
+| 1-2 | 22% | $1,430 | 10x | Higher margin for early, high-conviction entries |
+| 3-4 | 15% | $975 | 10x | Medium margin for mid entries |
+| 5-6 | 7% | $455 | 10x | Lower margin for final entries |
+
+**Total allocation at max fill: ~88% of budget.** The remaining ~12% acts as a buffer for fees, slippage, and drawdown absorption.
 
 **Max entries per day: 6 (flat limit, no dynamic slots)**
 
 **How it works:**
-1. Scanner reads current entry count from `fox-trade-counter.json`
-2. Finds matching tier from `marginTiers` array
-3. Uses that tier's margin/budget for position sizing
+1. At setup, `fox-setup.py` calculates dollar amounts from the user's budget using the percentage tiers
+2. These are stored in `fox-trade-counter.json` as both `marginPct` and pre-calculated `margin` amounts
+3. Scanner reads current entry count and finds the matching tier
+4. Uses that tier's margin for position sizing
 
 **Minimum leverage: 7x.** If max leverage for an asset is below 7x, skip it.
 

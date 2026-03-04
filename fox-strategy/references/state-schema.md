@@ -68,11 +68,11 @@
   "cooldownUntil": null,
   "maxEntriesPerDay": 6,
   "marginTiers": [
-    {"entries": [1, 2], "marginPct": 0.48, "budgetPct": 0.50, "margin": "<calculated>", "budget": "<calculated>"},
-    {"entries": [3, 4], "marginPct": 0.32, "budgetPct": 0.33, "margin": "<calculated>", "budget": "<calculated>"},
-    {"entries": [5, 6], "marginPct": 0.15, "budgetPct": 0.17, "margin": "<calculated>", "budget": "<calculated>"}
+    {"entries": [1, 2], "marginPct": 0.22, "margin": "<budget × 0.22>"},
+    {"entries": [3, 4], "marginPct": 0.15, "margin": "<budget × 0.15>"},
+    {"entries": [5, 6], "marginPct": 0.07, "margin": "<budget × 0.07>"}
   ],
-  "note": "margin/budget fields calculated from user's budget at setup. marginPct/budgetPct are the percentage of budget."
+  "note": "marginPct is the source of truth. margin fields are pre-calculated from user budget at setup for convenience."
 }
 ```
 

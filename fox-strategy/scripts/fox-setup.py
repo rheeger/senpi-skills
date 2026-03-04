@@ -123,17 +123,15 @@ mid_model = args.mid_model
 budget_model = args.budget_model
 
 # Calculate parameters
-if budget < 3000:
-    slots = 2
-elif budget < 6000:
-    slots = 2
-elif budget < 10000:
-    slots = 3
-else:
-    slots = 3
+# Tiered margin: percentage of budget per entry, decreasing as more positions open
+MARGIN_TIERS = [
+    {"entries": [1, 2], "marginPct": 0.22},  # 22% of budget per trade (44% total)
+    {"entries": [3, 4], "marginPct": 0.15},  # 15% of budget per trade (30% total)
+    {"entries": [5, 6], "marginPct": 0.07},  # 7% of budget per trade (14% total)
+]
+# Total at max fill: 88% of budget. 12% buffer for fees/slippage/drawdown.
 
-margin_per_slot = round(budget * 0.30, 2)
-margin_buffer = round(budget * (1 - 0.30 * slots), 2)
+max_entries = 6
 daily_loss_limit = round(budget * 0.15, 2)
 drawdown_cap = round(budget * 0.30, 2)
 
@@ -146,6 +144,18 @@ elif budget < 15000:
 else:
     default_leverage = 10
 
+# Pre-calculate dollar amounts from percentages for convenience
+margin_tiers_with_amounts = []
+for tier in MARGIN_TIERS:
+    margin_amount = round(budget * tier["marginPct"], 2)
+    margin_tiers_with_amounts.append({
+        "entries": tier["entries"],
+        "marginPct": tier["marginPct"],
+        "margin": margin_amount,
+    })
+
+# Use tier 1 margin as the representative "margin per slot" for display
+margin_per_slot = margin_tiers_with_amounts[0]["margin"]
 notional_per_slot = round(margin_per_slot * default_leverage, 2)
 auto_delever_threshold = round(budget * 0.80, 2)
 
@@ -158,7 +168,8 @@ strategy_entry = {
     "wallet": wallet,
     "strategyId": strategy_id,
     "budget": budget,
-    "slots": slots,
+    "maxEntries": max_entries,
+    "marginTiers": margin_tiers_with_amounts,
     "marginPerSlot": margin_per_slot,
     "defaultLeverage": default_leverage,
     "dailyLossLimit": daily_loss_limit,
