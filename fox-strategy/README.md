@@ -13,14 +13,14 @@ FOX and WOLF are independent strategies that can run side by side on the same Se
 | | **WOLF v6** | **FOX v0.1** |
 |---|---|---|
 | **Philosophy** | Cast a wide net, catch many moves | Sniper mode — fewer trades, higher conviction |
-| **Entry signals** | FIRST_JUMP + IMMEDIATE_MOVER, min 4 reasons | Scoring system (6+ pts), time-of-day weighting, rank jump minimums |
+| **Entry signals** | FIRST_JUMP + IMMEDIATE_MOVER, min 4 reasons | Scoring system (6+ pts), rank jump minimums |
 | **Market regimes** | BULLISH = long, BEARISH = short | Same + NEUTRAL regime support (both directions at higher threshold) |
 | **Phase 1 timing** | 90min hard timeout, 45min weak peak, 30min dead weight | 30min / 15min / 10min — cuts losers 3x faster |
 | **Max ROE loss** | ~30% (0.03/leverage floor) | ~20% (0.02/leverage floor) |
 | **Conviction scaling** | Fixed Phase 1 rules for all trades | Score-based: high-conviction trades get more room, low-conviction get cut fast |
 | **Position sizing** | Dynamic slots (3-6 based on daily PnL) | Tiered margin (entries 1-2 at $1,450, 3-4 at $950, 5-6 at $450) |
 | **Re-entry** | No | Yes — if direction was right but timing was off, re-enters at 75% size |
-| **Time-of-day** | No filter | +1 pt for 04-14 UTC, -2 pts for 18-02 UTC (evening trades need higher conviction) |
+| **Time-of-day** | No filter | Removed in v0.2 — insufficient data to justify filtering |
 | **DSL version** | v4 (combined runner) | v5 (per-strategy, HL stop-loss sync, auto-cleanup) |
 | **Cron architecture** | 7 crons | 8 crons (adds market regime refresh) |
 | **Best for** | Traders who want broad market coverage and more at-bats | Traders who want fewer, higher-quality entries with aggressive risk management |
@@ -92,8 +92,6 @@ To add a second strategy, run `fox-setup.py` again with a different wallet and b
 
 **Re-entry logic.** When FOX cuts a Phase 1 position and the asset keeps moving in the original direction, it can re-enter within 2 hours at 75% size. Direction was right 85% of the time — re-entry captures the moves that timing initially missed.
 
-**Time-of-day filtering.** 0% win rate across 6 evening trades. FOX penalizes entries between 18:00-02:00 UTC by 2 points, effectively requiring score 8+ to enter during those hours.
-
 **DSL v5 with HL sync.** Stop losses are synced to Hyperliquid as native orders via `edit_position`. When price hits the stop, Hyperliquid executes instantly — no waiting for the next 3-minute cron tick.
 
 ---
@@ -114,7 +112,7 @@ The only shared resource is `market-regime-last.json`, which both can read. If b
 - Phase 1 timing: 30/15/10min (was 90/45/30)
 - Absolute floor tightened to 0.02/leverage (~20% max ROE loss)
 - Conviction-scaled Phase 1 tolerance
-- Time-of-day scoring (+1 morning, -2 evening)
+- Time-of-day scoring removed (insufficient data)
 - Rank jump minimum (≥15 or velocity >15)
 - Green-in-10 floor tightening
 - Re-entry logic for validated directions

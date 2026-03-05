@@ -1,11 +1,11 @@
 ---
 name: fox-strategy
 description: >-
-  FOX v0.1 — Fully autonomous multi-strategy trading for Hyperliquid perps via Senpi MCP.
+  FOX v0.2 — Fully autonomous multi-strategy trading for Hyperliquid perps via Senpi MCP.
   Forked from Wolf v7 + v7.1 data-driven optimizations (14-trade analysis: 2W/12L).
   Tighter absolute floor (0.02/lev, ~20% max ROE loss), aggressive Phase 1 timing
   (30min hard timeout, 15min weak peak, 10min dead weight), green-in-10 floor tightening,
-  time-of-day scoring (+1 for 04-14 UTC, -2 for 18-02 UTC), rank jump minimum (≥15 OR vel>15).
+  rank jump minimum (≥15 OR vel>15).
   Scoring system (6+ pts), NEUTRAL regime support, tiered margin (6 entries max),
   BTC 1h bias alignment, market regime refresh 4h.
   8-cron architecture. Independent from Wolf.
@@ -17,13 +17,13 @@ compatibility: >-
   Depends on dsl-dynamic-stop-loss skill for trailing stops.
 metadata:
   author: jason-goldberg
-  version: "0.1"
+  version: "0.2"
   platform: senpi
   exchange: hyperliquid
 
 ---
 
-# FOX v0.1 — Autonomous Multi-Strategy Trading
+# FOX v0.2 — Autonomous Multi-Strategy Trading
 
 The FOX hunts for its human. It scans, enters, exits, and rotates positions autonomously — no permission needed. When criteria are met, it acts. Speed is edge.
 
@@ -119,16 +119,16 @@ This adds to the registry without disrupting running strategies. Disable with `e
 - **DEEP_CLIMBER**: +1 pt
 - **Other reasons** (RANK_UP, CLIMBING, ACCEL, STREAK): +1 pt each
 - **BTC 1h bias alignment**: +1 bonus pt
-- **v0.1 TIME BONUS** (04:00–14:00 UTC): **+1 pt**
-- **v0.1 TIME PENALTY** (18:00–02:00 UTC): **-2 pts**
 - **Minimum 6 points** to enter (8+ for NEUTRAL regime)
 
 ### 4. Tiered Margin System
 - **Max entries**: 6 (flat, no dynamic slots)
-- **Entries 1-2**: $1450 margin, $1500 budget
-- **Entries 3-4**: $950 margin, $1000 budget
-- **Entries 5-6**: $450 margin, $500 budget
+- **Entries 1-2**: 22% of budget per trade (44% total)
+- **Entries 3-4**: 15% of budget per trade (30% total)
+- **Entries 5-6**: 7% of budget per trade (14% total)
+- All 6 slots at max fill use ~88% of budget, leaving a 12% buffer
 - Scanner reads tier based on current entry count from `fox-trade-counter.json`
+- Margin amounts are calculated at setup from the user's budget — never hardcoded
 
 ### 5. BTC 1h Bias Alignment
 - Check BTC hourly trend from regime data before entry
@@ -177,20 +177,7 @@ For positions that briefly went green then reversed, this rule does NOT apply.
 
 **Config field:** `phase1.greenIn10TightenPct` (default: `50` — tighten floor to 50% of original distance)
 
-### 4. Time-of-Day Scoring
-
-| Time Window (UTC) | Modifier | Rationale |
-|---|---|---|
-| 04:00–14:00 | **+1 pt** | Historically where winners occur |
-| 14:00–18:00 | 0 pts | Neutral window |
-| 18:00–02:00 | **-2 pts** | 0% win rate across 6 evening trades |
-| 02:00–04:00 | 0 pts | Neutral window |
-
-**Effect:** Evening entries effectively need score ≥ 8 to pass the 6-point threshold.
-
-**Config fields:** `scoring.timeBonusHoursUTC` (default: `[4,14]`), `scoring.timePenaltyHoursUTC` (default: `[18,2]`), `scoring.timeBonusPts` (default: `1`), `scoring.timePenaltyPts` (default: `-2`)
-
-### 5. Rank Jump Minimum
+### 4. Rank Jump Minimum
 
 **New filter:** `rankJumpThisScan ≥ 15` OR `contribVelocity > 15`
 
@@ -200,7 +187,7 @@ Old rule: just needed `isFirstJump=true` (any 10+ rank jump from #25+). Now requ
 
 **Config fields:** `filters.minRankJump` (default: `15`), `filters.minVelocityOverride` (default: `15`)
 
-### 6. Conviction-Scaled Phase 1 Tolerance (v7.2)
+### 5. Conviction-Scaled Phase 1 Tolerance (v7.2)
 
 **Finding:** Direction was right 85% of the time (11/13 trades) but we still lost $785 on correct-direction trades and left $8,000+ on the table. The problem is timing/stops, not signal quality.
 
@@ -216,7 +203,7 @@ Old rule: just needed `isFirstJump=true` (any 10+ rank jump from #25+). Now requ
 
 **Config field:** `phase1.convictionTiers` (array of `{minScore, retraceThreshold, hardTimeoutMin, weakPeakCutMin, deadWeightCutMin}`)
 
-### 7. Re-Entry Rule (v7.2)
+### 6. Re-Entry Rule (v7.2)
 
 When we exit a Phase 1 trade and the asset continues in our original direction, we can re-enter with guardrails.
 
@@ -322,26 +309,27 @@ Runs every 15min. v6 scanner with BTC macro context, hourly trend classification
 
 | # | Job | Interval | Session | Script | Purpose |
 |---|-----|----------|---------|--------|---------|
-| 1 | Emerging Movers | **3min** | **main** | `scripts/fox-emerging-movers.py` | Hunt FIRST_JUMP signals with v7 scoring |
-| 2 | DSL v5 | **3min** | isolated | `dsl-v5.py` (per-strategy cron) | Trailing stop exits, HL SL sync |
+| 1 | Emerging Movers | **3min** | isolated | `scripts/fox-emerging-movers.py` | Hunt FIRST_JUMP signals with v7 scoring |
+| 2 | DSL v5 | **3min** | isolated | `scripts/fox-dsl-wrapper.py` | Trailing stop exits + Phase 1 timing |
 | 3 | SM Flip Detector | 5min | isolated | `scripts/fox-sm-flip-check.py` | Conviction collapse cuts |
 | 4 | Watchdog | 5min | isolated | `scripts/fox-monitor.py` | Per-strategy margin buffer, liq distances |
 | 5 | Portfolio Update | 15min | isolated | (agent-driven) | Per-strategy PnL reporting |
-| 6 | Opportunity Scanner | 15min | **main** | `scripts/fox-opportunity-scan-v6.py` | 4-pillar scoring, BTC macro, hourly trend |
+| 6 | Opportunity Scanner | 15min | isolated | `scripts/fox-opportunity-scan-v6.py` | 4-pillar scoring, BTC macro, hourly trend |
 | 7 | Market Regime | **4h** | isolated | `scripts/fox-market-regime.py` | Regime classification |
-| 8 | Health Check | 10min | isolated | `scripts/fox-health-check.py` | Orphan DSL, state validation |
+| 8 | Health Check | 10min | isolated | `scripts/fox-health-check.py` | Self-healing state validation |
 
 **All scripts read `fox-strategies.json` and iterate all enabled Fox strategies.**
 
 See [references/cron-setup.md](references/cron-setup.md) for detailed cron configuration, race condition prevention, and time-aware scheduling.
 
-### Model Selection Per Cron — 3-Tier Approach
+### Model Selection Per Cron — 2-Tier Approach
 
 | Tier | Role | Crons | Example Model IDs |
 |------|------|-------|--------------------|
-| **Primary** | Complex judgment, multi-strategy routing | Emerging Movers, Opportunity Scanner | Your configured model (runs on main session) |
-| **Mid** | Structured tasks, script output parsing | DSL v5, Portfolio Update, Health Check, Market Regime | `anthropic/claude-sonnet-4-20250514`, `openai/gpt-4o`, `google/gemini-2.0-flash` |
-| **Budget** | Simple threshold checks, binary decisions | SM Flip, Watchdog | `anthropic/claude-sonnet-4-20250514`, `openai/gpt-4o-mini`, `google/gemini-2.0-flash-lite` |
+| **Mid** | Script output parsing, position management | Emerging Movers, DSL, Opp Scanner, Portfolio, Health Check, Market Regime | `anthropic/claude-sonnet-4-5`, `openai/gpt-4o`, `google/gemini-2.0-flash` |
+| **Budget** | Simple threshold checks, binary decisions | SM Flip, Watchdog | `anthropic/claude-haiku-4-5`, `openai/gpt-4o-mini`, `google/gemini-2.0-flash-lite` |
+
+Use `--provider` flag in `fox-setup.py` to auto-select models for your provider.
 
 **Do NOT create crons yet** — the main agent will set these up when activating the strategy.
 
@@ -349,13 +337,12 @@ See [references/cron-setup.md](references/cron-setup.md) for detailed cron confi
 
 ## Cron Setup
 
-**Critical:** Crons are **OpenClaw crons**, NOT senpi crons. FOX uses two session types:
-- **Main session** (`systemEvent`): Emerging Movers + Opportunity Scanner. These share the primary session context for accumulated routing knowledge.
-- **Isolated session** (`agentTurn`): All others. Each runs in its own session — no context pollution, enables cheaper model tiers.
+**Critical:** Crons are **OpenClaw crons**, NOT senpi crons. ALL 8 crons use isolated sessions (`agentTurn`).
 
 **Key rules (per Senpi Skill Guide §7):**
-- `systemEvent` uses `"text"` key; `agentTurn` uses `"message"` key — wrong key = silent failure
-- Budget/Mid mandates have explicit `if/then` per output field — never "apply rules from SKILL.md"
+- All crons use `agentTurn` with `"message"` key — no main session crons
+- Mandates are simple if/then rules (3-8 lines) — scripts do all data crunching
+- Every script outputs `notifications` + `action_required` — mandate just acts on them
 - Slot guard pattern: check `anySlotsAvailable` BEFORE any entry
 - One set of crons — scripts iterate all strategies internally
 
@@ -528,22 +515,25 @@ Disqualified assets appear in output with `reason` and `wouldHaveScored` for tra
 
 ---
 
-## Budget Scaling v7 — Tiered Margin System
+## Budget Scaling — Tiered Margin System
 
-**v7 uses tiered margin based on entry count (not budget-based slots):**
+**Margin per trade is a percentage of the user's budget, not a fixed dollar amount.** This ensures the system scales correctly for any budget size — a $2,000 account and a $20,000 account both allocate the same proportions.
 
-| Entry Count | Margin per Trade | Budget per Strategy | Leverage | Notes |
-|-------------|-----------------|-------------------|----------|--------|
-| 1-2 | $1,450 | $1,500 | 10x | Higher margin for early entries |
-| 3-4 | $950 | $1,000 | 10x | Medium margin for mid entries |
-| 5-6 | $450 | $500 | 10x | Lower margin for final entries |
+| Entry Count | Margin % of Budget | Example ($6,500 budget) | Leverage | Notes |
+|-------------|-------------------|------------------------|----------|-------|
+| 1-2 | 22% | $1,430 | 10x | Higher margin for early, high-conviction entries |
+| 3-4 | 15% | $975 | 10x | Medium margin for mid entries |
+| 5-6 | 7% | $455 | 10x | Lower margin for final entries |
+
+**Total allocation at max fill: ~88% of budget.** The remaining ~12% acts as a buffer for fees, slippage, and drawdown absorption.
 
 **Max entries per day: 6 (flat limit, no dynamic slots)**
 
 **How it works:**
-1. Scanner reads current entry count from `fox-trade-counter.json`
-2. Finds matching tier from `marginTiers` array
-3. Uses that tier's margin/budget for position sizing
+1. At setup, `fox-setup.py` calculates dollar amounts from the user's budget using the percentage tiers
+2. These are stored in `fox-trade-counter.json` as both `marginPct` and pre-calculated `margin` amounts
+3. Scanner reads current entry count and finds the matching tier
+4. Uses that tier's margin for position sizing
 
 **Minimum leverage: 7x.** If max leverage for an asset is below 7x, skip it.
 
@@ -646,12 +636,14 @@ All MCP calls go through `fox_config.mcporter_call()` — no direct subprocess i
 | Script | Purpose |
 |--------|---------|
 | `scripts/fox-setup.py` | Setup wizard — adds strategy to registry from budget |
-| `scripts/fox_config.py` | Shared config loader — all Fox scripts import this |
-| `scripts/fox-emerging-movers.py` | Emerging Movers v4 scanner (FIRST_JUMP, IMMEDIATE, CONTRIB_EXPLOSION) |
+| `scripts/fox_config.py` | FOX config loader — imports shared utilities from `senpi_lib` |
+| `scripts/fox-emerging-movers.py` | Emerging Movers scanner with FOX scoring + topPicks output |
+| `scripts/fox-open-position.py` | Atomic position open + DSL v5 state creation |
+| `scripts/fox-dsl-wrapper.py` | DSL v5 runner + Phase 1 timing enforcement |
 | `scripts/fox-sm-flip-check.py` | SM conviction flip detector (multi-strategy) |
 | `scripts/fox-monitor.py` | Watchdog — per-strategy margin buffer + position health |
 | `scripts/fox-opportunity-scan-v6.py` | Opportunity Scanner v6 (BTC macro, hourly trend, disqualifiers) |
-| `scripts/fox-health-check.py` | Per-strategy orphan DSL / state validation |
+| `scripts/fox-health-check.py` | Self-healing state validation + cron heartbeat monitoring |
 | `scripts/fox-market-regime.py` | Market regime detector |
 
 ## State Files Reference

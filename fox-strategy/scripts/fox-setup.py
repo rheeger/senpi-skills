@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-FOX v7 Setup Wizard
+FOX v0.2 Setup Wizard
 Sets up a FOX autonomous trading strategy and adds it to the multi-strategy registry.
 Calculates all parameters from budget, fetches max-leverage data,
-and outputs config + cron templates.
+creates trade counter file, and outputs config + cron templates.
 
 Usage:
   # Agent passes what it knows, only asks user for budget:
   python3 fox-setup.py --wallet 0x... --strategy-id UUID --chat-id 12345 --budget 6500
 
-  # With custom name and DSL preset:
+  # With provider, trading risk, and custom name:
   python3 fox-setup.py --wallet 0x... --strategy-id UUID --chat-id 12345 --budget 6500 \
-      --name "Aggressive Momentum" --dsl-preset aggressive
+      --provider openai --trading-risk aggressive --name "Aggressive Momentum"
 
   # Interactive mode (prompts for everything):
   python3 fox-setup.py
@@ -19,33 +19,51 @@ Usage:
 import json, sys, os, math, argparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fox_config import mcporter_call
+from fox_config import mcporter_call, atomic_write
 
 WORKSPACE = os.environ.get("FOX_WORKSPACE",
     os.environ.get("OPENCLAW_WORKSPACE", "/data/workspace"))
 REGISTRY_FILE = os.path.join(WORKSPACE, "fox-strategies.json")
 LEGACY_CONFIG = os.path.join(WORKSPACE, "fox-strategy.json")
 MAX_LEV_FILE = os.path.join(WORKSPACE, "max-leverage.json")
+TRADE_COUNTER_FILE = os.path.join(WORKSPACE, "fox-trade-counter.json")
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# DSL presets
+# Provider -> model mapping
+PROVIDER_MODELS = {
+    "anthropic": {"mid": "anthropic/claude-sonnet-4-5", "budget": "anthropic/claude-haiku-4-5"},
+    "openai":    {"mid": "openai/gpt-4o",               "budget": "openai/gpt-4o-mini"},
+    "google":    {"mid": "google/gemini-2.0-flash",      "budget": "google/gemini-2.0-flash-lite"},
+}
+
+# DSL presets — 9-tier v5 format (from state-schema.md)
 DSL_PRESETS = {
     "aggressive": [
-        {"triggerPct": 5, "lockPct": 50, "breaches": 3},
-        {"triggerPct": 10, "lockPct": 65, "breaches": 2},
-        {"triggerPct": 15, "lockPct": 75, "breaches": 2},
-        {"triggerPct": 20, "lockPct": 85, "breaches": 1}
+        {"triggerPct": 5, "lockPct": 2, "breaches": 2},
+        {"triggerPct": 10, "lockPct": 5, "breaches": 2},
+        {"triggerPct": 20, "lockPct": 14, "breaches": 2},
+        {"triggerPct": 30, "lockPct": 24, "breaches": 2},
+        {"triggerPct": 40, "lockPct": 34, "breaches": 1},
+        {"triggerPct": 50, "lockPct": 44, "breaches": 1},
+        {"triggerPct": 65, "lockPct": 56, "breaches": 1},
+        {"triggerPct": 80, "lockPct": 72, "breaches": 1},
+        {"triggerPct": 100, "lockPct": 90, "breaches": 1},
     ],
     "conservative": [
-        {"triggerPct": 3, "lockPct": 60, "breaches": 4},
-        {"triggerPct": 7, "lockPct": 75, "breaches": 3},
-        {"triggerPct": 12, "lockPct": 85, "breaches": 2},
-        {"triggerPct": 18, "lockPct": 90, "breaches": 1}
+        {"triggerPct": 3, "lockPct": 1, "breaches": 3},
+        {"triggerPct": 7, "lockPct": 3, "breaches": 3},
+        {"triggerPct": 15, "lockPct": 10, "breaches": 2},
+        {"triggerPct": 25, "lockPct": 18, "breaches": 2},
+        {"triggerPct": 35, "lockPct": 28, "breaches": 2},
+        {"triggerPct": 45, "lockPct": 38, "breaches": 1},
+        {"triggerPct": 55, "lockPct": 48, "breaches": 1},
+        {"triggerPct": 70, "lockPct": 62, "breaches": 1},
+        {"triggerPct": 90, "lockPct": 82, "breaches": 1},
     ]
 }
 
 # Parse CLI args
-parser = argparse.ArgumentParser(description="FOX v7 Setup")
+parser = argparse.ArgumentParser(description="FOX v0.2 Setup")
 parser.add_argument("--wallet", help="Strategy wallet address (0x...)")
 parser.add_argument("--strategy-id", help="Strategy ID (UUID)")
 parser.add_argument("--budget", type=float, help="Trading budget in USD (min $500)")
@@ -53,11 +71,18 @@ parser.add_argument("--chat-id", type=int, help="Telegram chat ID")
 parser.add_argument("--name", help="Human-readable strategy name (optional)")
 parser.add_argument("--dsl-preset", choices=["aggressive", "conservative"], default="aggressive",
                     help="DSL tier preset (default: aggressive)")
-parser.add_argument("--mid-model", default="anthropic/claude-sonnet-4-20250514",
-                    help="Model ID for Mid-tier isolated crons (DSL, Portfolio, Health)")
-parser.add_argument("--budget-model", default="anthropic/claude-sonnet-4-20250514",
-                    help="Model ID for Budget-tier isolated crons (SM Flip, Watchdog)")
+parser.add_argument("--provider", choices=list(PROVIDER_MODELS.keys()),
+                    default="anthropic",
+                    help="LLM provider for cron models (default: anthropic)")
+parser.add_argument("--trading-risk", choices=["conservative", "moderate", "aggressive"],
+                    default="moderate",
+                    help="Trading risk profile (default: moderate)")
+parser.add_argument("--mid-model", default=None,
+                    help="Override mid-tier model (default: auto from --provider)")
+parser.add_argument("--budget-model", default=None,
+                    help="Override budget-tier model (default: auto from --provider)")
 args = parser.parse_args()
+
 
 def ask(prompt, default=None, validator=None):
     while True:
@@ -75,10 +100,12 @@ def ask(prompt, default=None, validator=None):
         else:
             print("  Required.")
 
+
 def validate_wallet(v):
     if not v.startswith("0x") or len(v) != 42:
         raise ValueError("Must be 0x... (42 chars)")
     return v
+
 
 def validate_uuid(v):
     parts = v.replace("-", "")
@@ -86,17 +113,20 @@ def validate_uuid(v):
         raise ValueError("Must be a UUID (32 hex chars)")
     return v
 
+
 def validate_budget(v):
     b = float(v)
     if b < 500:
         raise ValueError("Minimum budget is $500")
     return b
 
+
 def validate_chat_id(v):
     return int(v)
 
+
 print("=" * 60)
-print("  FOX v7 -- Autonomous Trading Strategy Setup")
+print("  FOX v0.2 -- Autonomous Trading Strategy Setup")
 print("=" * 60)
 print()
 
@@ -119,23 +149,37 @@ if args.chat_id:
 
 strategy_name = args.name or f"Strategy {strategy_id[:8]}"
 dsl_preset = args.dsl_preset
-mid_model = args.mid_model
-budget_model = args.budget_model
+trading_risk = args.trading_risk
+
+# Resolve models from provider (CLI overrides take priority)
+provider_models = PROVIDER_MODELS[args.provider]
+mid_model = args.mid_model or provider_models["mid"]
+budget_model = args.budget_model or provider_models["budget"]
 
 # Calculate parameters
-if budget < 3000:
-    slots = 2
-elif budget < 6000:
-    slots = 2
-elif budget < 10000:
-    slots = 3
-else:
-    slots = 3
+# Tiered margin: percentage of budget per entry, decreasing as more positions open
+MARGIN_TIERS = [
+    {"entries": [1, 2], "marginPct": 0.22},  # 22% of budget per trade (44% total)
+    {"entries": [3, 4], "marginPct": 0.15},  # 15% of budget per trade (30% total)
+    {"entries": [5, 6], "marginPct": 0.07},  # 7% of budget per trade (14% total)
+]
+# Total at max fill: 88% of budget. 12% buffer for fees/slippage/drawdown.
 
-margin_per_slot = round(budget * 0.30, 2)
-margin_buffer = round(budget * (1 - 0.30 * slots), 2)
+max_entries = 6
 daily_loss_limit = round(budget * 0.15, 2)
 drawdown_cap = round(budget * 0.30, 2)
+
+# Slots based on budget
+if budget < 1000:
+    slots = 2
+elif budget < 3000:
+    slots = 3
+elif budget < 8000:
+    slots = 4
+elif budget < 15000:
+    slots = 5
+else:
+    slots = 6
 
 if budget < 1000:
     default_leverage = 5
@@ -146,6 +190,18 @@ elif budget < 15000:
 else:
     default_leverage = 10
 
+# Pre-calculate dollar amounts from percentages for convenience
+margin_tiers_with_amounts = []
+for tier in MARGIN_TIERS:
+    margin_amount = round(budget * tier["marginPct"], 2)
+    margin_tiers_with_amounts.append({
+        "entries": tier["entries"],
+        "marginPct": tier["marginPct"],
+        "margin": margin_amount,
+    })
+
+# Use tier 1 margin as the representative "margin per slot" for display
+margin_per_slot = margin_tiers_with_amounts[0]["margin"]
 notional_per_slot = round(margin_per_slot * default_leverage, 2)
 auto_delever_threshold = round(budget * 0.80, 2)
 
@@ -159,8 +215,11 @@ strategy_entry = {
     "strategyId": strategy_id,
     "budget": budget,
     "slots": slots,
+    "maxEntries": max_entries,
+    "marginTiers": margin_tiers_with_amounts,
     "marginPerSlot": margin_per_slot,
     "defaultLeverage": default_leverage,
+    "tradingRisk": trading_risk,
     "dailyLossLimit": daily_loss_limit,
     "autoDeleverThreshold": auto_delever_threshold,
     "dsl": {
@@ -202,10 +261,7 @@ if not registry["global"].get("telegramChatId"):
 
 # Save registry atomically
 os.makedirs(WORKSPACE, exist_ok=True)
-tmp_file = REGISTRY_FILE + ".tmp"
-with open(tmp_file, "w") as f:
-    json.dump(registry, f, indent=2)
-os.replace(tmp_file, REGISTRY_FILE)
+atomic_write(REGISTRY_FILE, registry)
 print(f"\n  Registry saved to {REGISTRY_FILE}")
 
 # Create per-strategy state directory
@@ -216,6 +272,19 @@ print(f"  State directory created: {state_dir}")
 # Create other shared directories
 for d in ["history", "memory", "logs"]:
     os.makedirs(os.path.join(WORKSPACE, d), exist_ok=True)
+
+# Create trade counter file if it doesn't exist
+if not os.path.exists(TRADE_COUNTER_FILE):
+    trade_counter = {
+        "entries": 0,
+        "marginTiers": margin_tiers_with_amounts,
+        "budget": budget,
+        "lastUpdated": None
+    }
+    atomic_write(TRADE_COUNTER_FILE, trade_counter)
+    print(f"  Trade counter created: {TRADE_COUNTER_FILE}")
+else:
+    print(f"  Trade counter exists: {TRADE_COUNTER_FILE}")
 
 # Fetch max-leverage via MCP (covers both crypto and XYZ instruments)
 print("\nFetching max-leverage data...")
@@ -234,8 +303,7 @@ try:
         lev = inst.get("max_leverage") or inst.get("maxLeverage")
         if lev is not None:
             max_lev[name] = int(lev)
-    with open(MAX_LEV_FILE, "w") as f:
-        json.dump(max_lev, f, indent=2)
+    atomic_write(MAX_LEV_FILE, max_lev)
     crypto_count = sum(1 for inst in instruments if isinstance(inst, dict) and not inst.get("dex"))
     xyz_count = sum(1 for inst in instruments if isinstance(inst, dict) and inst.get("dex"))
     print(f"  Max leverage data saved ({len(max_lev)} assets: {crypto_count} crypto, {xyz_count} XYZ) to {MAX_LEV_FILE}")
@@ -243,85 +311,139 @@ except Exception as e:
     print(f"  Failed to fetch max-leverage: {e}")
     print("  You can manually fetch later.")
 
-# Build cron templates
+# Build cron templates — ALL isolated/agentTurn with simplified mandates
 tg = f"telegram:{chat_id}"
-margin_str = str(int(margin_per_slot))
 
 cron_templates = {
     "emerging_movers": {
-        "name": "FOX Emerging Movers v5 (90s)",
-        "schedule": {"kind": "every", "everyMs": 90000},
-        "sessionTarget": "main",
-        "wakeMode": "now",
-        "payload": {
-            "kind": "systemEvent",
-            "text": f"FOX v7 Scanner: Run `PYTHONUNBUFFERED=1 python3 {SCRIPTS_DIR}/fox-emerging-movers.py`, parse JSON.\n\nMANDATE: Hunt runners before they peak. Multi-strategy aware.\n1. **FIRST_JUMP**: 10+ rank jump from #25+ AND wasn't in previous top 50 (or was >= #30) -> ENTER IMMEDIATELY.\n2. **CONTRIB_EXPLOSION**: 3x+ contrib spike -> ENTER. NEVER downgrade for erratic history.\n3. **IMMEDIATE_MOVER**: 10+ rank jump from #25+ in ONE scan -> ENTER if not downgraded.\n4. **NEW_ENTRY_DEEP**: Appears in top 20 from nowhere -> ENTER.\n5. **Signal routing**: Read fox-strategies.json. For each signal, find the best-fit strategy: check available slots, existing positions, risk profile match. Route to the strategy with open slots that doesn't already hold the asset.\n6. Min 7x leverage (check max-leverage.json). Alert user on Telegram ({tg}).\n7. **DEAD WEIGHT RULE**: Negative ROE + SM conviction against it for 30+ min -> CUT immediately.\n8. **ROTATION RULE**: If target strategy slots FULL and FIRST_JUMP fires -> compare against weakest position in THAT strategy.\n9. If no actionable signals -> HEARTBEAT_OK.\n10. **AUTO-DELEVER**: Per-strategy threshold check."
-        }
-    },
-    "dsl_combined": {
-        "name": "FOX DSL Combined v6 (3min)",
+        "name": "FOX Emerging Movers (3min)",
         "schedule": {"kind": "every", "everyMs": 180000},
         "sessionTarget": "isolated",
         "payload": {
             "kind": "agentTurn",
             "model": mid_model,
-            "message": f"FOX DSL: Run `PYTHONUNBUFFERED=1 python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py`, parse JSON.\n\nFor each entry in `results`: if `status==\"closed\"` -> alert Telegram ({tg}) with asset, direction, strategyKey, close_reason, upnl. If `phase1_autocut: true` -> note timeout cut. If `status==\"pending_close\"` -> alert user (retry next run).\nIf `any_closed: true` -> note freed slot(s) for next Emerging Movers run. Else HEARTBEAT_OK."
+            "message": (
+                f"FOX Scanner: Run `PYTHONUNBUFFERED=1 python3 {SCRIPTS_DIR}/fox-emerging-movers.py`, parse JSON.\n"
+                f"SLOT GUARD: If `anySlotsAvailable` is false AND `hasFirstJump` is false -> HEARTBEAT_OK.\n"
+                f"Act ONLY on `topPicks` array. Process topPicks[0] first, then topPicks[1], etc.\n"
+                f"Enter via: `python3 {SCRIPTS_DIR}/fox-open-position.py --strategy {{strategyKey}} --asset {{qualifiedAsset}} --signal-index {{signalIndex}}`\n"
+                f"The `qualifiedAsset` field includes `xyz:` prefix for XYZ equities. Use it directly.\n"
+                f"ROTATION: Only rotate coins in `strategySlots[strategy].rotationEligibleCoins`. "
+                f"If `hasRotationCandidate` is false -> skip rotation. Add `--close-asset {{coin}}` to rotate.\n"
+                f"For each successful entry, send each message in `notifications` from open-position.py output to {tg}.\n"
+                f"If no actionable signals -> HEARTBEAT_OK."
+            )
+        }
+    },
+    "dsl_combined": {
+        "name": "FOX DSL Combined (3min)",
+        "schedule": {"kind": "every", "everyMs": 180000},
+        "sessionTarget": "isolated",
+        "payload": {
+            "kind": "agentTurn",
+            "model": mid_model,
+            "message": (
+                f"FOX DSL: Run `PYTHONUNBUFFERED=1 python3 {SCRIPTS_DIR}/fox-dsl-wrapper.py`, parse JSON.\n"
+                f"For each item in `action_required`: close that position (coin + strategyKey wallet), alert {tg}.\n"
+                f"Send each message in `notifications` to {tg}.\n"
+                f"If both empty -> HEARTBEAT_OK."
+            )
         }
     },
     "sm_flip": {
-        "name": "FOX SM Flip Detector v6 (5min)",
+        "name": "FOX SM Flip Detector (5min)",
         "schedule": {"kind": "every", "everyMs": 300000},
         "sessionTarget": "isolated",
         "payload": {
             "kind": "agentTurn",
             "model": budget_model,
-            "message": f"FOX SM Check: Run `python3 {SCRIPTS_DIR}/fox-sm-flip-check.py`, parse JSON.\n\nFor each alert in `alerts`: if `alertLevel == \"FLIP_NOW\"` -> close that position on the wallet for `strategyKey` (set `active: false` in `{WORKSPACE}/state/{{strategyKey}}/dsl-{{ASSET}}.json`), alert Telegram ({tg}) with asset, direction, conviction, strategyKey.\nIgnore alerts with `alertLevel` of WATCH or FLIP_WARNING (no action needed).\nIf `hasFlipSignal == false` or no FLIP_NOW alerts -> HEARTBEAT_OK."
+            "message": (
+                f"FOX SM: Run `python3 {SCRIPTS_DIR}/fox-sm-flip-check.py`, parse JSON.\n"
+                f"For each item in `action_required`: close that position (coin + strategyKey wallet), alert {tg}.\n"
+                f"Send each message in `notifications` to {tg}.\n"
+                f"If both empty -> HEARTBEAT_OK."
+            )
         }
     },
     "watchdog": {
-        "name": "FOX Watchdog v6 (5min)",
+        "name": "FOX Watchdog (5min)",
         "schedule": {"kind": "every", "everyMs": 300000},
         "sessionTarget": "isolated",
         "payload": {
             "kind": "agentTurn",
             "model": budget_model,
-            "message": f"FOX Watchdog: Run `PYTHONUNBUFFERED=1 timeout 45 python3 {SCRIPTS_DIR}/fox-monitor.py`, parse JSON.\n\nCheck each strategy: crypto_liq_buffer_pct<50% -> WARNING (alert Telegram only); <30% -> CRITICAL (close the position with lowest ROE% in that strategy, then alert Telegram ({tg})). XYZ liq_distance_pct<15% -> alert Telegram.\nIf no alerts -> HEARTBEAT_OK."
+            "message": (
+                f"FOX Watchdog: Run `PYTHONUNBUFFERED=1 timeout 45 python3 {SCRIPTS_DIR}/fox-monitor.py`, parse JSON.\n"
+                f"For each item in `action_required`: close the specified position (coin + strategyKey), alert {tg}.\n"
+                f"Send each message in `notifications` to {tg}.\n"
+                f"If both empty -> HEARTBEAT_OK."
+            )
         }
     },
     "portfolio": {
-        "name": "FOX Portfolio v6 (15min)",
+        "name": "FOX Portfolio (15min)",
         "schedule": {"kind": "every", "everyMs": 900000},
         "sessionTarget": "isolated",
         "payload": {
             "kind": "agentTurn",
             "model": mid_model,
-            "message": f"FOX Portfolio: Read {WORKSPACE}/fox-strategies.json, get clearinghouse state per wallet, send Telegram ({tg}).\nFormat: code-block table with per-strategy name/account value/positions (asset, direction, ROE, PnL, DSL tier)/slot usage + global totals."
+            "message": (
+                f"FOX Portfolio: Read {WORKSPACE}/fox-strategies.json. For each enabled strategy, "
+                f"call `strategy_get_clearinghouse_state` with the strategy wallet.\n"
+                f"Format a code-block table with: per-strategy name, account value, positions "
+                f"(asset, direction, ROE%, PnL, DSL tier), slot usage, and global totals.\n"
+                f"Send to {tg}."
+            )
         }
     },
     "health_check": {
-        "name": "FOX Health Check v6 (10min)",
+        "name": "FOX Health Check (10min)",
         "schedule": {"kind": "every", "everyMs": 600000},
         "sessionTarget": "isolated",
         "payload": {
             "kind": "agentTurn",
             "model": mid_model,
-            "message": f"FOX Health Check: Run `PYTHONUNBUFFERED=1 python3 {SCRIPTS_DIR}/fox-health-check.py`, parse JSON.\n\nThe script auto-fixes most issues (check the `action` field per issue):\n- auto_created -> DSL was missing, script created it. Alert Telegram ({tg}).\n- auto_deactivated -> Orphan DSL deactivated (position closed externally). No alert needed.\n- auto_replaced -> Direction mismatch fixed with fresh DSL. Alert Telegram ({tg}).\n- updated_state -> Size/entry/leverage reconciled to match on-chain. No alert needed.\n- skipped_fetch_error -> Orphan check skipped due to API error. No alert needed (transient).\n- alert_only -> Script could not auto-fix. Handle manually:\n  - NO_WALLET -> CRITICAL, needs manual config. Alert Telegram ({tg}).\n  - DSL_INACTIVE -> CRITICAL, set `active: true` in the DSL state file. Alert Telegram ({tg}).\nIf no issues -> HEARTBEAT_OK."
+            "message": (
+                f"FOX Health: Run `PYTHONUNBUFFERED=1 python3 {SCRIPTS_DIR}/fox-health-check.py`, parse JSON.\n"
+                f"Send each message in `notifications` to {tg}.\n"
+                f"If `notifications` is empty -> HEARTBEAT_OK."
+            )
         }
     },
     "opportunity_scanner": {
-        "name": "FOX Scanner v6 (15min)",
+        "name": "FOX Opportunity Scanner (15min)",
         "schedule": {"kind": "every", "everyMs": 900000},
-        "sessionTarget": "main",
-        "wakeMode": "now",
+        "sessionTarget": "isolated",
         "payload": {
-            "kind": "systemEvent",
-            "text": f"FOX scanner: Run `PYTHONUNBUFFERED=1 timeout 180 python3 {SCRIPTS_DIR}/fox-opportunity-scan-v6.py 2>/dev/null`. Parse JSON.\n\nMulti-strategy signal routing: For each scored opportunity (threshold 175+):\n1. Which strategies have empty slots?\n2. Does any strategy already hold this asset? (skip within strategy, allow cross-strategy)\n3. Which strategy's risk profile matches the signal?\n4. Route to best-fit -> open position on THAT wallet -> create DSL state in THAT strategy's state dir.\nAlert user ({tg}). Otherwise HEARTBEAT_OK."
+            "kind": "agentTurn",
+            "model": mid_model,
+            "message": (
+                f"FOX Scanner: Run `PYTHONUNBUFFERED=1 timeout 180 python3 {SCRIPTS_DIR}/fox-opportunity-scan-v6.py`, parse JSON.\n"
+                f"SLOT GUARD: If `anySlotsAvailable` is false -> HEARTBEAT_OK.\n"
+                f"For each opportunity in `topPicks`: enter via "
+                f"`python3 {SCRIPTS_DIR}/fox-open-position.py --strategy {{strategyKey}} --asset {{qualifiedAsset}} --signal-index {{signalIndex}}`.\n"
+                f"Send each message in `notifications` to {tg}. Else HEARTBEAT_OK."
+            )
+        }
+    },
+    "market_regime": {
+        "name": "FOX Market Regime (4h)",
+        "schedule": {"kind": "every", "everyMs": 14400000},
+        "sessionTarget": "isolated",
+        "payload": {
+            "kind": "agentTurn",
+            "model": mid_model,
+            "message": (
+                f"FOX Regime: Run `PYTHONUNBUFFERED=1 python3 {SCRIPTS_DIR}/fox-market-regime.py`, parse JSON.\n"
+                f"Save the full output to `{WORKSPACE}/market-regime-last.json`.\n"
+                f"HEARTBEAT_OK after saving."
+            )
         }
     }
 }
 
 print("\n" + "=" * 60)
-print("  FOX v7 Configuration Summary")
+print("  FOX v0.2 Configuration Summary")
 print("=" * 60)
 print(f"""
   Strategy Key:     {strategy_key}
@@ -330,12 +452,16 @@ print(f"""
   Strategy ID:      {strategy_id}
   Budget:           ${budget:,.2f}
   Slots:            {slots}
+  Trading Risk:     {trading_risk}
   Margin/Slot:      ${margin_per_slot:,.2f}
   Default Leverage:  {default_leverage}x
   Notional/Slot:    ${notional_per_slot:,.2f}
   Daily Loss Limit: ${daily_loss_limit:,.2f}
   Auto-Delever:     Below ${auto_delever_threshold:,.2f}
-  DSL Preset:       {dsl_preset}
+  DSL Preset:       {dsl_preset} (9-tier v5)
+  Provider:         {args.provider}
+  Mid Model:        {mid_model}
+  Budget Model:     {budget_model}
   Telegram:         {tg}
 """)
 
@@ -345,31 +471,28 @@ if strategies_count > 1:
     print(f"  All strategies: {list(registry['strategies'].keys())}")
 
 print("\n" + "=" * 60)
-print("  Next Steps: Create 7 cron jobs")
+print("  Next Steps: Create 8 cron jobs")
 print("=" * 60)
 print(f"""
 Use OpenClaw cron to create each job. See references/cron-templates.md
-for the exact payload text for each of the 7 jobs.
+for the exact payload text for each of the 8 jobs.
 
 With multi-strategy, crons iterate all enabled strategies internally.
 You only need ONE set of crons regardless of strategy count.
 
-  Session & Model Tier Recommendations:
-  ┌──────────────────────┬──────────┬──────────┬─────────────────────────────────────────────┐
-  │ Cron                 │ Session  │ Payload  │ Model                                       │
-  ├──────────────────────┼──────────┼──────────┼─────────────────────────────────────────────┤
-  │ Emerging Movers      │ main     │ sysEvent │ Primary (your model)                        │
-  │ Opportunity Scanner  │ main     │ sysEvent │ Primary (your model)                        │
-  │ DSL Combined         │ isolated │ agentTrn │ Mid: {mid_model}  │
-  │ Portfolio Update     │ isolated │ agentTrn │ Mid: {mid_model}  │
-  │ Health Check         │ isolated │ agentTrn │ Mid: {mid_model}  │
-  │ SM Flip Detector     │ isolated │ agentTrn │ Budget: {budget_model}       │
-  │ Watchdog             │ isolated │ agentTrn │ Budget: {budget_model}       │
-  └──────────────────────┴──────────┴──────────┴─────────────────────────────────────────────┘
-
-  Main crons share your primary session context (systemEvent).
-  Isolated crons run in their own session (agentTurn) — no context pollution.
-  All 7 crons can also run on a single model if you prefer simplicity.
+  ALL crons are isolated/agentTurn (no main session crons):
+  +------------------------+----------+---------+-------------------------------------------+
+  | Cron                   | Interval | Tier    | Model                                     |
+  +------------------------+----------+---------+-------------------------------------------+
+  | Emerging Movers        | 3min     | Mid     | {mid_model:<41} |
+  | DSL Combined           | 3min     | Mid     | {mid_model:<41} |
+  | Opportunity Scanner    | 15min    | Mid     | {mid_model:<41} |
+  | Portfolio Update       | 15min    | Mid     | {mid_model:<41} |
+  | Health Check           | 10min    | Mid     | {mid_model:<41} |
+  | Market Regime          | 4h       | Mid     | {mid_model:<41} |
+  | SM Flip Detector       | 5min     | Budget  | {budget_model:<41} |
+  | Watchdog               | 5min     | Budget  | {budget_model:<41} |
+  +------------------------+----------+---------+-------------------------------------------+
 """)
 
 # Output full result as JSON for programmatic use
@@ -384,6 +507,7 @@ result = {
     },
     "cronTemplates": cron_templates,
     "maxLeverageFile": MAX_LEV_FILE,
+    "tradeCounterFile": TRADE_COUNTER_FILE,
     "registryFile": REGISTRY_FILE,
     "stateDir": state_dir,
 }
