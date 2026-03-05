@@ -2,7 +2,7 @@
 
 **5 scanners. 1 prescreener. 1 goal. Configurable aggression. Mechanical exits. Self-optimizing.**
 
-TIGER targets a configurable profit over a deadline using 5 signal patterns, DSL v4 trailing stops, and automatic aggression adjustment. The prescreener scores all ~230 assets in one API call and feeds the top 30 to scanners. ROAR watches TIGER trade and continuously tunes execution parameters. Give it a budget, a target, and a timeframe — it calculates how hard to hunt.
+TIGER targets a configurable profit over a deadline using 5 signal patterns, DSL v5 trailing stops, and automatic aggression adjustment. The prescreener scores all ~230 assets in one API call and feeds the top 30 to scanners. ROAR watches TIGER trade and continuously tunes execution parameters. Give it a budget, a target, and a timeframe — it calculates how hard to hunt.
 
 ## Quick Start
 
@@ -121,7 +121,7 @@ tiger-strategy/
 
 **Critical Bug Fixes**
 
-- **dsl-v4.py**: Fixed units mismatch — `triggerPct` (decimal 0.05) was compared directly to `upnl_pct` (whole 2.1%), causing instant tier escalation and premature closes. Now multiplies by 100. Fixed `lockPct` floor calc double-dividing by 100.
+- **dsl-v5.py**: Fixed units mismatch — `triggerPct` (decimal 0.05) was compared directly to `upnl_pct` (whole 2.1%), causing instant tier escalation and premature closes. Now multiplies by 100. Fixed `lockPct` floor calc double-dividing by 100.
 - **tiger_config.py**: Fixed zombie process leak — `subprocess.run(timeout)` → `Popen + communicate + proc.kill()`. Added `load_trade_log()` and `get_trade_log_path()` for ROAR.
 
 **Scanner Fixes**
@@ -141,7 +141,7 @@ tiger-strategy/
 
 - **AliasDict**: snake_case config/state key access now works transparently alongside camelCase (fixes all KeyError crashes)
 - **Function signatures**: `load_state()`, `save_state(state)`, `load_oi_history()`, `append_oi_snapshot()` now work without explicit config arg
-- **dsl-v4.py**: migrated to shared infra (atomic_write, mcporter_call, get_prices) — no more raw curl or non-atomic writes
+- **dsl-v5.py**: migrated to shared infra (atomic_write, mcporter_call, get_prices) — no more raw curl or non-atomic writes
 - **Confluence weights**: compression (1.25→1.00) and reversion (1.15→1.00) scanner weights now sum correctly
 - **min_leverage**: unified default to 5 across tiger_config.py, tiger-setup.py, and oi-tracker.py
 - **Bare except** fixed to `except Exception` in tiger-exit.py
@@ -172,7 +172,7 @@ tiger-strategy/
 
 ### v1.0
 
-- Initial release with 5 scanners, goal engine, DSL v4
+- Initial release with 5 scanners, goal engine, DSL v5
 
 ## License
 

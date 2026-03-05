@@ -41,7 +41,7 @@ Every 5 minutes. Scores all ~230 assets in one API call, writes top 30 candidate
 ```json
 {
   "name": "TIGER — Prescreener",
-  "schedule": { "kind": "every", "everyMs": 300000 },
+  "schedule": { "kind": "every", "everyMs": 1800000 },
   "sessionTarget": "isolated",
   "wakeMode": "next-heartbeat",
   "payload": {
@@ -64,7 +64,7 @@ Every 5 minutes. Isolated, no delivery (agent acts on signals internally).
 ```json
 {
   "name": "TIGER — Compression Scanner",
-  "schedule": { "kind": "every", "everyMs": 300000 },
+  "schedule": { "kind": "every", "everyMs": 1800000 },
   "sessionTarget": "isolated",
   "wakeMode": "next-heartbeat",
   "payload": {
@@ -110,7 +110,7 @@ Every 5 minutes (offset 1 min from compression).
 ```json
 {
   "name": "TIGER — Momentum Scanner",
-  "schedule": { "kind": "every", "everyMs": 300000 },
+  "schedule": { "kind": "every", "everyMs": 1800000 },
   "sessionTarget": "isolated",
   "wakeMode": "next-heartbeat",
   "payload": {
@@ -133,7 +133,7 @@ Every 5 minutes (offset 2 min from compression).
 ```json
 {
   "name": "TIGER — Reversion Scanner",
-  "schedule": { "kind": "every", "everyMs": 300000 },
+  "schedule": { "kind": "every", "everyMs": 1800000 },
   "sessionTarget": "isolated",
   "wakeMode": "next-heartbeat",
   "payload": {
@@ -179,7 +179,7 @@ Every 5 minutes (offset 3 min). Data collection only — never notifies.
 ```json
 {
   "name": "TIGER — OI Tracker",
-  "schedule": { "kind": "every", "everyMs": 300000 },
+  "schedule": { "kind": "every", "everyMs": 1800000 },
   "sessionTarget": "isolated",
   "wakeMode": "next-heartbeat",
   "payload": {
@@ -228,7 +228,7 @@ Every 5 minutes (offset 4 min). Isolated with announce — only delivers on clos
 ```json
 {
   "name": "TIGER — Risk Guardian",
-  "schedule": { "kind": "every", "everyMs": 300000 },
+  "schedule": { "kind": "every", "everyMs": 1800000 },
   "sessionTarget": "isolated",
   "wakeMode": "next-heartbeat",
   "payload": {
@@ -254,7 +254,7 @@ Every 5 minutes (runs with risk guardian). Isolated with announce.
 ```json
 {
   "name": "TIGER — Exit Checker",
-  "schedule": { "kind": "every", "everyMs": 300000 },
+  "schedule": { "kind": "every", "everyMs": 1800000 },
   "sessionTarget": "isolated",
   "wakeMode": "next-heartbeat",
   "payload": {
@@ -275,17 +275,17 @@ Every 5 minutes (runs with risk guardian). Isolated with announce.
 
 ## Cron 10: DSL Combined — Tier 1 (Main Session)
 
-Every 30 seconds. Runs in **main session** (needs position state context). Uses `systemEvent`.
+Every 3 minutes. Runs in **main session** (needs position state context). Uses `systemEvent`.
 
 ```json
 {
   "name": "TIGER — DSL Trailing Stops",
-  "schedule": { "kind": "every", "everyMs": 30000 },
+  "schedule": { "kind": "every", "everyMs": 180000 },
   "sessionTarget": "main",
   "wakeMode": "now",
   "payload": {
     "kind": "systemEvent",
-    "text": "TIGER DSL: First check TIGER state file for activePositions. If activePositions is empty (no open positions), output HEARTBEAT_OK immediately and STOP — do NOT run dsl-v4.py. Do NOT send any Telegram messages.\nOnly if positions exist: for each active position's DSL state file, run `python3 {SCRIPTS}/dsl-v4.py` with DSL_STATE_FILE pointed at that file, parse JSON.\nDSL is self-contained — auto-closes via close_position on breach.\nOnly send Telegram message to {TELEGRAM_CHAT_ID} if: position closed by DSL breach or tier upgrade occurred.\nRoutine trailing (no close, no tier change): output HEARTBEAT_OK. Do NOT send Telegram."
+    "text": "TIGER DSL: Run `DSL_STATE_DIR=$TIGER_WORKSPACE/state DSL_STRATEGY_ID=<from tiger-config> python3 dsl-dynamic-stop-loss/scripts/dsl-v5.py`. DSL v5 checks clearinghouse for active positions internally; if none, outputs no_positions. Parse JSON.\nDSL is self-contained — auto-closes via close_position on breach.\nOnly send Telegram message to {TELEGRAM_CHAT_ID} if: position closed by DSL breach or tier upgrade occurred.\nRoutine trailing (no close, no tier change): output HEARTBEAT_OK. Do NOT send Telegram."
   }
 }
 ```
@@ -330,7 +330,7 @@ Scanners are offset to avoid simultaneous mcporter calls:
 | :03 | OI Tracker |
 | :04 | Risk Guardian + Exit Checker |
 
-Correlation (3min) and Funding (30min) run on their own cadence. DSL runs every 30s in main session.
+Correlation (3min) and Funding (30min) run on their own cadence. DSL runs every 3min in main session.
 
 ---
 
@@ -362,5 +362,5 @@ DSL stays in main session because it's the only cron that needs awareness of the
 | 7 | tiger-goal | 3600000 (1h) | isolated | announce | Tier 2 | Aggression |
 | 8 | tiger-risk | 300000 (5m) | isolated | announce | Tier 2 | Risk limits |
 | 9 | tiger-exit | 300000 (5m) | isolated | announce | Tier 2 | Pattern exits |
-| 10 | tiger-dsl | 30000 (30s) | **main** | — | Tier 1 | Trailing stops |
+| 10 | tiger-dsl | 180000 (3m) | **main** | — | Tier 1 | Trailing stops |
 | 11 | tiger-roar | 28800000 (8h) | isolated | announce | Tier 2 | Meta-optimizer |

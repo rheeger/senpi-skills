@@ -14,10 +14,17 @@ Usage:
     from senpi_lib import mcporter_call, atomic_write, ...
 """
 
-import json, os, sys, glob, subprocess, time, tempfile, shlex, fcntl
+import fcntl
+import glob
+import json
+import os
+import shlex
+import subprocess
+import sys
+import tempfile
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-
 
 # ─── MCP / External Calls ────────────────────────────────────────────────────
 

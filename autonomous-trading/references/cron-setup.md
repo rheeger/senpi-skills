@@ -77,7 +77,7 @@ def check_exposure(new_direction, new_notional, active_trades, budget, max_pct):
 5. Describe the trade plan to the user (unless `autonomousExecution` is true)
 6. Execute via `create_position` with `orderType: "MARKET"` (**NEVER use `dryRun: true`**)
 7. For XYZ assets: include `leverageType: "ISOLATED"`
-8. Create DSL v4 state file for the new position
+8. Create DSL v5 state file for the new position
 9. Enable DSL cron
 10. Log trade with full scanner snapshot to `auto-strategy.json`
 11. Send Telegram confirmation
@@ -173,7 +173,7 @@ Asset  Dir/Lev    Entry      Now        uPnL       Margin Buffer
 ETH    SHORT 7x   $1,955.20  $1,949.65  +$20.41    89.7%
 SOL    LONG 7x    $80.99     $81.70     +$49.35    89.7%
 
-2/3 slots • DSL v4: no breaches • BTC: down (macro: -20 LONG)
+2/3 slots • DSL v5: no breaches • BTC: down (macro: -20 LONG)
 Net exposure: 65% SHORT • Hourly trends: ETH↓ SOL↑
 Max lev: ETH=25x SOL=20x (using 7x each)
 ```

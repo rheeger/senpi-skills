@@ -51,7 +51,7 @@ Winners move FAST. XRP Tier 3 in 19 min, XMR Tier 2 in 37 min, SNDK +19% ROE in 
 
 1. **Senpi `create_position` with `dryRun:true` ACTUALLY EXECUTES** — do NOT use dryRun.
 
-2. **DSL transient API failures**: Clearinghouse queries can fail transiently. DSL v4 retries (deactivates at 10 consecutive failures). Don't panic on 1 failure — use `execution_get_open_position_details` to verify before manual intervention.
+2. **DSL transient API failures**: Clearinghouse queries can fail transiently. DSL v5 retries (deactivates at 10 consecutive failures). Don't panic on 1 failure — use `execution_get_open_position_details` to verify before manual intervention.
 
 3. **Health check can't see XYZ positions**: `job-health-check.py` doesn't query `dex=xyz`, causing false ORPHAN_DSL warnings for XYZ assets. Known issue.
 

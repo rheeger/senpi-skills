@@ -5,13 +5,13 @@ All scripts import this. Reads tiger-state.json and tiger-config.json.
 
 import json
 import os
-import sys
-import time
-import subprocess
 import shlex
+import subprocess
+import sys
 import tempfile
-from pathlib import Path
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 # ─── Paths ───────────────────────────────────────────────────
 

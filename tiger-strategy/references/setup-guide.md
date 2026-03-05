@@ -60,7 +60,7 @@ Adjust `budget`, `target`, `deadline_days`, and wallet fields for your setup.
 
 #### DSL State File Format
 
-When creating DSL state files for new positions, the file **MUST** include `"active": true` at the top level. Without this field, `dsl-v4.py` returns `{"status": "inactive"}` and will not manage the position (line 22 check).
+When creating DSL state files for new positions, the file **MUST** include `"active": true` at the top level. Without this field, `dsl-v5.py` skips `{"status": "inactive"}` and will not manage the position (line 22 check).
 
 Minimal DSL state file:
 ```json
@@ -93,7 +93,7 @@ Minimal DSL state file:
 
 ⚠️ **Gotcha**: Forgetting `"active": true` is the #1 setup mistake. DSL silently does nothing without it.
 
-Invoke DSL with: `DSL_STATE_FILE=/path/to/state.json python3 scripts/dsl-v4.py COIN`
+Invoke DSL with: `DSL_STATE_DIR=/path/to/state DSL_STRATEGY_ID=<uuid> python3 dsl-dynamic-stop-loss/scripts/dsl-v5.py`
 
 #### Bootstrap with Goal Engine
 

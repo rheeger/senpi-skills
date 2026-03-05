@@ -115,7 +115,7 @@ Fully autonomous trading — the WOLF hunts for its human. All 7 Python scripts 
 
 **Proven:** +$1,500 realized across 25+ trades, 65% win rate on $6.5k budget.
 
-**Self-contained:** Includes DSL v4, Emerging Movers, Opportunity Scanner, SM flip detector, watchdog, health check, and setup wizard. No companion skill installs needed.
+**Self-contained:** Includes DSL v5, Emerging Movers, Opportunity Scanner, SM flip detector, watchdog, health check, and setup wizard. No companion skill installs needed.
 
 📥 **[Download SKILL.md](wolf-strategy/SKILL.md)**
 

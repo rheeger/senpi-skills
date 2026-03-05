@@ -6,15 +6,14 @@ Recalculates daily targets, aggression mode, position sizing, and resizes positi
 MANDATE: Run TIGER goal engine. Recalculate targets and aggression. Report changes.
 """
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(__file__))
 
-from tiger_config import (
-    load_config, load_state, save_state, get_clearinghouse,
-    days_remaining, day_number, now_utc, output
-)
-from tiger_lib import required_daily_return, aggression_mode, kelly_fraction
+from tiger_config import (day_number, days_remaining, get_clearinghouse,
+                          load_config, load_state, now_utc, output, save_state)
+from tiger_lib import aggression_mode, kelly_fraction, required_daily_return
 
 
 def recalculate_goal(config, state):

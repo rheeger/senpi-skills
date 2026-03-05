@@ -1,6 +1,6 @@
 # State File Schema
 
-Complete JSON schema for DSL v4/v5 state files. One state file per position. v5 adds path conventions; the JSON schema is unchanged.
+Complete JSON schema for DSL v5 state files. One state file per position. v5 adds path conventions; the JSON schema is unchanged.
 
 ## Full Example
 

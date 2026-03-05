@@ -12,7 +12,7 @@ v2.0 changes (WOLF v6):
 
 v1.0 (WOLF v5):
   - Single cron manages ALL active WOLF positions
-  - Batch pricing, per-position DSL v4.1 logic
+  - Batch pricing, per-position DSL trailing stop logic
 
 Usage:
   PYTHONUNBUFFERED=1 python3 dsl-combined.py
@@ -59,7 +59,7 @@ def close_position(wallet, coin, reason):
 
 
 def process_position(state_file, state, price, strategy_cfg):
-    """Run DSL v4.1 logic on a single position. Returns result dict."""
+    """Run DSL trailing stop logic on a single position. Returns result dict."""
     direction = state.get("direction", "LONG").upper()
     is_long = direction == "LONG"
     is_xyz = state.get("dex") == "xyz" or state.get("asset", "").startswith("xyz:")

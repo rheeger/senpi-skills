@@ -3,7 +3,7 @@ name: tiger-strategy
 description: >-
   TIGER v2 — Multi-scanner trading system for Hyperliquid perps via Senpi MCP.
   5 signal patterns (BB compression breakout, BTC correlation lag, momentum breakout,
-  mean reversion, funding rate arb), DSL v4 trailing stops, goal-based aggression engine,
+  mean reversion, funding rate arb), DSL v5 trailing stops, goal-based aggression engine,
   and risk guardrails. Configurable profit target over deadline. 12-cron architecture (10 TIGER + prescreener + ROAR meta-optimizer).
   Pure Python analysis. Requires Senpi MCP, python3, mcporter CLI, and OpenClaw cron system.
 license: Apache-2.0
@@ -37,7 +37,7 @@ metadata:
 │           Python Scripts                  │
 │  tiger_lib.py  tiger_config.py           │
 │  5 scanners / goal-engine / risk /       │
-│  exit / oi-tracker / dsl-v4              │
+│  exit / oi-tracker / dsl-v5              │
 ├──────────────────────────────────────────┤
 │           Senpi MCP (via mcporter)        │
 │  market_list_instruments                  │
@@ -177,11 +177,11 @@ Extreme funding → go opposite the crowd, collect income.
 
 ---
 
-## DSL v4 — Trailing Stop System
+## DSL v5 — Trailing Stop System
 
-Per-position DSL state file. Combined runner (`dsl-v4.py`) checks all active positions every 30s.
+Per-strategy DSL runner. `dsl-v5.py` is strategy-scoped (via `DSL_STATE_DIR` + `DSL_STRATEGY_ID`), checks clearinghouse for active positions, and auto-cleans orphaned state files.
 
-**IMPORTANT**: The DSL cron must first check `activePositions` in TIGER state. If no positions are open, output `HEARTBEAT_OK` immediately and do NOT invoke `dsl-v4.py`. This prevents unnecessary session spam when TIGER is idle.
+**IMPORTANT**: DSL v5 handles position existence checking internally via MCP clearinghouse — no need for the cron to pre-check `activePositions`. If no positions exist, dsl-v5 outputs `no_positions` and exits.
 
 **Phase 1** (pre-Tier 1): Absolute floor. 3 consecutive breaches → close. Max duration: 90 minutes.
 
@@ -259,7 +259,7 @@ All 4 scanners (compression, correlation, momentum, reversion) wrap their per-as
 | `account_get_portfolio` | goal-engine | Portfolio balance |
 | `strategy_get_clearinghouse_state` | goal-engine, risk-guardian | Margin, positions |
 | `create_position` | agent (from scanner output) | Open positions |
-| `close_position` | dsl-v4, risk-guardian, tiger-exit | Close positions |
+| `close_position` | dsl-v5, risk-guardian, tiger-exit | Close positions |
 | `edit_position` | risk-guardian | Resize positions |
 
 ---
@@ -306,7 +306,7 @@ Only speak (chat or Telegram) when something actionable happens: trade opened, t
 | 7 | Goal Engine | 1 hour | `goal-engine.py` | Tier 2 |
 | 8 | Risk Guardian | 5 min | `risk-guardian.py` | Tier 2 |
 | 9 | Exit Checker | 5 min | `tiger-exit.py` | Tier 2 |
-| 10 | DSL Combined | 30 sec | `dsl-v4.py` | Tier 1 |
+| 10 | DSL Trailing Stops | 3 min | `dsl-v5.py` | Tier 1 |
 | 11 | ROAR Analyst | 8 hour | `roar-analyst.py` | Tier 2 |
 
 **Tier 1** (fast/cheap): threshold checks, data collection, DSL math. Runs `isolated` with `delivery.mode: "none"` and explicit model (`claude-sonnet-4-5`).
@@ -397,8 +397,8 @@ Scripts: `roar-analyst.py` (engine), `roar_config.py` (bounds, state, revert log
 
 ### Operational
 
-- **DSL state file `active` field**: MUST include `active: true` or `dsl-v4.py` returns `{"status": "inactive"}` (line 22 check). This is the #1 gotcha when setting up new positions.
-- **DSL invocation syntax**: `DSL_STATE_FILE=/path/to/file.json python3 scripts/dsl-v4.py COIN`
+- **DSL state file `active` field**: MUST include `active: true` or dsl-v5 skips the position. `{"status": "inactive"}` (line 22 check). This is the #1 gotcha when setting up new positions.
+- **DSL invocation syntax**: `DSL_STATE_DIR=/path/to/state DSL_STRATEGY_ID=<uuid> python3 dsl-dynamic-stop-loss/scripts/dsl-v5.py`
 - **API latency**: `market_get_asset_data` ~4s/call, `market_list_instruments` ~6s. Max 8 assets per 55s scan window.
 - **Correlation scanner timeouts**: Max 4 alts per scan (down from 6) to stay within 55s. Cron interval tightened to 3min for time-sensitive lag trades.
 - **Compression scanner signals**: Requires `breakout: true` AND a `direction` to be actionable — a high compression score alone is not enough.

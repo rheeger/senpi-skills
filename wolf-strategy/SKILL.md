@@ -4,7 +4,7 @@ description: >-
   WOLF v6.1 — Fully autonomous multi-strategy trading for Hyperliquid perps via Senpi MCP.
   Manages multiple strategies simultaneously, each with independent wallets, budgets, slots,
   and DSL configs. 5-cron architecture with Emerging Movers scanner (3min, FIRST_JUMP + IMMEDIATE_MOVER),
-  DSL v4 trailing stops (combined runner every 3min, 4-tier at 5/10/15/20% ROE),
+  DSL v5 trailing stops (combined runner every 3min, 4-tier at 5/10/15/20% ROE),
   SM flip detector (5min), watchdog (5min),
   and health checks (10min). Same asset can be traded in different strategies simultaneously.
   Enter early on first jumps, not at confirmed peaks. Dynamic risk-based leverage per strategy.
@@ -237,7 +237,7 @@ Positions that never gain momentum get cut automatically.
 
 ## Exit Rules
 
-### 1. DSL v4 Mechanical Exit (Trailing Stops)
+### 1. DSL v5 Mechanical Exit (Trailing Stops)
 
 All trailing stops handled automatically by `dsl-combined.py` across all strategies.
 
@@ -260,7 +260,7 @@ When ANY job closes a position -> immediately:
 
 ---
 
-## DSL v4 — Trailing Stop System
+## DSL v5 — Trailing Stop System
 
 ### Phase 1 (Pre-Tier 1): Absolute floor
 - LONG floor = entry x (1 - 10%/leverage)
@@ -429,7 +429,7 @@ See `references/learnings.md` for known bugs, gotchas, and trading discipline ru
 | `scripts/wolf-setup.py` | Setup wizard — adds strategy to registry from budget |
 | `scripts/wolf_config.py` | Shared config loader — all scripts import this |
 | `scripts/emerging-movers.py` | Emerging Movers v4 scanner (FIRST_JUMP, IMMEDIATE, CONTRIB_EXPLOSION) |
-| `scripts/dsl-combined.py` | DSL v4 combined trailing stop engine (all positions, all strategies) |
+| `scripts/dsl-combined.py` | DSL v5 combined trailing stop engine (all positions, all strategies) |
 | `scripts/sm-flip-check.py` | SM conviction flip detector (multi-strategy) |
 | `scripts/wolf-monitor.py` | Watchdog — per-strategy margin buffer + position health |
 | `scripts/job-health-check.py` | Per-strategy orphan DSL / state validation |

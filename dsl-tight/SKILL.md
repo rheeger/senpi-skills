@@ -5,7 +5,7 @@ description: >-
   defaults than DSL v5. 4 tiers with per-tier breach counts that tighten as
   profit grows (3→2→2→1), auto-calculated price floors from entry and leverage,
   stagnation take-profit that closes if ROE ≥8% but high-water stalls for 1 hour.
-  Same ROE-based engine as DSL v4 — different defaults, fewer knobs.
+  Same ROE-based engine as DSL v5 — different defaults, fewer knobs.
   Use when you want aggressive profit protection with minimal configuration.
 license: Apache-2.0
 compatibility: >-

@@ -12,7 +12,7 @@ Fully autonomous multi-strategy trading for Hyperliquid perps. The WOLF hunts fo
 | `scripts/wolf_config.py` | **Shared config loader** — all scripts import this |
 | `scripts/wolf-setup.py` | **Setup wizard** — adds strategy to multi-strategy registry |
 | `scripts/emerging-movers.py` | Emerging Movers v4 — primary entry signal (3min scans, FIRST_JUMP priority) |
-| `scripts/dsl-combined.py` | DSL v4 combined runner — trailing stops for all positions, all strategies |
+| `scripts/dsl-combined.py` | DSL v5 combined runner — trailing stops for all positions, all strategies |
 | `scripts/sm-flip-check.py` | SM conviction flip detector (multi-strategy) |
 | `scripts/wolf-monitor.py` | Watchdog — per-strategy margin buffer + position health |
 | `scripts/open-position.py` | **Atomic position opener** — opens position + creates DSL state in one step |
