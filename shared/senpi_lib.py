@@ -88,11 +88,38 @@ def mcporter_call(tool, retries=3, timeout=30, **kwargs):
                 shell=True, timeout=timeout,
             )
             with open(tmp) as f:
-                d = json.load(f)
+                raw = f.read()
+            if not raw.strip():
+                last_error = f"empty response (attempt {attempt + 1})"
+                if attempt < retries - 1:
+                    time.sleep(3)
+                continue
+            try:
+                d = json.loads(raw)
+            except json.JSONDecodeError:
+                # Gate status lines or other non-JSON may precede the payload;
+                # try to locate the first '{' and parse from there.
+                idx = raw.find("{")
+                if idx > 0:
+                    try:
+                        d = json.loads(raw[idx:])
+                    except json.JSONDecodeError:
+                        d = None
+                else:
+                    d = None
+                if d is None:
+                    preview = raw[:300].replace("\n", "\\n")
+                    last_error = (f"JSON parse failed (attempt {attempt + 1}): "
+                                  f"raw[:{min(len(raw), 300)}]={preview!r}")
+                    if attempt < retries - 1:
+                        time.sleep(3)
+                    continue
             if d.get("success"):
                 return d.get("data", {})
             last_error = d.get("error", d)
-        except (json.JSONDecodeError, subprocess.TimeoutExpired, OSError) as e:
+        except subprocess.TimeoutExpired:
+            last_error = f"timeout after {timeout}s (attempt {attempt + 1})"
+        except OSError as e:
             last_error = str(e)
         finally:
             if tmp and os.path.exists(tmp):
