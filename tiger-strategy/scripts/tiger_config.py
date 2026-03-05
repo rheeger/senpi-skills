@@ -204,7 +204,10 @@ def load_config() -> dict:
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE) as f:
             user_config = json.load(f)
-        config.update(user_config)
+        normalized = {}
+        for k, v in user_config.items():
+            normalized[_to_snake(k)] = v
+        config.update(normalized)
     return _alias_wrap(config)
 
 
