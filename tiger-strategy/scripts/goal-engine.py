@@ -102,7 +102,8 @@ def recalculate_goal(config, state):
 
     if new_aggression == "ABORT":
         halt = True
-        halt_reason = f"Target requires {daily_rate:.1f}%/day — mathematically improbable. Recommend: extend timeline, reduce target, or accept current gains."
+        rate_str = f"{daily_rate:.1f}" if daily_rate is not None else "∞"
+        halt_reason = f"Target requires {rate_str}%/day — mathematically improbable. Recommend: extend timeline, reduce target, or accept current gains."
 
     if drawdown_pct >= config["max_drawdown_pct"]:
         halt = True

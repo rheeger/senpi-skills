@@ -275,8 +275,10 @@ def main():
     all_alerts.extend(pnl_alerts)
 
     # Determine if we need to halt
+    halted = state.get("halted", state.get("safety", {}).get("halted", False))
     critical_alerts = [a for a in all_alerts if a.get("type") in ("DAILY_LOSS", "MAX_DRAWDOWN", "DEADLINE_REACHED")]
     if critical_alerts:
+        halted = True
         state["halted"] = True
         state["halt_reason"] = critical_alerts[0].get("message", "Critical risk limit breached")
 
@@ -299,7 +301,7 @@ def main():
         "alerts": all_alerts,
         "alert_count": len(all_alerts),
         "critical": len(critical_alerts) > 0,
-        "halted": state["halted"],
+        "halted": halted,
         "actions_needed": {
             "close": close_coins,
             "reduce": reduce_coins,

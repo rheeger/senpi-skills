@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import subprocess
+import shlex
 import tempfile
 from pathlib import Path
 from datetime import datetime, timezone
@@ -301,9 +302,34 @@ def log_trade(trade: dict):
 
 # ─── MCP Helpers ─────────────────────────────────────────────
 
+_mcporter_bin_cache = None
+
+def _resolve_mcporter():
+    """Resolve mcporter binary, preferring the gate wrapper for auth injection.
+
+    Priority: MCPORTER_CMD env var > auto-discovered wrapper > bare mcporter.
+    """
+    global _mcporter_bin_cache
+    if _mcporter_bin_cache is not None:
+        return _mcporter_bin_cache
+    explicit = os.environ.get("MCPORTER_CMD")
+    if explicit:
+        _mcporter_bin_cache = explicit
+        return explicit
+    here = os.path.dirname(os.path.abspath(__file__))
+    wrapper = os.path.normpath(os.path.join(
+        here, "..", "..", "..", "runtime", "bin", "mcporter-senpi-wrapper.sh"))
+    if os.path.isfile(wrapper):
+        _mcporter_bin_cache = wrapper
+        return wrapper
+    _mcporter_bin_cache = "mcporter"
+    return "mcporter"
+
+
 def mcporter_call(tool: str, timeout_s: int = 15, **kwargs) -> dict:
     """Call a Senpi MCP tool via mcporter. Returns parsed JSON."""
-    inner_cmd = ["mcporter", "call", f"senpi.{tool}"]
+    mcporter_bin = _resolve_mcporter()
+    inner_cmd = [mcporter_bin, "call", f"senpi.{tool}"]
     for k, v in kwargs.items():
         if isinstance(v, (list, dict)):
             inner_cmd.append(f"{k}={json.dumps(v)}")
@@ -312,8 +338,6 @@ def mcporter_call(tool: str, timeout_s: int = 15, **kwargs) -> dict:
         else:
             inner_cmd.append(f"{k}={v}")
 
-    # Wrap with `timeout` command for reliable kill (subprocess.communicate timeout
-    # can hang if mcporter's node child holds pipes open)
     cmd = ["timeout", "--signal=KILL", str(timeout_s)] + inner_cmd
 
     try:
