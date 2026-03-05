@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-wolf_config.py — Multi-strategy config loader for WOLF v6.1
+wolf_config.py — Multi-strategy config loader for WOLF v6.1.1
 
 Provides a single importable module every script uses to load strategy config,
 resolve state file paths, and handle legacy migration.

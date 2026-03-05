@@ -1,4 +1,4 @@
-# WOLF Strategy v6.1
+# WOLF Strategy v6.1.1
 
 Fully autonomous multi-strategy trading for Hyperliquid perps. The WOLF hunts for its human — scans, enters, exits, and rotates positions without asking permission. Manages multiple strategies simultaneously, each with independent wallets, budgets, slots, and DSL configs.
 
@@ -31,6 +31,13 @@ Fully autonomous multi-strategy trading for Hyperliquid perps. The WOLF hunts fo
 - **Shared config loader** (`wolf_config.py`) — all scripts use same module for config, paths, legacy migration
 - **Backward compatible** — auto-migrates legacy `wolf-strategy.json` and old state files on first run
 
+## What's New in v6.1.1
+
+- **Risk Guardian** — 6th cron (5min, Budget tier) enforcing account-level guard rails: daily loss halt, max entries per day, consecutive loss cooldown
+- **Strategy lock** — concurrency protection (file-based `fcntl` locking) for position operations, preventing race conditions between scanner and guardian
+- **Gate check** — `open-position.py` refuses new entries when strategy gate != OPEN (CLOSED or COOLDOWN)
+- **Entry counter tracking** — per-strategy daily entry counter with automatic day rollover
+
 ## What's New in v6.1
 
 - **Reduced leverage ranges** — aggressive caps at 75% of max leverage (was 100%), moderate at 50% (was 75%), conservative at 25% (was 50%). Prevents over-leveraging on high-max-leverage assets.
@@ -49,6 +56,7 @@ Fully autonomous multi-strategy trading for Hyperliquid perps. The WOLF hunts fo
 
 | Version | Date | Changes |
 |---------|------|---------|
+| v6.1.1 | 2026-03-05 | Risk Guardian (account-level guard rails), strategy lock (concurrency protection), gate check in open-position.py, entry counter tracking |
 | v6.1 | 2026-03-03 | Reduced leverage ranges, risk-based dynamic leverage, rotation cooldown (45min), atomic open-position.py |
 | v6.0 | 2026-02-24 | Multi-strategy support, strategy registry, per-strategy state dirs, signal routing, shared config loader |
 | v5.0 | 2026-02-24 | FIRST_JUMP signal priority, combined DSL runner, 90s scanner interval, Phase 1 auto-cut, 7x min leverage |

@@ -1,7 +1,7 @@
 ---
 name: wolf-strategy
 description: >-
-  WOLF v6.1 — Fully autonomous multi-strategy trading for Hyperliquid perps via Senpi MCP.
+  WOLF v6.1.1 — Fully autonomous multi-strategy trading for Hyperliquid perps via Senpi MCP.
   Manages multiple strategies simultaneously, each with independent wallets, budgets, slots,
   and DSL configs. 6-cron architecture with Emerging Movers scanner (3min, FIRST_JUMP + IMMEDIATE_MOVER),
   DSL v4 trailing stops (combined runner every 3min, 4-tier at 5/10/15/20% ROE),
@@ -12,13 +12,15 @@ description: >-
 
 ---
 
-# WOLF v6.1 — Autonomous Multi-Strategy Trading
+# WOLF v6.1.1 — Autonomous Multi-Strategy Trading
 
 The WOLF hunts for its human. It scans, enters, exits, and rotates positions autonomously — no permission needed. When criteria are met, it acts. Speed is edge.
 
 **Proven:** +$1,500 realized, 25+ trades, 65% win rate, single session on $6.5k budget.
 
 **v6: Multi-strategy support.** Each strategy has independent wallet, budget, slots, and DSL config. Same asset can be held in different strategies simultaneously (e.g., Strategy A LONG HYPE + Strategy B SHORT HYPE).
+
+**v6.1.1: Risk Guardian & strategy lock.** 6th cron (5min, Budget tier) enforcing account-level guard rails — daily loss halt, max entries per day, consecutive loss cooldown. Strategy lock for concurrency protection. Gate check in `open-position.py` refuses new entries when gate != OPEN.
 
 **v6.1: Reduced leverage ranges.** All risk tiers lowered — aggressive now caps at 75% of max leverage (was 100%), moderate at 50% (was 75%), conservative at 25% (was 50%). Prevents over-leveraging on high-max-leverage assets.
 
