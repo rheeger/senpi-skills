@@ -639,14 +639,19 @@ def check_gate(strategy_key):
                     return ("COOLDOWN", counter.get("gateReason"))
             except (ValueError, TypeError):
                 pass
-        # Cooldown expired — clear and append "R" to break streak
-        counter["gate"] = "OPEN"
-        counter["gateReason"] = None
-        counter["cooldownUntil"] = None
-        results = counter.get("lastResults", [])
-        results.append("R")
-        counter["lastResults"] = results[-20:]
-        save_trade_counter(strategy_key, counter)
+        # Cooldown expired — acquire lock, re-read, then clear
+        with strategy_lock(strategy_key):
+            counter = load_trade_counter(strategy_key)
+            # Re-check: another process may have already cleared it
+            if counter.get("gate") != "COOLDOWN":
+                return (counter.get("gate", "OPEN"), counter.get("gateReason"))
+            counter["gate"] = "OPEN"
+            counter["gateReason"] = None
+            counter["cooldownUntil"] = None
+            results = counter.get("lastResults", [])
+            results.append("R")
+            counter["lastResults"] = results[-20:]
+            save_trade_counter(strategy_key, counter)
         return ("OPEN", None)
 
     return ("OPEN", None)

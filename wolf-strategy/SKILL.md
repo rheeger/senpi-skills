@@ -132,7 +132,7 @@ To add a second strategy, run `wolf-setup.py` again with a different wallet/budg
 - Budget should be the cheapest model that can follow explicit if/then rules. Mid should handle structured JSON parsing and multi-strategy routing reliably.
 - Agents are often not model-aware — they may suggest deprecated IDs (e.g. `claude-3-5-haiku-20241022`) or hallucinate model names. Always use `--provider` instead of manually specifying model IDs.
 - If a cron fails to create or run due to an invalid model ID, fall back to your Mid model for that cron. A working cron on the "wrong" tier is better than a broken cron.
-- When in doubt, use your Mid model for all 5 crons (single-model option) and optimize tiers later.
+- When in doubt, use your Mid model for all 6 crons (single-model option) and optimize tiers later.
 
 ## Cron Setup
 
