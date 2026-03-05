@@ -70,9 +70,9 @@ def record_new_closings(counter, closed_positions):
         close_time = pos.get("closeTime") or pos.get("close_time")
         if close_time:
             try:
-                # closeTime is Unix milliseconds
+                # closeTime is Unix seconds
                 ct = int(close_time)
-                close_date = datetime.fromtimestamp(ct / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+                close_date = datetime.fromtimestamp(ct, tz=timezone.utc).strftime("%Y-%m-%d")
                 if close_date != today:
                     continue
             except (ValueError, TypeError, OSError):
