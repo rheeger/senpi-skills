@@ -185,12 +185,7 @@ strategy_entry = {
         "preset": dsl_preset,
         "tiers": DSL_PRESETS[dsl_preset]
     },
-    "guardRails": {
-        "maxEntriesPerDay": 8,
-        "bypassOnProfit": True,
-        "maxConsecutiveLosses": 3,
-        "cooldownMinutes": 60,
-    },
+    "guardRails": GUARD_RAIL_DEFAULTS.copy(),
     "enabled": True
 }
 

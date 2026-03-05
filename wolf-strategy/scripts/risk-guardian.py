@@ -18,7 +18,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from wolf_config import (
     load_all_strategies, load_trade_counter, save_trade_counter,
-    mcporter_call_safe, heartbeat, GUARD_RAIL_DEFAULTS,
+    mcporter_call_safe, heartbeat, GUARD_RAIL_DEFAULTS, strategy_lock,
 )
 
 heartbeat("risk_guardian")
@@ -52,7 +52,7 @@ def get_account_value(wallet):
             total += float(av)
         elif section.get("marginSummary", {}).get("accountValue") is not None:
             total += float(section["marginSummary"]["accountValue"])
-    return total if total > 0 else None
+    return total
 
 
 def record_new_closings(counter, closed_positions):
@@ -172,10 +172,30 @@ def evaluate_guard_rails(counter, wallet, cfg):
             )
             return notifications
 
+    # --- Check if cooldown just expired (must run before G4 to append "R" streak-breaker) ---
+    last_results = counter.get("lastResults", [])
+    if counter.get("gate") == "COOLDOWN" and counter.get("cooldownUntil"):
+        try:
+            cd_dt = datetime.fromisoformat(
+                counter["cooldownUntil"].replace("Z", "+00:00")
+            )
+            if cd_dt <= datetime.now(timezone.utc):
+                counter["gate"] = "OPEN"
+                counter["gateReason"] = None
+                counter["cooldownUntil"] = None
+                last_results.append("R")
+                counter["lastResults"] = last_results[-20:]
+                notifications.append(
+                    f"\u2705 COOLDOWN EXPIRED [{strategy_key}]: gate re-opened"
+                )
+        except (ValueError, TypeError):
+            counter["gate"] = "OPEN"
+            counter["gateReason"] = None
+            counter["cooldownUntil"] = None
+
     # --- G4: Consecutive Losses Cooldown ---
     max_consec = counter.get("maxConsecutiveLosses", GUARD_RAIL_DEFAULTS["maxConsecutiveLosses"])
     cooldown_min = counter.get("cooldownMinutes", GUARD_RAIL_DEFAULTS["cooldownMinutes"])
-    last_results = counter.get("lastResults", [])
 
     if len(last_results) >= max_consec:
         tail = last_results[-max_consec:]
@@ -203,26 +223,6 @@ def evaluate_guard_rails(counter, wallet, cfg):
             )
             return notifications
 
-    # --- Check if cooldown just expired ---
-    if counter.get("gate") == "COOLDOWN" and counter.get("cooldownUntil"):
-        try:
-            cd_dt = datetime.fromisoformat(
-                counter["cooldownUntil"].replace("Z", "+00:00")
-            )
-            if cd_dt <= datetime.now(timezone.utc):
-                counter["gate"] = "OPEN"
-                counter["gateReason"] = None
-                counter["cooldownUntil"] = None
-                last_results.append("R")
-                counter["lastResults"] = last_results[-20:]
-                notifications.append(
-                    f"\u2705 COOLDOWN EXPIRED [{strategy_key}]: gate re-opened"
-                )
-        except (ValueError, TypeError):
-            counter["gate"] = "OPEN"
-            counter["gateReason"] = None
-            counter["cooldownUntil"] = None
-
     return notifications
 
 
@@ -247,27 +247,29 @@ def main():
         if not wallet:
             continue
 
-        # 1. Load trade counter (handles day rollover)
-        counter = load_trade_counter(key)
-
-        # 2. Set account value start (first run of day)
-        if counter.get("accountValueStart") is None:
-            av = get_account_value(wallet)
-            if av is not None:
-                counter["accountValueStart"] = round(av, 2)
-
-        # 3. Fetch closed trades
+        # 3. Fetch closed trades (outside lock — read-only network call)
         closed_positions = fetch_closed_trades(wallet)
 
-        # 4. Record new closings
-        new_closings = record_new_closings(counter, closed_positions)
+        # Lock to serialize with open-position.py's increment_entry_counter
+        with strategy_lock(key):
+            # 1. Load trade counter (handles day rollover)
+            counter = load_trade_counter(key)
 
-        # 5. Evaluate guard rails
-        notifications = evaluate_guard_rails(counter, wallet, cfg)
-        all_notifications.extend(notifications)
+            # 2. Set account value start (first run of day)
+            if counter.get("accountValueStart") is None:
+                av = get_account_value(wallet)
+                if av is not None:
+                    counter["accountValueStart"] = round(av, 2)
 
-        # 6. Save counter
-        save_trade_counter(key, counter)
+            # 4. Record new closings
+            new_closings = record_new_closings(counter, closed_positions)
+
+            # 5. Evaluate guard rails
+            notifications = evaluate_guard_rails(counter, wallet, cfg)
+            all_notifications.extend(notifications)
+
+            # 6. Save counter
+            save_trade_counter(key, counter)
 
         strategy_results[key] = {
             "gate": counter.get("gate", "OPEN"),
