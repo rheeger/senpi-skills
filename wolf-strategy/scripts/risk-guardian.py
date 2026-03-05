@@ -61,7 +61,7 @@ def record_new_closings(counter, closed_positions):
     processed = set(counter.get("processedOrderIds", []))
     new_closings = []
 
-    for pos in closed_positions:
+    for pos in reversed(closed_positions):
         closed_order_id = pos.get("closedOrderId") or pos.get("closed_order_id")
         if not closed_order_id:
             continue
