@@ -1,29 +1,15 @@
 #!/usr/bin/env python3
-"""Emerging Movers Detector v4
+"""Emerging Movers Detector v5 — FOX v0.2 production-ready
 Tracks SM market concentration rank changes over time.
 Flags assets accelerating up the ranks EARLY — catch at #50→#20, not #5.
 
-v4 changes (FOX v5 — 2026-02-24):
-- FIRST_JUMP signal: highest priority. Asset jumps 10+ ranks from #25+ AND was not
-  in previous scan's top 50 (or was >= #30). Enter before confirmation.
-- Erratic logic reworked: only check history BEFORE the current jump. A 10+ rank
-  jump THIS scan is the signal, not noise. CONTRIB_EXPLOSION never downgraded.
-- Velocity gate lowered for IMMEDIATEs: vel > 0 is enough (velocity hasn't built yet).
-  Keep vel >= 0.03 for DEEP_CLIMBER signals only.
-- Scanner interval changed to 90s (from 60s) to reduce token burn.
-
-v3.1 changes (2026-02-23):
-- Erratic rank history filter (now reworked in v4)
-- Minimum velocity gate (now split by signal type in v4)
-
-v3 changes:
-- IMMEDIATE_MOVER signal: trigger on FIRST big jump (10+ ranks from #25+ in ONE scan)
-- NEW_ENTRY_DEEP: assets appearing in top 20 for first time get highest priority
-- Contribution explosion detection: 3x+ contrib increase in one scan
-
-v2 changes:
-- Track top 50 markets (was 25)
-- DEEP_CLIMBER signal: assets jumping 10+ ranks from #30-50 range
+v5 changes (FOX v0.2):
+- ALL entry logic moved to script: scoring, re-entry detection, market regime gate.
+- Outputs topPicks with pre-built entryCommands for the LLM mandate.
+- Heartbeat, max-leverage, on-chain slot cross-check, rotation eligibility.
+- Saves output to file (prevent signal loss on re-run).
+- signalIndex on each alert for fox-open-position.py --signal-index.
+- Removed time-of-day scoring.
 
 Uses: leaderboard_get_markets (single API call)
 """
@@ -31,9 +17,34 @@ import json, sys, os
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fox_config import atomic_write, mcporter_call, load_all_strategies, dsl_state_glob
+from fox_config import (atomic_write, mcporter_call, mcporter_call_safe,
+                         load_all_strategies, dsl_state_glob,
+                         heartbeat, SIGNAL_CONVICTION, WORKSPACE,
+                         ROTATION_COOLDOWN_MINUTES, count_active_dsls)
 
-HISTORY_FILE = os.environ.get("EMERGING_HISTORY", "/data/workspace/fox-emerging-movers-history.json")
+heartbeat("emerging_movers")
+
+SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+HISTORY_FILE = os.environ.get("EMERGING_HISTORY",
+    os.path.join(WORKSPACE, "fox-emerging-movers-history.json"))
+MAX_LEV_FILE = os.path.join(WORKSPACE, "max-leverage.json")
+
+# Load max-leverage data (file-based, no API call — speed critical for 3min scanner)
+try:
+    with open(MAX_LEV_FILE) as f:
+        MAX_LEV_DATA = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    MAX_LEV_DATA = {}
+
+# Load market regime for score threshold
+REGIME_FILE = os.path.join(WORKSPACE, "market-regime-last.json")
+try:
+    with open(REGIME_FILE) as f:
+        REGIME_DATA = json.load(f)
+    MARKET_REGIME = REGIME_DATA.get("market_regime", "BULLISH")
+except (FileNotFoundError, json.JSONDecodeError):
+    MARKET_REGIME = "BULLISH"
+
 MAX_HISTORY = 60
 TOP_N = 50
 RANK_CLIMB_THRESHOLD = 3
@@ -41,6 +52,17 @@ CONTRIBUTION_ACCEL_THRESHOLD = 0.003
 MIN_SCANS_FOR_TREND = 2
 MIN_VELOCITY_FOR_DEEP_CLIMBER = 0.0003  # 0.03% — only applies to DEEP_CLIMBER
 ERRATIC_REVERSAL_THRESHOLD = 5
+
+# FOX scoring thresholds
+SCORE_THRESHOLD = 6
+SCORE_THRESHOLD_NEUTRAL = 8
+MIN_RANK_JUMP = 15
+MIN_VELOCITY_OVERRIDE = 15
+MIN_MAX_LEVERAGE = 7
+REENTRY_SCORE_THRESHOLD = 5
+REENTRY_WINDOW_MINUTES = 120
+REENTRY_MAX_LOSS_ROE = 15
+REENTRY_MIN_VELOCITY = 5
 
 # ─── Load history ───
 try:
@@ -109,7 +131,7 @@ if len(prev_scans) >= MIN_SCANS_FOR_TREND:
         is_immediate = False
         is_first_jump = False
         is_contrib_explosion = False
-        rank_jump_this_scan = 0  # how many ranks jumped THIS scan
+        rank_jump_this_scan = 0
 
         # 1. Fresh entry — wasn't in top 50 last scan
         if prev_market is None:
@@ -126,12 +148,10 @@ if len(prev_scans) >= MIN_SCANS_FOR_TREND:
             rank_jump_this_scan = rank_change_1
             if rank_change_1 >= 2:
                 alert_reasons.append(f"RANK_UP +{rank_change_1} (#{prev_market['rank']}→#{current_rank})")
-            # IMMEDIATE_MOVER — big single-scan jump from deep
             if rank_change_1 >= 10 and prev_market["rank"] >= 25:
                 is_deep_climber = True
                 is_immediate = True
                 alert_reasons.append(f"IMMEDIATE_MOVER +{rank_change_1} from #{prev_market['rank']} in ONE scan")
-                # FIRST_JUMP: was not in previous top 50 or was >= #30
                 was_in_prev = (token, dex) in prev_top50_tokens
                 if not was_in_prev or prev_market["rank"] >= 30:
                     is_first_jump = True
@@ -199,7 +219,6 @@ if len(prev_scans) >= MIN_SCANS_FOR_TREND:
                 alert_reasons.append(f"VELOCITY +{contrib_velocity*100:.3f}%/scan sustained")
 
         if alert_reasons:
-            # Build history arrays
             contrib_history = []
             rank_history = []
             for scan in prev_scans[-5:]:
@@ -214,9 +233,44 @@ if len(prev_scans) >= MIN_SCANS_FOR_TREND:
             rank_history.append(current_rank)
 
             dir_label = market["direction"].upper()
+
+            # Determine max leverage from file-based cache
+            lev_key = f"xyz:{token}" if dex else token
+            alert_max_lev = MAX_LEV_DATA.get(lev_key) or MAX_LEV_DATA.get(token)
+
+            # Qualified asset name (includes xyz: prefix for equities)
+            qualified_asset = f"xyz:{token}" if dex == "xyz" else token
+
+            # Map signal type to conviction
+            if is_first_jump:
+                alert_conviction = SIGNAL_CONVICTION["FIRST_JUMP"]
+            elif is_contrib_explosion:
+                alert_conviction = SIGNAL_CONVICTION["CONTRIB_EXPLOSION"]
+            elif is_immediate:
+                alert_conviction = SIGNAL_CONVICTION["IMMEDIATE_MOVER"]
+            elif is_deep_climber and any("NEW_ENTRY_DEEP" in r for r in alert_reasons):
+                alert_conviction = SIGNAL_CONVICTION["NEW_ENTRY_DEEP"]
+            elif is_deep_climber:
+                alert_conviction = SIGNAL_CONVICTION["DEEP_CLIMBER"]
+            else:
+                alert_conviction = 0.5
+
+            # Signal type label + numeric priority (1=highest)
+            if is_first_jump:
+                signal_type, signal_priority = "FIRST_JUMP", 1
+            elif is_contrib_explosion:
+                signal_type, signal_priority = "CONTRIB_EXPLOSION", 2
+            elif is_immediate:
+                signal_type, signal_priority = "IMMEDIATE_MOVER", 3
+            elif is_deep_climber and any("NEW_ENTRY_DEEP" in r for r in alert_reasons):
+                signal_type, signal_priority = "NEW_ENTRY_DEEP", 4
+            else:
+                signal_type, signal_priority = "DEEP_CLIMBER", 5
+
             alerts.append({
                 "token": token,
                 "dex": dex if dex else None,
+                "qualifiedAsset": qualified_asset,
                 "signal": f"{token} {dir_label}",
                 "direction": dir_label,
                 "currentRank": current_rank,
@@ -224,6 +278,10 @@ if len(prev_scans) >= MIN_SCANS_FOR_TREND:
                 "contribVelocity": round(contrib_velocity * 100, 4),
                 "traders": market["traders"],
                 "priceChg4h": market["price_chg_4h"],
+                "maxLeverage": alert_max_lev,
+                "conviction": alert_conviction,
+                "signalType": signal_type,
+                "signalPriority": signal_priority,
                 "reasons": alert_reasons,
                 "reasonCount": len(alert_reasons),
                 "rankHistory": rank_history,
@@ -235,13 +293,12 @@ if len(prev_scans) >= MIN_SCANS_FOR_TREND:
                 "rankJumpThisScan": rank_jump_this_scan
             })
 
-# ─── v4: Reworked erratic + velocity filters ───
+# ─── Erratic + velocity filters ───
 def is_erratic_history(rank_history, exclude_last=False):
-    """Detect zigzag rank patterns. A reversal > ERRATIC_REVERSAL_THRESHOLD = noise.
-    If exclude_last=True, only check history BEFORE the final entry (current scan)."""
+    """Detect zigzag rank patterns."""
     nums = [r for r in rank_history if r is not None]
     if exclude_last and len(nums) > 1:
-        nums = nums[:-1]  # exclude the current jump from erratic check
+        nums = nums[:-1]
     if len(nums) < 3:
         return False
     for i in range(1, len(nums) - 1):
@@ -261,41 +318,126 @@ for alert in alerts:
     is_ce = alert.get("isContribExplosion", False)
     big_jump = alert.get("rankJumpThisScan", 0) >= 10
 
-    # --- Erratic check ---
-    # CONTRIB_EXPLOSION: NEVER downgrade for erratic
-    # IMMEDIATE with big jump this scan: only check history BEFORE the jump
-    # Others: check full history
     if is_ce:
-        erratic = False  # contrib spike IS the signal
+        erratic = False
     elif big_jump or is_fj:
-        erratic = is_erratic_history(rh, exclude_last=True)  # only pre-jump history
+        erratic = is_erratic_history(rh, exclude_last=True)
     else:
         erratic = is_erratic_history(rh, exclude_last=False)
 
-    # --- Velocity gate ---
-    # IMMEDIATE / FIRST_JUMP: vel > 0 is enough (hasn't had time to build)
-    # DEEP_CLIMBER (non-immediate): vel >= 0.03 required
     if is_imm or is_fj:
-        low_vel = vel <= 0  # just needs to be positive
+        low_vel = vel <= 0
     else:
-        low_vel = vel < (MIN_VELOCITY_FOR_DEEP_CLIMBER * 100)  # 0.03%
+        low_vel = vel < (MIN_VELOCITY_FOR_DEEP_CLIMBER * 100)
 
     alert["erratic"] = erratic
     alert["lowVelocity"] = low_vel
 
-    # Downgrade logic — only for non-FIRST_JUMP, non-CONTRIB_EXPLOSION
+    # Downgrade logic
     if is_fj:
-        pass  # NEVER downgrade FIRST_JUMP — this is THE signal
+        pass
     elif is_ce:
-        pass  # NEVER downgrade CONTRIB_EXPLOSION
+        pass
     elif is_imm and (erratic or low_vel):
         alert["isImmediate"] = False
+        alert["signalType"] = "DEEP_CLIMBER"
+        alert["signalPriority"] = 5
+        alert["conviction"] = SIGNAL_CONVICTION["DEEP_CLIMBER"]
         if erratic:
-            alert["reasons"].append("⚠️ DOWNGRADED: erratic rank history (zigzag in pre-jump history)")
+            alert["reasons"].append("DOWNGRADED: erratic rank history (zigzag in pre-jump history)")
         if low_vel:
-            alert["reasons"].append(f"⚠️ DOWNGRADED: non-positive velocity ({alert['contribVelocity']:.4f})")
+            alert["reasons"].append(f"DOWNGRADED: non-positive velocity ({alert['contribVelocity']:.4f})")
     elif not is_imm and alert.get("isDeepClimber") and low_vel:
-        alert["reasons"].append(f"⚠️ LOW_VEL: velocity {alert['contribVelocity']:.4f} < 0.03 for DEEP_CLIMBER")
+        alert["reasons"].append(f"LOW_VEL: velocity {alert['contribVelocity']:.4f} < 0.03 for DEEP_CLIMBER")
+
+# ─── FOX Scoring (in script, not mandate) ───
+def compute_fox_score(alert):
+    """Compute FOX score for an alert. Returns integer score."""
+    score = 0
+    if alert.get("isFirstJump"):
+        score += 3
+    if alert.get("isImmediate") and not alert.get("isFirstJump"):
+        score += 2
+    if alert.get("contribVelocity", 0) > 10:
+        score += 2
+    if alert.get("isContribExplosion"):
+        score += 2
+    if alert.get("isDeepClimber") and not alert.get("isImmediate") and not alert.get("isFirstJump"):
+        score += 1
+    # Other reasons: +1 each for RANK_UP, CLIMBING, ACCEL, STREAK, NEW_ENTRY, VELOCITY
+    scored_prefixes = {"RANK_UP", "CLIMBING", "ACCEL", "STREAK", "NEW_ENTRY", "VELOCITY"}
+    for reason in alert.get("reasons", []):
+        for prefix in scored_prefixes:
+            if reason.startswith(prefix):
+                score += 1
+                break
+    # BTC alignment: check if market regime aligns with direction
+    if MARKET_REGIME == "BULLISH" and alert.get("direction") == "LONG":
+        score += 1
+    elif MARKET_REGIME == "BEARISH" and alert.get("direction") == "SHORT":
+        score += 1
+    return score
+
+for alert in alerts:
+    alert["score"] = compute_fox_score(alert)
+
+# ─── Re-entry detection ───
+def check_reentry_candidates(alerts):
+    """Check recently-deactivated DSL states for Phase 1 exits within 2h.
+    If asset still in scanner with same direction, mark as re-entry candidate."""
+    scan_now = datetime.now(timezone.utc)
+    all_strategies = {}
+    try:
+        all_strategies = load_all_strategies()
+    except Exception:
+        return
+
+    alert_map = {a["token"]: a for a in alerts}
+
+    for key, cfg in all_strategies.items():
+        import glob as globmod
+        for sf in globmod.glob(dsl_state_glob(key)):
+            try:
+                with open(sf) as f:
+                    state = json.load(f)
+                # Only check recently-deactivated Phase 1 exits
+                if state.get("active"):
+                    continue
+                if state.get("phase", 0) != 1:
+                    continue
+                deactivated_at = state.get("deactivatedAt") or state.get("closedAt")
+                if not deactivated_at:
+                    continue
+                deact_time = datetime.fromisoformat(deactivated_at.replace("Z", "+00:00"))
+                age_min = (scan_now - deact_time).total_seconds() / 60
+                if age_min > REENTRY_WINDOW_MINUTES:
+                    continue
+
+                # Check ROE loss
+                roe_loss = abs(float(state.get("exitROE", state.get("lastROE", 0)) or 0))
+                if roe_loss > REENTRY_MAX_LOSS_ROE:
+                    continue
+
+                asset = state.get("asset", "")
+                direction = state.get("direction", "")
+
+                # Check if this asset is still in scanner with same direction
+                matching_alert = alert_map.get(asset)
+                if not matching_alert:
+                    continue
+                if matching_alert["direction"] != direction:
+                    continue
+                if matching_alert.get("contribVelocity", 0) <= REENTRY_MIN_VELOCITY:
+                    continue
+
+                # Mark as re-entry
+                matching_alert["isReentry"] = True
+                matching_alert["reentryOf"] = asset
+                matching_alert["_reentryScoreThreshold"] = REENTRY_SCORE_THRESHOLD
+            except (json.JSONDecodeError, IOError, KeyError, ValueError, TypeError, AttributeError):
+                continue
+
+check_reentry_candidates(alerts)
 
 # ─── Save history ───
 history["scans"].append(current_scan)
@@ -304,51 +446,159 @@ if len(history["scans"]) > MAX_HISTORY:
 
 atomic_write(HISTORY_FILE, history)
 
-# ─── Output ───
-# Sort: first_jump > immediate > deep climber > velocity > reason count
+# ─── Sort: priority number (1=highest) > velocity > reason count ───
 alerts.sort(key=lambda a: (
-    a.get("isFirstJump", False),
-    a.get("isImmediate", False),
-    a.get("isContribExplosion", False),
-    a.get("isDeepClimber", False),
-    abs(a.get("contribVelocity", 0)),
-    len(a["reasons"])
-), reverse=True)
+    a.get("signalPriority", 99),
+    -abs(a.get("contribVelocity", 0)),
+    -len(a["reasons"])
+))
 
-# ─── Slot availability per strategy ───
+for idx, alert in enumerate(alerts):
+    alert["signalIndex"] = idx
+
+# ─── Slot availability per strategy (clearinghouse-backed) ───
 import glob as globmod
+
+APPROX_GRACE_MINUTES = 10
+
 strategy_slots = {}
 try:
     all_strategies = load_all_strategies()
     for key, cfg in all_strategies.items():
         max_slots = cfg.get("slots", 2)
-        active_count = 0
+        wallet = cfg.get("wallet", "")
+
+        # Count DSL state files with active=True, excluding stale approximate DSLs
+        dsl_active_count = count_active_dsls(dsl_state_glob(key), approx_grace_minutes=APPROX_GRACE_MINUTES)
+        slot_ages = []
+        rotation_eligible_coins = []
+        scan_now = datetime.now(timezone.utc)
         for sf in globmod.glob(dsl_state_glob(key)):
             try:
                 with open(sf) as f:
                     s = json.load(f)
-                if s.get("active"):
-                    active_count += 1
-            except (json.JSONDecodeError, IOError, KeyError):
+                if not s.get("active"):
+                    continue
+                coin_name = s.get("asset", os.path.basename(sf).replace("dsl-", "").replace(".json", ""))
+                slot_age_min = None
+                if s.get("createdAt"):
+                    try:
+                        created = datetime.fromisoformat(s["createdAt"].replace("Z", "+00:00"))
+                        slot_age_min = round((scan_now - created).total_seconds() / 60, 1)
+                    except (ValueError, TypeError):
+                        pass
+                slot_ages.append({"coin": coin_name, "ageMinutes": slot_age_min})
+                if slot_age_min is None or slot_age_min >= ROTATION_COOLDOWN_MINUTES:
+                    rotation_eligible_coins.append(coin_name)
+            except (json.JSONDecodeError, IOError, KeyError, AttributeError):
                 continue
+
+        # Cross-check against on-chain positions
+        on_chain_count = 0
+        on_chain_coins = []
+        if wallet:
+            ch_data = mcporter_call_safe("strategy_get_clearinghouse_state",
+                                          strategy_wallet=wallet)
+            if ch_data:
+                for section_key in ("main", "xyz"):
+                    section = ch_data.get(section_key, {})
+                    for p in section.get("assetPositions", []):
+                        if not isinstance(p, dict):
+                            continue
+                        pos = p.get("position", {})
+                        coin = pos.get("coin", "")
+                        szi = float(pos.get("szi", 0))
+                        if coin and szi != 0:
+                            on_chain_count += 1
+                            on_chain_coins.append(coin)
+
+        used = max(dsl_active_count, on_chain_count)
+
         strategy_slots[key] = {
             "name": cfg.get("name", key),
             "slots": max_slots,
-            "used": active_count,
-            "available": max(0, max_slots - active_count),
+            "used": used,
+            "available": max(0, max_slots - used),
+            "dslActive": dsl_active_count,
+            "onChain": on_chain_count,
+            "onChainCoins": sorted(on_chain_coins) if on_chain_coins else [],
+            "slotAges": slot_ages,
+            "rotationEligibleCoins": sorted(rotation_eligible_coins),
+            "rotationCooldownMinutes": ROTATION_COOLDOWN_MINUTES,
+            "hasRotationCandidate": len(rotation_eligible_coins) > 0,
         }
 except Exception:
-    pass  # Don't fail the whole script if slot counting errors
+    pass
 
 any_slots_available = any(s["available"] > 0 for s in strategy_slots.values()) if strategy_slots else True
 
+# ─── Pre-filter: no slots + no first jumps → clear alerts ───
+has_first_jump = any(a.get("isFirstJump") for a in alerts)
+any_rotation_candidate = any(
+    s.get("hasRotationCandidate", True)
+    for s in strategy_slots.values()
+) if strategy_slots else True
+
+if not any_slots_available and not has_first_jump:
+    alerts = []
+elif not any_slots_available and has_first_jump and not any_rotation_candidate:
+    pass
+
+# ─── Build topPicks with scoring + entry filters ───
+def qualifies_for_entry(alert):
+    """Apply FOX entry filters to determine if an alert qualifies."""
+    score = alert.get("score", 0)
+    max_lev = alert.get("maxLeverage")
+    rank_jump = alert.get("rankJumpThisScan", 0)
+    vel = alert.get("contribVelocity", 0)
+    is_reentry = alert.get("isReentry", False)
+
+    # Max leverage gate
+    if max_lev is not None and max_lev < MIN_MAX_LEVERAGE:
+        return False
+
+    # Re-entry uses relaxed threshold
+    if is_reentry:
+        reentry_threshold = alert.get("_reentryScoreThreshold", REENTRY_SCORE_THRESHOLD)
+        return score >= reentry_threshold
+
+    # Rank jump minimum: rankJumpThisScan >= 15 OR contribVelocity > 15
+    if rank_jump < MIN_RANK_JUMP and vel <= MIN_VELOCITY_OVERRIDE:
+        return False
+
+    # Score threshold (higher for NEUTRAL regime)
+    threshold = SCORE_THRESHOLD_NEUTRAL if MARKET_REGIME == "NEUTRAL" else SCORE_THRESHOLD
+    return score >= threshold
+
+qualified_alerts = [a for a in alerts if qualifies_for_entry(a)]
+
+total_available_slots = sum(s.get("available", 0) for s in strategy_slots.values())
+first_jump_count = len([a for a in qualified_alerts if a.get("isFirstJump")])
+pick_count = max(total_available_slots, first_jump_count)
+top_picks = qualified_alerts[:pick_count] if pick_count > 0 else []
+
+# Add entryCommands to each topPick
+for pick in top_picks:
+    pick["entryCommands"] = []
+    # Find best-fit strategy
+    for skey, sdata in strategy_slots.items():
+        if sdata.get("available", 0) > 0 or (pick.get("isFirstJump") and sdata.get("hasRotationCandidate")):
+            cmd = f"python3 {SCRIPTS_DIR}/fox-open-position.py --strategy {skey} --asset {pick['qualifiedAsset']} --signal-index {pick['signalIndex']}"
+            pick["entryCommands"].append(cmd)
+            break
+
+# ─── Output ───
 output = {
     "status": "ok",
     "time": now,
     "totalMarkets": len(current_scan["markets"]),
     "scansInHistory": len(history["scans"]),
+    "marketRegime": MARKET_REGIME,
+    "scoreThreshold": SCORE_THRESHOLD_NEUTRAL if MARKET_REGIME == "NEUTRAL" else SCORE_THRESHOLD,
     "strategySlots": strategy_slots,
     "anySlotsAvailable": any_slots_available,
+    "totalAvailableSlots": total_available_slots,
+    "topPicks": top_picks,
     "alerts": alerts,
     "firstJumps": [a for a in alerts if a.get("isFirstJump")],
     "immediateMovers": [a for a in alerts if a.get("isImmediate")],
@@ -362,3 +612,7 @@ output = {
 }
 
 print(json.dumps(output))
+
+# Save output to file (prevents signal loss on re-run)
+OUTPUT_FILE = os.path.join(os.path.dirname(HISTORY_FILE), "fox-emerging-movers-output.json")
+atomic_write(OUTPUT_FILE, output)

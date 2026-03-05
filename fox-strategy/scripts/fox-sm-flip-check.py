@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
 """
-Smart Money Flip Detector v2 — Multi-strategy
+Smart Money Flip Detector v3 — FOX v0.2 Multi-strategy
 Checks if SM direction has flipped against any active positions across ALL strategies.
-Runs every 5 min. Outputs JSON with alerts including strategyKey.
+Runs every 5 min. Outputs JSON with action_required + notifications.
 
-Usage: python3 sm-flip-check.py
-Reads active DSL state files from all strategy state dirs.
+Usage: python3 fox-sm-flip-check.py
 """
 
 import json, sys, os, glob
 from datetime import datetime, timezone
 
-# Add scripts dir to path for fox_config import
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fox_config import load_all_strategies, dsl_state_glob, mcporter_call
+from fox_config import (load_all_strategies, load_strategy, dsl_state_glob,
+                         mcporter_call, heartbeat)
 
 
 def get_active_positions():
     """Read all active DSL state files across ALL strategies."""
     positions = []
-    for key, _ in load_all_strategies().items():
+    for key, cfg in load_all_strategies().items():
+        wallet = cfg.get("wallet", "")
         for f in glob.glob(dsl_state_glob(key)):
             try:
                 with open(f) as fh:
@@ -29,9 +29,10 @@ def get_active_positions():
                         "asset": state["asset"],
                         "direction": state["direction"],
                         "strategyKey": key,
+                        "wallet": wallet,
                         "file": f
                     })
-            except (json.JSONDecodeError, IOError, KeyError):
+            except (json.JSONDecodeError, IOError, KeyError, AttributeError):
                 continue
     return positions
 
@@ -44,10 +45,13 @@ def get_sm_data():
 def analyze(positions, sm_data):
     """Check for SM flips against our positions."""
     alerts = []
+    action_required = []
+    notifications = []
 
     markets = sm_data.get("markets", {}).get("markets", [])
     if not isinstance(markets, list):
-        return {"error": "unexpected SM data format", "raw_keys": str(type(markets))}
+        return {"error": "unexpected SM data format", "raw_keys": str(type(markets)),
+                "action_required": [], "notifications": []}
 
     # Build asset->SM map
     sm_map = {}
@@ -57,9 +61,9 @@ def analyze(positions, sm_data):
             continue
         raw_pnl = m.get("pct_of_top_traders_gain")
         if raw_pnl is not None:
-            pnl_pct = float(raw_pnl or 0) * 100   # decimal → percent
+            pnl_pct = float(raw_pnl or 0) * 100
         else:
-            pnl_pct = float(m.get("pnlContribution", 0) or 0)  # already a percent
+            pnl_pct = float(m.get("pnlContribution", 0) or 0)
         traders = int(m.get("trader_count", m.get("traderCount", 0)) or 0)
         direction = (m.get("direction") or "").upper()
 
@@ -107,7 +111,7 @@ def analyze(positions, sm_data):
             alert_level = "WATCH"
 
         if flipped:
-            alerts.append({
+            alert_entry = {
                 "asset": asset,
                 "myDirection": my_dir,
                 "smDirection": sm_dir,
@@ -119,26 +123,50 @@ def analyze(positions, sm_data):
                 "avgAtPeak": sm["avgAtPeak"],
                 "nearPeakPct": sm["nearPeakPct"],
                 "strategyKey": pos["strategyKey"]
-            })
+            }
+            alerts.append(alert_entry)
+
+            # FLIP_NOW → action_required + notification
+            if alert_level == "FLIP_NOW":
+                action_required.append({
+                    "action": "close_position",
+                    "coin": asset,
+                    "strategyKey": pos["strategyKey"],
+                    "wallet": pos.get("wallet", ""),
+                    "direction": my_dir,
+                    "reason": f"SM flip detected, conviction {conviction}"
+                })
+                notifications.append(
+                    f"SM FLIP [{pos['strategyKey']}]: {asset} {my_dir} -> "
+                    f"SM now {sm_dir} (conviction {conviction})"
+                )
 
     return {
         "time": datetime.now(timezone.utc).isoformat(),
         "positions": len(positions),
         "alerts": alerts,
-        "hasFlipSignal": any(a["alertLevel"] in ("FLIP_NOW", "FLIP_WARNING") for a in alerts)
+        "hasFlipSignal": any(a["alertLevel"] in ("FLIP_NOW", "FLIP_WARNING") for a in alerts),
+        "action_required": action_required,
+        "notifications": notifications,
     }
 
 
 if __name__ == "__main__":
+    heartbeat("sm_flip")
     positions = get_active_positions()
     if not positions:
-        print(json.dumps({"time": datetime.now(timezone.utc).isoformat(), "positions": 0, "alerts": [], "hasFlipSignal": False}))
+        print(json.dumps({
+            "time": datetime.now(timezone.utc).isoformat(),
+            "positions": 0, "alerts": [], "hasFlipSignal": False,
+            "action_required": [], "notifications": []
+        }))
         sys.exit(0)
 
     try:
         sm_data = get_sm_data()
     except Exception as e:
-        print(json.dumps({"error": f"sm_fetch_failed: {e}", "hasFlipSignal": False}))
+        print(json.dumps({"error": f"sm_fetch_failed: {e}", "hasFlipSignal": False,
+                          "action_required": [], "notifications": []}))
         sys.exit(1)
     result = analyze(positions, sm_data)
     print(json.dumps(result))

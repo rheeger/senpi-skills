@@ -1,24 +1,22 @@
 #!/usr/bin/env python3
 """
-FOX Strategy Monitor v2 — Multi-strategy
+FOX Strategy Monitor v3 — FOX v0.2 Multi-strategy
 - Iterates all enabled strategies from fox-strategies.json
 - Checks all positions across each strategy's wallets (crypto + XYZ)
 - Computes liquidation distance vs DSL floor distance
 - Flags positions where liq is closer than DSL
 - Checks emerging movers for rotation candidates
 - Per-strategy alerts and summary
-- Outputs JSON with per-strategy results
+- Outputs action_required + notifications for LLM mandate
 """
 import json, sys, os, glob
 from datetime import datetime, timezone
 
-# Add scripts dir to path for fox_config import
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fox_config import (load_all_strategies, state_dir, dsl_state_glob,
-                         WORKSPACE, mcporter_call_safe)
+                         WORKSPACE, mcporter_call_safe, heartbeat)
 
 EMERGING_HISTORY = os.path.join(WORKSPACE, "history", "emerging-movers.json")
-# Fallback to legacy location
 if not os.path.exists(EMERGING_HISTORY):
     EMERGING_HISTORY = os.path.join(WORKSPACE, "fox-emerging-movers-history.json")
 
@@ -40,10 +38,16 @@ def get_dsl_state_for_strategy(strategy_key, asset):
 
 def _process_positions(section_data, strategy_key, wallet_type, results):
     """Extract positions from a clearinghouse section (main or xyz)."""
+    if not isinstance(section_data, dict):
+        return
     for ap in section_data.get("assetPositions", []):
-        pos = ap["position"]
-        coin = pos["coin"]
-        szi = float(pos["szi"])
+        if not isinstance(ap, dict):
+            continue
+        pos = ap.get("position", {})
+        coin = pos.get("coin", "")
+        if not coin:
+            continue
+        szi = float(pos.get("szi", 0))
         if szi == 0:
             continue
         direction = "LONG" if szi > 0 else "SHORT"
@@ -74,7 +78,7 @@ def _process_positions(section_data, strategy_key, wallet_type, results):
             "price": round(price, 4), "liq": liq, "upnl": round(upnl, 2),
             "roe_pct": round(roe, 2), "liq_distance_pct": liq_dist_pct,
             "dsl_floor": dsl_floor, "dsl_distance_pct": dsl_dist_pct,
-            "wallet_type": wallet_type, "margin": round(float(pos["marginUsed"]), 2),
+            "wallet_type": wallet_type, "margin": round(float(pos.get("marginUsed", 0)), 2),
             "strategyKey": strategy_key
         }
         results["positions"].append(p)
@@ -109,16 +113,14 @@ def analyze_strategy(strategy_key, cfg):
     results = {"strategyKey": strategy_key, "name": cfg.get("name", ""), "positions": [], "alerts": [], "summary": {}}
 
     if not wallet:
-        # No wallet = no active strategy yet. Silent skip.
         return results
 
-    # Single clearinghouse call returns both main (crypto) and xyz (equities)
     data = get_clearinghouse(wallet)
     if not data:
         results["alerts"].append({"level": "ERROR", "msg": f"Strategy {strategy_key}: failed to fetch clearinghouse"})
         return results
 
-    # --- Main (crypto) positions ---
+    # Main (crypto) positions
     main = data.get("main", {})
     margin_summary = main.get("marginSummary", {})
     acct_value = float(margin_summary.get("accountValue", 0))
@@ -141,14 +143,13 @@ def analyze_strategy(strategy_key, cfg):
             "msg": f"[{strategy_key}] Cross-margin buffer: {buf}% (account ${round(acct_value, 2)}, maint margin ${round(maint_margin, 2)})"
         })
 
-    # --- XYZ (equities) positions from same response ---
+    # XYZ (equities)
     xyz = data.get("xyz", {})
     xyz_acct = float(xyz.get("marginSummary", {}).get("accountValue", "0"))
     results["summary"]["xyz_account"] = xyz_acct
-
     _process_positions(xyz, strategy_key, "xyz", results)
 
-    # Total P&L for this strategy
+    # Summary
     total_upnl = sum(p["upnl"] for p in results["positions"])
     results["summary"]["total_upnl"] = round(total_upnl, 2)
     results["summary"]["total_account"] = round(
@@ -161,10 +162,13 @@ def analyze_strategy(strategy_key, cfg):
 
 
 def main():
+    heartbeat("watchdog")
     strategies = load_all_strategies()
 
     if not strategies:
-        print(json.dumps({"status": "ok", "strategies": {}, "alerts": [], "message": "No enabled strategies"}))
+        print(json.dumps({"status": "ok", "strategies": {}, "alerts": [],
+                          "action_required": [], "notifications": [],
+                          "message": "No enabled strategies"}))
         sys.exit(0)
 
     output = {"strategies": {}, "alerts": [], "summary": {}}
@@ -177,7 +181,7 @@ def main():
         for p in strategy_result.get("positions", []):
             all_held_coins.add(p["coin"])
 
-    # Check emerging movers for rotation candidates (shared across strategies)
+    # Check emerging movers for rotation candidates
     try:
         with open(EMERGING_HISTORY) as f:
             history = json.load(f)
@@ -199,7 +203,7 @@ def main():
                     "level": "INFO",
                     "msg": f"Emerging rotation candidates (not held in any strategy): {', '.join(climbers[:3])}"
                 })
-    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, AttributeError):
         pass
 
     # Global summary
@@ -218,6 +222,33 @@ def main():
         "total_positions": sum(len(s.get("positions", [])) for s in output["strategies"].values()),
         "total_alerts": len(output["alerts"]),
     }
+
+    # Build action_required + notifications for LLM mandate
+    notifications = []
+    action_required = []
+
+    for strat_key, strat_data in output["strategies"].items():
+        for alert in strat_data.get("alerts", []):
+            if alert.get("level") == "CRITICAL" and "buffer" in alert.get("msg", "").lower():
+                # Find weakest ROE position in this strategy
+                positions = strat_data.get("positions", [])
+                if positions:
+                    weakest = min(positions, key=lambda p: p.get("roe_pct", 0))
+                    action_required.append({
+                        "action": "close_position",
+                        "strategyKey": strat_key,
+                        "coin": weakest["coin"],
+                        "direction": weakest["direction"],
+                        "roe_pct": weakest["roe_pct"],
+                        "reason": alert["msg"]
+                    })
+                    notifications.append(
+                        f"EMERGENCY CLOSE [{strat_key}]: {weakest['coin']} {weakest['direction']} "
+                        f"(ROE {weakest['roe_pct']}%) — {alert['msg']}"
+                    )
+
+    output["notifications"] = notifications
+    output["action_required"] = action_required
 
     print(json.dumps(output, indent=2))
 
