@@ -892,11 +892,21 @@ def process_one_position(state_file: str, strategy_id: str, now: str) -> None:
     state["lastPrice"] = price
     entry = state["entryPrice"]
     size = state["size"]
-    leverage = state["leverage"]
+    leverage = max(1, state.get("leverage", 1))
     hw = update_high_water(state, price, is_long)
 
     upnl = (price - entry) * size if is_long else (entry - price) * size
-    margin = entry * size / leverage
+    margin = entry * size / leverage if leverage else 0
+    if margin == 0:
+        print(json.dumps({
+            "status": "error",
+            "error": "zero_margin",
+            "asset": asset,
+            "strategy_id": strategy_id,
+            "message": f"margin=0 (entry={entry}, size={size}, leverage={leverage}); skipping",
+            "time": now,
+        }))
+        return
     upnl_pct = upnl / margin * 100
 
     tier_idx, tier_floor, tier_changed, previous_tier_idx = apply_tier_upgrades(

@@ -9,7 +9,6 @@ description: >-
   and health checks (10min). Same asset can be traded in different strategies simultaneously.
   Enter early on first jumps, not at confirmed peaks. Dynamic risk-based leverage per strategy.
   Requires Senpi MCP connection, python3, mcporter CLI, and OpenClaw cron system.
-
 ---
 
 # WOLF v6.1.1 — Autonomous Multi-Strategy Trading
@@ -29,6 +28,7 @@ The WOLF hunts for its human. It scans, enters, exits, and rotates positions aut
 ## Multi-Strategy Architecture
 
 ### Strategy Registry (`wolf-strategies.json`)
+
 Central config holding all strategies. Created/updated by `wolf-setup.py`.
 
 ```
@@ -40,7 +40,9 @@ wolf-strategies.json
 ```
 
 ### Per-Strategy State
+
 Each strategy gets its own state directory:
+
 ```
 state/
 ├── wolf-abc123/
@@ -52,17 +54,21 @@ state/
 ```
 
 ### Signal Routing
+
 When a signal fires, it's routed to the best-fit strategy:
+
 1. Which strategies have empty slots?
 2. Does any strategy already hold this asset? (skip within strategy, allow cross-strategy)
 3. Which strategy's risk profile matches? (aggressive gets FIRST_JUMPs, conservative gets DEEP_CLIMBERs)
 4. Route to best-fit -> open on that wallet -> create DSL state in that strategy's dir
 
 ### Adding a Strategy
+
 ```bash
 python3 scripts/wolf-setup.py --wallet 0x... --strategy-id UUID --budget 2000 \
     --chat-id 12345 --name "Conservative XYZ" --dsl-preset conservative --provider anthropic
 ```
+
 This adds to the registry without disrupting running strategies. Disable with `enabled: false` in the registry.
 
 ---
@@ -93,14 +99,14 @@ To add a second strategy, run `wolf-setup.py` again with a different wallet/budg
 
 ## Architecture — 6 Cron Jobs
 
-| # | Job | Interval | Session | Script | Purpose |
-|---|-----|----------|---------|--------|---------|
-| 1 | Emerging Movers | **3min** | isolated | `scripts/emerging-movers.py` | Hunt FIRST_JUMP + IMMEDIATE_MOVER signals — primary entry trigger |
-| 2 | DSL Combined | **3min** | isolated | `scripts/dsl-combined.py` | Trailing stop exits for ALL open positions across ALL strategies |
-| 3 | SM Flip Detector | 5min | isolated | `scripts/sm-flip-check.py` | Cut positions where SM conviction collapses |
-| 4 | Watchdog | 5min | isolated | `scripts/wolf-monitor.py` | Per-strategy margin buffer, liq distances, rotation candidates |
-| 5 | Health Check | 10min | isolated | `scripts/job-health-check.py` | Per-strategy orphan DSL detection, state validation |
-| 6 | Risk Guardian | 5min | isolated | `scripts/risk-guardian.py` | Account-level guard rails: daily loss halt, max entries, consecutive loss cooldown |
+| #   | Job              | Interval | Session  | Script                        | Purpose                                                                            |
+| --- | ---------------- | -------- | -------- | ----------------------------- | ---------------------------------------------------------------------------------- |
+| 1   | Emerging Movers  | **3min** | isolated | `scripts/emerging-movers.py`  | Hunt FIRST_JUMP + IMMEDIATE_MOVER signals — primary entry trigger                  |
+| 2   | DSL Combined     | **3min** | isolated | `scripts/dsl-combined.py`     | Trailing stop exits for ALL open positions across ALL strategies                   |
+| 3   | SM Flip Detector | 5min     | isolated | `scripts/sm-flip-check.py`    | Cut positions where SM conviction collapses                                        |
+| 4   | Watchdog         | 5min     | isolated | `scripts/wolf-monitor.py`     | Per-strategy margin buffer, liq distances, rotation candidates                     |
+| 5   | Health Check     | 10min    | isolated | `scripts/job-health-check.py` | Per-strategy orphan DSL detection, state validation                                |
+| 6   | Risk Guardian    | 5min     | isolated | `scripts/risk-guardian.py`    | Account-level guard rails: daily loss halt, max entries, consecutive loss cooldown |
 
 **v6 change:** One set of crons for all strategies. Each script reads `wolf-strategies.json` and iterates all enabled strategies internally.
 
@@ -112,24 +118,25 @@ To add a second strategy, run `wolf-setup.py` again with a different wallet/budg
 
 **Provider defaults** (auto-selected by `--provider`):
 
-| Provider | Mid Model | Budget Model |
-|----------|-----------|--------------|
-| `anthropic` | `anthropic/claude-sonnet-4-5` | `anthropic/claude-haiku-4-5` |
-| `openai` | `openai/gpt-4o` | `openai/gpt-4o-mini` |
-| `google` | `google/gemini-2.0-flash` | `google/gemini-2.0-flash-lite` |
+| Provider    | Mid Model                     | Budget Model                   |
+| ----------- | ----------------------------- | ------------------------------ |
+| `anthropic` | `anthropic/claude-sonnet-4-5` | `anthropic/claude-haiku-4-5`   |
+| `openai`    | `openai/gpt-4o`               | `openai/gpt-4o-mini`           |
+| `google`    | `google/gemini-2.0-flash`     | `google/gemini-2.0-flash-lite` |
 
-| Cron | Session | Model Tier | Reason |
-|------|---------|-----------|--------|
-| Emerging Movers | isolated | Mid | Multi-strategy routing judgment, entry decisions |
-| DSL Combined | isolated | Mid | Script output parsing, rule-based close/alert |
-| Health Check | isolated | Mid | Rule-based file repair, action routing |
-| SM Flip Detector | isolated | Budget | Binary: conviction≥4 + 100 traders → close |
-| Watchdog | isolated | Budget | Threshold checks → alert |
-| Risk Guardian | isolated | Budget | Guard rail evaluation, send notifications |
+| Cron             | Session  | Model Tier | Reason                                           |
+| ---------------- | -------- | ---------- | ------------------------------------------------ |
+| Emerging Movers  | isolated | Mid        | Multi-strategy routing judgment, entry decisions |
+| DSL Combined     | isolated | Mid        | Script output parsing, rule-based close/alert    |
+| Health Check     | isolated | Mid        | Rule-based file repair, action routing           |
+| SM Flip Detector | isolated | Budget     | Binary: conviction≥4 + 100 traders → close       |
+| Watchdog         | isolated | Budget     | Threshold checks → alert                         |
+| Risk Guardian    | isolated | Budget     | Guard rail evaluation, send notifications        |
 
 **Single-model option:** All 6 crons can run on one model. Simpler but costs more for the crons that do simple threshold/binary work.
 
 **Model ID gotchas:**
+
 - `--provider` auto-selects models. Only use `--mid-model`/`--budget-model` to override specific tiers.
 - Budget should be the cheapest model that can follow explicit if/then rules. Mid should handle structured JSON parsing and multi-strategy routing reliably.
 - Agents are often not model-aware — they may suggest deprecated IDs (e.g. `claude-3-5-haiku-20241022`) or hallucinate model names. Always use `--provider` instead of manually specifying model IDs.
@@ -149,6 +156,7 @@ Create each cron using the OpenClaw cron tool. The exact mandate text for each c
 ## Autonomy Rules
 
 The WOLF operates autonomously by default. The agent does NOT ask permission to:
+
 - Open a position when entry checklist passes
 - Close a position when DSL triggers or conviction collapses
 - Rotate out of weak positions into stronger signals
@@ -167,14 +175,16 @@ The agent DOES notify the user (via Telegram) after every action.
 **Action:** Enter IMMEDIATELY. This is the money signal. Route to best-fit strategy with available slots.
 
 **Checklist:**
+
 - `isFirstJump: true` in scanner output
 - **2+ reasons is enough** (don't require 4+)
 - **vel > 0 is sufficient** (velocity hasn't had time to build on a first jump)
 - Leverage auto-calculated from `tradingRisk` + asset `maxLeverage` + signal `conviction`
 - Slot available in target strategy (or rotation justified)
-- >= 10 SM traders (crypto); for XYZ equities, ignore trader count
+- > = 10 SM traders (crypto); for XYZ equities, ignore trader count
 
 **What to ignore:**
+
 - Erratic rank history — the scanner excludes the current jump from erratic checks.
 - Low velocity — first jumps haven't had time to build velocity.
 
@@ -231,6 +241,7 @@ This deserves its own section because it's the #1 way to lose money with WOLF.
 Positions that never gain momentum get cut automatically.
 
 **Rules:**
+
 - **90-minute maximum** in Phase 1 (pre-Tier 1 DSL). If ROE never hits 5% in 90 minutes, close.
 - **Weak peak early cut:** If peak ROE was < 3% and ROE is now declining -> close after 45 minutes. Don't wait 90.
 - **Dead weight:** SM conviction = 0, negative ROE, position open 30+ minutes -> instant cut regardless of phase.
@@ -246,16 +257,21 @@ Positions that never gain momentum get cut automatically.
 All trailing stops handled automatically by `dsl-combined.py` across all strategies.
 
 ### 2. SM Conviction Collapse
+
 Conv drops to 0 or 4->1 with mass trader exodus -> instant cut.
 
 ### 3. Dead Weight
+
 Conv 0, negative ROE, 30+ min -> instant cut.
 
 ### 4. SM Flip
+
 Conviction 4+ in the OPPOSITE direction with 100+ traders -> cut immediately.
 
 ### 5. Race Condition Prevention
+
 When ANY job closes a position -> immediately:
+
 1. Set DSL state `active: false` in `state/{strategyKey}/dsl-{ASSET}.json`
 2. Alert user
 3. Evaluate: empty slot in that strategy for next signal?
@@ -267,6 +283,7 @@ When ANY job closes a position -> immediately:
 ## DSL v5 — Trailing Stop System
 
 ### Phase 1 (Pre-Tier 1): Absolute floor
+
 - LONG floor = entry x (1 - 10%/leverage)
 - SHORT floor = entry x (1 + 10%/leverage)
 - 3 consecutive breaches -> close
@@ -275,16 +292,18 @@ When ANY job closes a position -> immediately:
 ### Phase 2 (Tier 1+): Trailing tiers
 
 | Tier | ROE Trigger | Lock % of High-Water | Breaches to Close |
-|------|-------------|---------------------|-------------------|
-| 1 | 5% | 50% | 2 |
-| 2 | 10% | 65% | 2 |
-| 3 | 15% | 75% | 2 |
-| 4 | 20% | 85% | 1 |
+| ---- | ----------- | -------------------- | ----------------- |
+| 1    | 5%          | 50%                  | 2                 |
+| 2    | 10%         | 65%                  | 2                 |
+| 3    | 15%         | 75%                  | 2                 |
+| 4    | 20%         | 85%                  | 1                 |
 
 ### Stagnation Take-Profit
+
 Auto-close if ROE >= 8% and high-water stale for 1 hour.
 
 ### DSL State File
+
 Each position gets `state/{strategyKey}/dsl-{ASSET}.json`. The combined runner iterates all active state files across all strategies. See `references/state-schema.md` for the full schema and critical gotchas (triggerPct not threshold, lockPct not retracePct, etc.).
 
 ---
@@ -292,6 +311,7 @@ Each position gets `state/{strategyKey}/dsl-{ASSET}.json`. The combined runner i
 ## Rotation Rules
 
 When slots are full in a strategy and a new FIRST_JUMP or IMMEDIATE fires:
+
 - **Cross-strategy first:** If one strategy is full but another has slots, route to the available strategy instead of rotating
 - **Rotation cooldown (mandatory):** Only rotate a position listed in `rotationEligibleCoins` from the scanner output. Positions younger than `rotationCooldownMinutes` (default 45 min) are ineligible — they have flat/negative ROE by design. Do NOT override this with judgment.
 - **Rotate if:** new signal is FIRST_JUMP or has 3+ reasons + positive velocity AND weakest **eligible** position (from `rotationEligibleCoins`) is flat/negative ROE with SM conv 0-1
@@ -304,12 +324,12 @@ When slots are full in a strategy and a new FIRST_JUMP or IMMEDIATE fires:
 
 All sizing is calculated from budget (30% per slot):
 
-| Budget | Slots | Margin/Slot | Daily Loss Limit |
-|--------|-------|-------------|------------------|
-| $500 | 2 | $150 | -$75 |
-| $2,000 | 2 | $600 | -$300 |
-| $6,500 | 3 | $1,950 | -$975 |
-| $10,000+ | 3-4 | $3,000 | -$1,500 |
+| Budget   | Slots | Margin/Slot | Daily Loss Limit |
+| -------- | ----- | ----------- | ---------------- |
+| $500     | 2     | $150        | -$75             |
+| $2,000   | 2     | $600        | -$300            |
+| $6,500   | 3     | $1,950      | -$975            |
+| $10,000+ | 3-4   | $3,000      | -$1,500          |
 
 Leverage is computed dynamically per position from `tradingRisk` + asset `maxLeverage` + signal `conviction`. See "Risk-Based Leverage" section below.
 
@@ -320,12 +340,14 @@ Leverage is computed dynamically per position from `tradingRisk` + asset `maxLev
 ## Position Lifecycle
 
 ### Opening
+
 1. Signal fires -> validate checklist -> route to best-fit strategy
 2. Enter via `python3 scripts/open-position.py --strategy {strategyKey} --asset {ASSET} --direction {DIR} --conviction {CONVICTION}`
    Leverage is auto-calculated from `tradingRisk` + asset `maxLeverage` + `conviction`. This atomically opens the position AND creates the DSL state file. Do NOT manually create DSL JSON.
 3. Alert user
 
 ### Closing
+
 1. Close via `close_position` (or DSL auto-closes)
 2. **Immediately** set DSL state `active: false`
 3. Alert user with strategy name for context
@@ -377,11 +399,11 @@ clamped to [1, maxLeverage]
 
 ### Risk Tiers
 
-| Tier | Range of Max Leverage | Example (40x max, mid conviction) | Example (3x max, mid conviction) |
-|------|----------------------|----------------------------------|----------------------------------|
-| `conservative` | 15% – 25% | 8x | 1x |
-| `moderate` | 25% – 50% | 15x | 1x |
-| `aggressive` | 50% – 75% | 25x | 2x |
+| Tier           | Range of Max Leverage | Example (40x max, mid conviction) | Example (3x max, mid conviction) |
+| -------------- | --------------------- | --------------------------------- | -------------------------------- |
+| `conservative` | 15% – 25%             | 8x                                | 1x                               |
+| `moderate`     | 25% – 50%             | 15x                               | 1x                               |
+| `aggressive`   | 50% – 75%             | 25x                               | 2x                               |
 
 ### Conviction
 
@@ -406,21 +428,21 @@ The Risk Guardian (6th cron, 5min, Budget tier) enforces account-level guard rai
 
 ### Gate States
 
-| Gate | Meaning | Resets |
-|------|---------|--------|
-| `OPEN` | Normal trading | — |
+| Gate       | Meaning                                  | Resets                               |
+| ---------- | ---------------------------------------- | ------------------------------------ |
+| `OPEN`     | Normal trading                           | —                                    |
 | `COOLDOWN` | Temporary pause after consecutive losses | Auto-expires after `cooldownMinutes` |
-| `CLOSED` | Halted for the day | Midnight UTC |
+| `CLOSED`   | Halted for the day                       | Midnight UTC                         |
 
 When gate != OPEN, `open-position.py` refuses new entries and `emerging-movers.py` shows `available: 0` for that strategy.
 
 ### Guard Rail Rules
 
-| Rule | Trigger | Action |
-|------|---------|--------|
-| **G1** Daily Loss Halt | `accountValue - accountValueStart <= -dailyLossLimit` | Gate → CLOSED |
-| **G3** Max Entries | `entries >= maxEntriesPerDay` (bypass if profitable day + `bypassOnProfit`) | Gate → CLOSED |
-| **G4** Consecutive Losses | Last N results all "L" (N = `maxConsecutiveLosses`) | Gate → COOLDOWN for `cooldownMinutes` |
+| Rule                      | Trigger                                                                     | Action                                |
+| ------------------------- | --------------------------------------------------------------------------- | ------------------------------------- |
+| **G1** Daily Loss Halt    | `accountValue - accountValueStart <= -dailyLossLimit`                       | Gate → CLOSED                         |
+| **G3** Max Entries        | `entries >= maxEntriesPerDay` (bypass if profitable day + `bypassOnProfit`) | Gate → CLOSED                         |
+| **G4** Consecutive Losses | Last N results all "L" (N = `maxConsecutiveLosses`)                         | Gate → COOLDOWN for `cooldownMinutes` |
 
 ### Config (`guardRails` in strategy registry)
 
@@ -458,6 +480,7 @@ All parameters are optional — defaults are used for any missing key. Set per s
 ## Troubleshooting
 
 See `references/learnings.md` for known bugs, gotchas, and trading discipline rules. Key ones:
+
 - **`dryRun: true` actually executes** — NEVER use dryRun
 - **Max leverage varies per asset** — always check `max-leverage.json`
 - **`close_position` is the close tool** — not `edit_position`
@@ -467,13 +490,13 @@ See `references/learnings.md` for known bugs, gotchas, and trading discipline ru
 
 ## Scripts Reference
 
-| Script | Purpose |
-|--------|---------|
-| `scripts/wolf-setup.py` | Setup wizard — adds strategy to registry from budget |
-| `scripts/wolf_config.py` | Shared config loader — all scripts import this |
-| `scripts/emerging-movers.py` | Emerging Movers v4 scanner (FIRST_JUMP, IMMEDIATE, CONTRIB_EXPLOSION) |
-| `scripts/dsl-combined.py` | DSL v5 combined trailing stop engine (all positions, all strategies) |
-| `scripts/sm-flip-check.py` | SM conviction flip detector (multi-strategy) |
-| `scripts/wolf-monitor.py` | Watchdog — per-strategy margin buffer + position health |
-| `scripts/job-health-check.py` | Per-strategy orphan DSL / state validation |
-| `scripts/risk-guardian.py` | Risk Guardian — account-level guard rails (daily loss, max entries, consecutive loss cooldown) |
+| Script                        | Purpose                                                                                        |
+| ----------------------------- | ---------------------------------------------------------------------------------------------- |
+| `scripts/wolf-setup.py`       | Setup wizard — adds strategy to registry from budget                                           |
+| `scripts/wolf_config.py`      | Shared config loader — all scripts import this                                                 |
+| `scripts/emerging-movers.py`  | Emerging Movers v4 scanner (FIRST_JUMP, IMMEDIATE, CONTRIB_EXPLOSION)                          |
+| `scripts/dsl-combined.py`     | DSL v5 combined trailing stop engine (all positions, all strategies)                           |
+| `scripts/sm-flip-check.py`    | SM conviction flip detector (multi-strategy)                                                   |
+| `scripts/wolf-monitor.py`     | Watchdog — per-strategy margin buffer + position health                                        |
+| `scripts/job-health-check.py` | Per-strategy orphan DSL / state validation                                                     |
+| `scripts/risk-guardian.py`    | Risk Guardian — account-level guard rails (daily loss, max entries, consecutive loss cooldown) |
