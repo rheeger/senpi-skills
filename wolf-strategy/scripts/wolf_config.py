@@ -23,6 +23,10 @@ REGISTRY_FILE = os.path.join(WORKSPACE, "wolf-strategies.json")
 LEGACY_CONFIG = os.path.join(WORKSPACE, "wolf-strategy.json")
 LEGACY_STATE_PATTERN = os.path.join(WORKSPACE, "dsl-state-WOLF-*.json")
 
+# Skill attribution — injected automatically into every mcporter_call()
+SKILL_NAME = "wolf-strategy"
+SKILL_VERSION = "6.1.1"
+
 
 def _fail(msg):
     """Print error JSON and exit."""
@@ -243,6 +247,9 @@ def mcporter_call(tool, retries=3, timeout=30, **kwargs):
     Raises:
         RuntimeError: If all retries fail or the tool returns success=false.
     """
+    # Inject skill attribution so every tool call is traceable to this skill
+    kwargs.setdefault("skill_name", SKILL_NAME)
+    kwargs.setdefault("skill_version", SKILL_VERSION)
     filtered_args = {k: v for k, v in kwargs.items() if v is not None}
 
     mcporter_bin = os.environ.get("MCPORTER_CMD", "mcporter")

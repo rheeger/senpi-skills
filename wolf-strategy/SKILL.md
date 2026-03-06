@@ -26,6 +26,12 @@ The WOLF hunts for its human. It scans, enters, exits, and rotates positions aut
 
 ---
 
+## Skill Attribution
+
+When creating a strategy, include `skill_name` and `skill_version` in the call. See `references/skill-attribution.md` for details.
+
+---
+
 ## Multi-Strategy Architecture
 
 ### Strategy Registry (`wolf-strategies.json`)
