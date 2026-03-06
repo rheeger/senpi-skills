@@ -36,7 +36,10 @@ def get_active_dsl_states(strategy_key):
                 state = json.load(fh)
             if not isinstance(state, dict):
                 continue
-            asset = os.path.basename(f).replace("dsl-", "").replace(".json", "")
+            basename = os.path.basename(f).replace(".json", "")
+            if basename.startswith("dsl-"):
+                basename = basename[4:]
+            asset = basename.replace("--", ":", 1) if "--" in basename else basename
             schema_ok, schema_err = validate_dsl_state(state, f)
             states[asset] = {
                 "active": state.get("active", False),
@@ -122,9 +125,8 @@ def check_strategy(strategy_key, cfg):
                 asset_key = clean_key
             else:
                 # --- NO_DSL: check recently-deactivated protection ---
-                clean_coin_check = coin.replace("xyz:", "")
                 recently_deactivated = False
-                existing_path = dsl_state_path(strategy_key, clean_coin_check)
+                existing_path = dsl_state_path(strategy_key, coin)
                 if os.path.exists(existing_path):
                     try:
                         with open(existing_path) as _ef:
@@ -155,9 +157,8 @@ def check_strategy(strategy_key, cfg):
                 leverage = pos.get("leverage")
                 if entry_px and size and leverage:
                     try:
-                        clean_coin = coin.replace("xyz:", "")
                         new_state = dsl_state_template(
-                            asset=clean_coin, direction=pos["direction"],
+                            asset=coin, direction=pos["direction"],
                             entry_price=float(entry_px), size=float(size),
                             leverage=float(leverage), strategy_key=strategy_key,
                             strategy_id=cfg.get("strategyId"),
@@ -166,7 +167,7 @@ def check_strategy(strategy_key, cfg):
                             created_by="healthcheck_auto_create",
                         )
                         new_state["dex"] = _detect_dex(coin)
-                        path = dsl_state_path(strategy_key, clean_coin)
+                        path = dsl_state_path(strategy_key, coin)
                         atomic_write(path, new_state)
                         issues.append({
                             "level": "CRITICAL",
@@ -205,9 +206,8 @@ def check_strategy(strategy_key, cfg):
             leverage = pos.get("leverage")
             if entry_px and size and leverage:
                 try:
-                    clean_coin = coin.replace("xyz:", "")
                     new_state = dsl_state_template(
-                        asset=clean_coin, direction=pos["direction"],
+                        asset=coin, direction=pos["direction"],
                         entry_price=float(entry_px), size=float(size),
                         leverage=float(leverage), strategy_key=strategy_key,
                         strategy_id=cfg.get("strategyId"),
@@ -216,7 +216,7 @@ def check_strategy(strategy_key, cfg):
                         created_by="healthcheck_schema_replace",
                     )
                     new_state["dex"] = _detect_dex(coin)
-                    path = dsl_state_path(strategy_key, clean_coin)
+                    path = dsl_state_path(strategy_key, coin)
                     atomic_write(path, new_state)
                     issues.append({
                         "level": "CRITICAL",
@@ -253,9 +253,8 @@ def check_strategy(strategy_key, cfg):
             leverage = pos.get("leverage", dsl.get("leverage"))
             if entry_px and size and leverage:
                 try:
-                    clean_coin = coin.replace("xyz:", "")
                     new_state = dsl_state_template(
-                        asset=clean_coin, direction=pos["direction"],
+                        asset=coin, direction=pos["direction"],
                         entry_price=float(entry_px), size=float(size),
                         leverage=float(leverage), strategy_key=strategy_key,
                         strategy_id=cfg.get("strategyId"),
@@ -264,7 +263,7 @@ def check_strategy(strategy_key, cfg):
                         created_by="healthcheck_inactive_replace",
                     )
                     new_state["dex"] = _detect_dex(coin)
-                    path = dsl_state_path(strategy_key, clean_coin)
+                    path = dsl_state_path(strategy_key, coin)
                     atomic_write(path, new_state)
                     issues.append({
                         "level": "CRITICAL",
