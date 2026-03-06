@@ -14,8 +14,8 @@ import time
 sys.path.insert(0, os.path.dirname(__file__))
 
 from tiger_config import (
-    load_config, load_state, save_state, get_clearinghouse,
-    edit_position, days_remaining, output
+    load_config, load_state, save_state, reconcile_positions,
+    get_clearinghouse, edit_position, days_remaining, output
 )
 
 
@@ -284,6 +284,7 @@ def evaluate_position(pos_data: dict, active_pos: dict, config: dict, state: dic
 def main():
     config = load_config()
     state = load_state()
+    state = reconcile_positions(state, config)
 
     if not config.get("strategy_wallet"):
         output({"error": "TIGER not set up."})

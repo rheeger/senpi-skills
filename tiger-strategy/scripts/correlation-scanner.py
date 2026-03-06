@@ -17,7 +17,7 @@ import time
 sys.path.insert(0, os.path.dirname(__file__))
 
 from tiger_config import (
-    load_config, load_state, save_state, get_all_instruments,
+    load_config, load_state, save_state, reconcile_positions, get_all_instruments,
     get_asset_candles, get_sm_markets, output
 )
 from tiger_lib import (
@@ -244,6 +244,7 @@ def check_alt_lag(asset: str, btc_direction: str, btc_move: float,
 def main():
     config = load_config()
     state = load_state()
+    state = reconcile_positions(state, config)
 
     if state.get("halted"):
         output({"action": "correlation_scan", "halted": True, "reason": state.get("halt_reason")})

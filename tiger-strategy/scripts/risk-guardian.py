@@ -15,7 +15,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from tiger_config import (close_position, day_number, days_remaining,
                           edit_position, get_all_instruments,
-                          get_clearinghouse, load_config, load_oi_history,
+                          get_clearinghouse, load_config,
+                          load_oi_history, reconcile_positions,
                           load_state, now_utc, output, save_state,
                           shorten_address)
 
@@ -221,6 +222,7 @@ def check_position_pnl(config, state, positions_data):
 def main():
     config = load_config()
     state = load_state()
+    state = reconcile_positions(state, config)
 
     if not config.get("strategy_wallet"):
         output({"error": "TIGER not set up."})

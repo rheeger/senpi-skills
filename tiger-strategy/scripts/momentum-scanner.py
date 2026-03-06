@@ -25,7 +25,7 @@ import signal
 sys.path.insert(0, os.path.dirname(__file__))
 
 from tiger_config import (
-    load_config, load_state, get_all_instruments,
+    load_config, load_state, reconcile_positions, get_all_instruments,
     get_asset_candles, output, STATE_DIR,
     load_prescreened_candidates
 )
@@ -147,6 +147,7 @@ def scan_asset(asset: str, context: dict, config: dict) -> dict:
 def main():
     config = load_config()
     state = load_state()
+    state = reconcile_positions(state, config)
 
     if state.get("halted"):
         output({"action": "momentum_scan", "halted": True, "reason": state.get("halt_reason")})

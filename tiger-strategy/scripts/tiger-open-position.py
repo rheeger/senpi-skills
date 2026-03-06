@@ -23,9 +23,9 @@ import tempfile
 import time
 from datetime import datetime, timezone
 
-from tiger_config import (atomic_write, create_position, get_clearinghouse,
-                          get_prices, load_config, load_state, log_trade,
-                          now_utc, output, save_state, WORKSPACE, STATE_DIR)
+from tiger_config import (STATE_DIR, WORKSPACE, atomic_write, create_position,
+                          get_clearinghouse, get_prices, load_config,
+                          load_state, log_trade, now_utc, output, save_state)
 
 DSL_TIERS_BY_PATTERN = {
     "COMPRESSION_BREAKOUT": {

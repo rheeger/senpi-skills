@@ -260,6 +260,44 @@ def save_state(state: dict):
     atomic_write(STATE_FILE, state)
 
 
+def reconcile_positions(state: dict, config: dict) -> dict:
+    """Remove ghost positions from state that no longer exist on-chain.
+
+    DSL closes positions by archiving its own state files but never
+    updates tiger-state.json. This leaves ghost entries that block
+    scanners from opening new positions. Call this before checking
+    slot availability.
+    """
+    wallet = config.get("strategy_wallet") or config.get("strategyWallet")
+    if not wallet:
+        return state
+
+    try:
+        ch = get_clearinghouse(wallet)
+    except Exception:
+        return state
+    if ch.get("error"):
+        return state
+
+    on_chain = set()
+    for section in ("main", "xyz"):
+        for p in ch.get(section, {}).get("assetPositions", []):
+            pos = p.get("position", {})
+            coin = pos.get("coin", "")
+            if coin and float(pos.get("szi", 0)) != 0:
+                on_chain.add(coin.upper())
+
+    active = state.get("active_positions", {})
+    ghosts = [k for k in active if k.upper() not in on_chain]
+
+    if ghosts:
+        for g in ghosts:
+            del active[g]
+        save_state(state)
+
+    return state
+
+
 # ─── OI History ──────────────────────────────────────────────
 
 def load_oi_history() -> dict:
