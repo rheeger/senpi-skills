@@ -22,6 +22,25 @@ from datetime import datetime, timezone
 # ---------------------------------------------------------------------------
 
 DEFAULT_STATE_DIR = "/data/workspace/dsl"
+HEARTBEAT_FILE = os.path.join(
+    os.environ.get("OPENCLAW_WORKSPACE",
+                   os.environ.get("FOX_WORKSPACE", "/data/workspace")),
+    "state", "cron-heartbeats.json")
+
+
+def _write_heartbeat(name: str = "dsl_combined") -> None:
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        with open(HEARTBEAT_FILE) as f:
+            beats = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        beats = {}
+    beats[name] = ts
+    os.makedirs(os.path.dirname(HEARTBEAT_FILE), exist_ok=True)
+    tmp = HEARTBEAT_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(beats, f, indent=2)
+    os.replace(tmp, HEARTBEAT_FILE)
 
 
 def _resolve_mcporter():
@@ -974,6 +993,7 @@ def process_one_position(state_file: str, strategy_id: str, now: str) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    _write_heartbeat()
     state_dir = os.environ.get("DSL_STATE_DIR", DEFAULT_STATE_DIR)
     strategy_id = os.environ.get("DSL_STRATEGY_ID", "").strip()
     if not strategy_id:

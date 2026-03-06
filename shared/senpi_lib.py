@@ -79,24 +79,61 @@ def mcporter_call(tool, retries=3, timeout=30, **kwargs):
     last_error = None
 
     for attempt in range(retries):
-        fd, tmp = None, None
+        fd, tmp, err_tmp = None, None, None
         try:
             fd, tmp = tempfile.mkstemp(suffix=".json")
             os.close(fd)
+            fd2, err_tmp = tempfile.mkstemp(suffix=".err")
+            os.close(fd2)
             subprocess.run(
-                f"{cmd_str} > {tmp} 2>/dev/null",
+                f"{cmd_str} > {tmp} 2> {err_tmp}",
                 shell=True, timeout=timeout,
             )
             with open(tmp) as f:
-                d = json.load(f)
+                raw = f.read()
+            stderr_text = ""
+            try:
+                with open(err_tmp) as ef:
+                    stderr_text = ef.read().strip()
+            except OSError:
+                pass
+            if not raw.strip():
+                hint = f"; stderr={stderr_text[:200]!r}" if stderr_text else ""
+                last_error = f"empty response (attempt {attempt + 1}){hint}"
+                if attempt < retries - 1:
+                    time.sleep(3)
+                continue
+            try:
+                d = json.loads(raw)
+            except json.JSONDecodeError:
+                idx = raw.find("{")
+                if idx > 0:
+                    try:
+                        d = json.loads(raw[idx:])
+                    except json.JSONDecodeError:
+                        d = None
+                else:
+                    d = None
+                if d is None:
+                    preview = raw[:300].replace("\n", "\\n")
+                    hint = f"; stderr={stderr_text[:200]!r}" if stderr_text else ""
+                    last_error = (f"JSON parse failed (attempt {attempt + 1}): "
+                                  f"raw[:{min(len(raw), 300)}]={preview!r}{hint}")
+                    if attempt < retries - 1:
+                        time.sleep(3)
+                    continue
             if d.get("success"):
                 return d.get("data", {})
             last_error = d.get("error", d)
-        except (json.JSONDecodeError, subprocess.TimeoutExpired, OSError) as e:
+        except subprocess.TimeoutExpired:
+            last_error = f"timeout after {timeout}s (attempt {attempt + 1})"
+        except OSError as e:
             last_error = str(e)
         finally:
             if tmp and os.path.exists(tmp):
                 os.unlink(tmp)
+            if err_tmp and os.path.exists(err_tmp):
+                os.unlink(err_tmp)
         if attempt < retries - 1:
             time.sleep(3)
 
