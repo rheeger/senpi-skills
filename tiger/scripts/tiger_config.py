@@ -11,11 +11,11 @@ THE config loader. All scripts import this. No script reads config independently
 
 import json
 import os
+import subprocess
 import sys
 import time
-import subprocess
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
 
 # ─── Paths ───────────────────────────────────────────────────
 
@@ -556,11 +556,25 @@ def mcporter_call(tool, **kwargs):
     return {"error": str(last_error), "success": False}
 
 
-def get_all_instruments():
-    """Fetch all instruments with OI, funding, volume."""
-    result = mcporter_call("market_list_instruments")
-    data = result.get("data", result)
-    return data.get("instruments", [])
+def get_all_instruments(retries: int = 2):
+    """Fetch all instruments with OI, funding, volume.
+    mcporter_call already retries 3x internally; this adds an outer retry
+    for cases where the response parses but contains no instruments."""
+    last_error = None
+    for attempt in range(retries):
+        result = mcporter_call("market_list_instruments")
+        if result.get("success") or result.get("data"):
+            data = result.get("data", result)
+            instruments = data.get("instruments", [])
+            if instruments:
+                return instruments
+            last_error = "empty instruments list"
+        else:
+            last_error = result.get("error", "unknown")
+        if attempt < retries - 1:
+            time.sleep(3)
+    print(f"WARN: get_all_instruments failed after {retries} outer attempts: {last_error}", file=sys.stderr)
+    return []
 
 
 def get_asset_candles(asset, intervals=None, include_funding=False):

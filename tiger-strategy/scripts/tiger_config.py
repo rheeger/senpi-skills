@@ -357,13 +357,20 @@ def mcporter_call(tool: str, timeout_s: int = 15, **kwargs) -> dict:
         return {"error": str(e), "success": False}
 
 
-def get_all_instruments() -> list:
-    """Fetch all instruments with OI, funding, volume."""
-    result = mcporter_call("market_list_instruments", timeout_s=30)
-    if not result.get("success") and not result.get("data"):
-        return []
-    data = result.get("data", result)
-    return data.get("instruments", [])
+def get_all_instruments(retries: int = 3) -> list:
+    """Fetch all instruments with OI, funding, volume.
+    Retries on transient failures (timeout, network) with exponential backoff."""
+    last_error = None
+    for attempt in range(retries):
+        result = mcporter_call("market_list_instruments", timeout_s=30)
+        if result.get("success") or result.get("data"):
+            data = result.get("data", result)
+            return data.get("instruments", [])
+        last_error = result.get("error", "unknown")
+        if attempt < retries - 1:
+            time.sleep(2 ** attempt)
+    print(f"WARN: get_all_instruments failed after {retries} attempts: {last_error}", file=sys.stderr)
+    return []
 
 
 def _synthesize_candles_from_history(asset: str, intervals: list) -> dict:

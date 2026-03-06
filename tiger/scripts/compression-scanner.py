@@ -6,21 +6,20 @@ Runs every 5min. Primary entry signal for TIGER.
 MANDATE: Run TIGER compression scanner. Find BB squeeze breakouts with OI confirmation. Report signals.
 """
 
-import sys
-import os
 import json
+import os
+import sys
 import time
+
 sys.path.insert(0, os.path.dirname(__file__))
 
-from tiger_config import (
-    load_config, load_state, save_state, get_all_instruments,
-    get_asset_candles, get_asset_candles_batch, load_oi_history, output, STATE_DIR,
-    load_prescreened_candidates
-)
-from tiger_lib import (
-    parse_candles, bollinger_bands, bb_width, bb_width_percentile,
-    atr, rsi, volume_ratio, oi_change_pct, confluence_score
-)
+from tiger_config import (STATE_DIR, get_all_instruments, get_asset_candles,
+                          get_asset_candles_batch, load_config,
+                          load_oi_history, load_prescreened_candidates,
+                          load_state, mcporter_call, output, save_state)
+from tiger_lib import (atr, bb_width, bb_width_percentile, bollinger_bands,
+                       confluence_score, oi_change_pct, parse_candles, rsi,
+                       volume_ratio)
 
 
 def scan_asset(asset: str, context: dict, config: dict, oi_hist: dict, preloaded_candles: dict = None) -> dict:
@@ -143,10 +142,11 @@ def main():
         output({"action": "compression_scan", "halted": True, "reason": state.get("halt_reason")})
         return
 
-    # Get all instruments
+    # Get all instruments (retries internally on transient failures)
     instruments = get_all_instruments()
     if not instruments:
-        output({"error": "Failed to fetch instruments"})
+        diag = mcporter_call("market_list_instruments")
+        output({"error": "Failed to fetch instruments", "detail": diag.get("error", "empty response")})
         return
 
     oi_hist = load_oi_history()
