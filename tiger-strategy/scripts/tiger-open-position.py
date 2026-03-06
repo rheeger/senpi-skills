@@ -20,11 +20,12 @@ import json
 import os
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 
 from tiger_config import (atomic_write, create_position, get_clearinghouse,
-                          load_config, load_state, log_trade, now_utc, output,
-                          save_state, WORKSPACE, STATE_DIR)
+                          get_prices, load_config, load_state, log_trade,
+                          now_utc, output, save_state, WORKSPACE, STATE_DIR)
 
 DSL_TIERS_BY_PATTERN = {
     "COMPRESSION_BREAKOUT": {
@@ -263,27 +264,45 @@ def main():
     if result.get("error"):
         fail("create_position_failed", detail=result["error"])
 
-    # 6. Fetch actual fill data from clearinghouse
+    # 6. Fetch actual fill data from clearinghouse (retry up to 3 times)
     approximate = False
-    try:
-        ch_post = get_clearinghouse(wallet)
-        pos_data = extract_position(ch_post, args.asset)
-        if pos_data:
-            entry_price = pos_data["entryPx"]
-            size = pos_data["size"]
-            actual_leverage = pos_data["leverage"] or args.leverage
-            if not entry_price:
-                approximate = True
-        else:
-            approximate = True
-            entry_price = 0
-            size = round(args.margin * args.leverage, 6)
-            actual_leverage = args.leverage
-    except Exception:
+    entry_price = 0
+    size = 0
+    actual_leverage = args.leverage
+    max_retries = 3
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            if attempt > 1:
+                time.sleep(2)
+            ch_post = get_clearinghouse(wallet)
+            pos_data = extract_position(ch_post, args.asset)
+            if pos_data and pos_data["entryPx"]:
+                entry_price = pos_data["entryPx"]
+                size = pos_data["size"]
+                actual_leverage = pos_data["leverage"] or args.leverage
+                break
+        except Exception:
+            pass
+
+    if not entry_price:
+        # Clearinghouse didn't return fill data — approximate from market price
         approximate = True
-        entry_price = 0
-        size = round(args.margin * args.leverage, 6)
-        actual_leverage = args.leverage
+        try:
+            prices = get_prices([args.asset])
+            px_data = prices.get("data", prices) if isinstance(prices, dict) else {}
+            market_price = float(px_data.get(args.asset, 0))
+        except Exception:
+            market_price = 0
+
+        if market_price > 0:
+            entry_price = market_price
+            size = round(args.margin * args.leverage / market_price, 6)
+        else:
+            fail("fill_data_unavailable",
+                 detail="Position opened but cannot determine entry price. "
+                        "Health check will reconcile when clearinghouse is reachable.",
+                 asset=args.asset, direction=args.direction)
 
     # 7. Create DSL v5 state file
     dsl_state = dsl_state_template(

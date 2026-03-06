@@ -892,7 +892,29 @@ def process_one_position(state_file: str, strategy_id: str, now: str) -> None:
     state["lastPrice"] = price
     entry = state["entryPrice"]
     size = state["size"]
-    leverage = state["leverage"]
+    leverage = max(1, state.get("leverage", 1))
+
+    if not entry or entry <= 0 or not size or size <= 0:
+        state["active"] = False
+        state["closeReason"] = (
+            f"zero_entry_data: entryPrice={entry}, size={size} — "
+            "state is corrupt, deactivating to prevent bad calculations"
+        )
+        try:
+            with open(state_file, "w") as f:
+                json.dump(state, f, indent=2)
+        except OSError:
+            pass
+        print(json.dumps({
+            "status": "error",
+            "error": "zero_entry_data",
+            "detail": f"entryPrice={entry}, size={size} — deactivated",
+            "asset": asset,
+            "strategy_id": strategy_id,
+            "time": now,
+        }))
+        return
+
     hw = update_high_water(state, price, is_long)
 
     upnl = (price - entry) * size if is_long else (entry - price) * size
