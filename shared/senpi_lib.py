@@ -543,14 +543,25 @@ def make_state_dir(workspace, strategy_key):
     return d
 
 
+def _asset_to_filename(asset):
+    """Convert asset to filesystem-safe filename. xyz:SILVER -> xyz--SILVER"""
+    if asset.startswith("xyz:"):
+        return asset.replace(":", "--", 1)
+    return asset
+
+
 def make_dsl_state_path(workspace, strategy_key, asset):
-    """Get the DSL state file path for a strategy + asset."""
-    return os.path.join(make_state_dir(workspace, strategy_key), f"dsl-{asset}.json")
+    """Get the DSL state file path for a strategy + asset.
+
+    Uses DSL v5 naming convention: {asset}.json (not dsl-{asset}.json).
+    xyz assets use -- separator: xyz:SILVER -> xyz--SILVER.json
+    """
+    return os.path.join(make_state_dir(workspace, strategy_key), f"{_asset_to_filename(asset)}.json")
 
 
 def make_dsl_state_glob(workspace, strategy_key):
     """Get the glob pattern for all DSL state files in a strategy."""
-    return os.path.join(make_state_dir(workspace, strategy_key), "dsl-*.json")
+    return os.path.join(make_state_dir(workspace, strategy_key), "*.json")
 
 
 def get_all_active_positions_base(strategies, dsl_state_glob_fn):

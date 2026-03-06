@@ -10,15 +10,19 @@ Usage:
   python3 fox-open-position.py --strategy fox-abc123 --asset HYPE --direction LONG
   python3 fox-open-position.py --strategy fox-abc123 --asset HYPE --signal-index 0
 """
-import json, sys, os, argparse, glob
+import argparse
+import glob
+import json
+import os
+import sys
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fox_config import (load_strategy, dsl_state_path, dsl_state_glob,
-                         dsl_state_template, atomic_write, mcporter_call,
-                         mcporter_call_safe, calculate_leverage, strategy_lock,
-                         WORKSPACE, ROTATION_COOLDOWN_MINUTES,
-                         count_active_dsls, extract_single_position)
+from fox_config import (ROTATION_COOLDOWN_MINUTES, WORKSPACE, atomic_write,
+                        calculate_leverage, count_active_dsls, dsl_state_glob,
+                        dsl_state_path, dsl_state_template,
+                        extract_single_position, load_strategy, mcporter_call,
+                        mcporter_call_safe, strategy_lock)
 
 
 def fail(msg, **extra):
@@ -129,7 +133,11 @@ def main():
     is_reentry = False
     reentry_of = None
     if args.signal_index is not None:
-        scanner_output_file = os.path.join(WORKSPACE, "fox-emerging-movers-output.json")
+        emerging_history = os.environ.get("EMERGING_HISTORY", "")
+        if emerging_history:
+            scanner_output_file = os.path.join(os.path.dirname(emerging_history), "fox-emerging-movers-output.json")
+        else:
+            scanner_output_file = os.path.join(WORKSPACE, "fox-emerging-movers-output.json")
         try:
             with open(scanner_output_file) as f:
                 scanner_output = json.load(f)
@@ -377,8 +385,9 @@ def main():
         if isinstance(dsl_cfg.get("tiers"), list) and len(dsl_cfg["tiers"]) > 0:
             tiers = dsl_cfg["tiers"]
 
+        dsl_asset = coin if is_xyz else clean_asset
         dsl_state = dsl_state_template(
-            asset=clean_asset,
+            asset=dsl_asset,
             direction=direction,
             entry_price=entry_price,
             size=size,
@@ -397,7 +406,7 @@ def main():
             dsl_state["approximate"] = True
 
         # 11. Write DSL state atomically
-        dsl_path = dsl_state_path(strategy_key, clean_asset)
+        dsl_path = dsl_state_path(strategy_key, dsl_asset)
         atomic_write(dsl_path, dsl_state)
     finally:
         lock_ctx.__exit__(None, None, None)
