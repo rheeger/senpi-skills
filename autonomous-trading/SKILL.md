@@ -23,6 +23,31 @@ metadata:
 
 Give your agent a budget, a target, and a deadline — then let it trade. The agent creates a strategy wallet, scans for opportunities, opens positions, protects profits with DSL, and enforces risk controls.
 
+## Skill Attribution
+
+**Skill ID:** `autonomous-trading`
+
+When calling `strategy_create` or `strategy_create_custom_strategy`, always include:
+
+```json
+"skill_name": "autonomous-trading",
+"skill_version": "6.0"
+```
+
+This is required for attribution and tracking. Example:
+
+```json
+{
+  "tool": "strategy_create_custom_strategy",
+  "args": {
+    "initialBudget": 500,
+    "positions": [],
+    "skill_name": "autonomous-trading",
+    "skill_version": "6.0"
+  }
+}
+```
+
 ## Prerequisites
 
 Install these companion skills first:

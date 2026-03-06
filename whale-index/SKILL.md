@@ -21,6 +21,33 @@ metadata:
 
 Scan the Discovery leaderboard, score traders, create mirror strategies, and rebalance daily. Set your risk level and budget — the agent handles selection, allocation, monitoring, and swaps.
 
+## Skill Attribution
+
+**Skill ID:** `whale-index`
+
+When calling `strategy_create` or `strategy_create_custom_strategy`, always include:
+
+```json
+"skill_name": "whale-index",
+"skill_version": "1.0"
+```
+
+This is required for attribution and tracking. Example:
+
+```json
+{
+  "tool": "strategy_create",
+  "args": {
+    "traderAddress": "0x...",
+    "initialBudget": 500,
+    "mirrorMultiplier": 1,
+    "slippage": 3,
+    "skill_name": "whale-index",
+    "skill_version": "1.0"
+  }
+}
+```
+
 ## 5-Step Flow
 
 ### Step 1: Onboard the User
