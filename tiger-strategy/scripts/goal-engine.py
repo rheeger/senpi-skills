@@ -28,8 +28,8 @@ def recalculate_goal(config, state):
         return {"error": f"Clearinghouse fetch failed: {ch['error']}"}
 
     ch_data = ch.get("data", ch)
-    # Parse account value from clearinghouse
-    margin_summary = ch_data.get("marginSummary", ch_data.get("crossMarginSummary", {}))
+    main_data = ch_data.get("main", ch_data)
+    margin_summary = main_data.get("crossMarginSummary", main_data.get("marginSummary", {}))
     current_balance = float(margin_summary.get("accountValue", state.get("current_balance", config["budget"])))
 
     # Update state

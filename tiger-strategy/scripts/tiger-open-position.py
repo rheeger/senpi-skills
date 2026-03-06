@@ -83,12 +83,22 @@ def fail(msg, **extra):
     sys.exit(1)
 
 
+def _unwrap_ch(ch_data):
+    """Unwrap clearinghouse response — data may be nested under 'data' key."""
+    if isinstance(ch_data, dict) and "data" in ch_data and isinstance(ch_data["data"], dict):
+        inner = ch_data["data"]
+        if "main" in inner or "xyz" in inner:
+            return inner
+    return ch_data
+
+
 def count_on_chain_positions(ch_data):
     """Count non-zero positions from clearinghouse data."""
+    data = _unwrap_ch(ch_data)
     count = 0
     coins = []
     for section_key in ("main", "xyz"):
-        section = ch_data.get(section_key, {})
+        section = data.get(section_key, {})
         for p in section.get("assetPositions", []):
             if not isinstance(p, dict):
                 continue
@@ -103,8 +113,9 @@ def count_on_chain_positions(ch_data):
 
 def extract_position(ch_data, coin):
     """Extract a single position's fill data from clearinghouse response."""
+    data = _unwrap_ch(ch_data)
     for section_key in ("main", "xyz"):
-        section = ch_data.get(section_key, {})
+        section = data.get(section_key, {})
         for p in section.get("assetPositions", []):
             if not isinstance(p, dict):
                 continue
@@ -291,6 +302,8 @@ def main():
         try:
             prices = get_prices([args.asset])
             px_data = prices.get("data", prices) if isinstance(prices, dict) else {}
+            if isinstance(px_data, dict) and "prices" in px_data:
+                px_data = px_data["prices"]
             market_price = float(px_data.get(args.asset, 0))
         except Exception:
             market_price = 0

@@ -235,9 +235,10 @@ def main():
         return
 
     ch_data = ch.get("data", ch)
-    margin_summary = ch_data.get("marginSummary", ch_data.get("crossMarginSummary", {}))
+    main_data = ch_data.get("main", ch_data)
+    margin_summary = main_data.get("crossMarginSummary", main_data.get("marginSummary", {}))
     current_balance = float(margin_summary.get("accountValue", state["current_balance"]))
-    positions = ch_data.get("assetPositions", [])
+    positions = main_data.get("assetPositions", [])
 
     # Parse positions
     parsed_positions = []

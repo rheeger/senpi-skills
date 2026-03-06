@@ -451,8 +451,17 @@ def get_portfolio() -> dict:
 
 
 def get_clearinghouse(wallet: str) -> dict:
-    """Get clearinghouse state for a strategy wallet."""
-    return mcporter_call("strategy_get_clearinghouse_state", strategy_wallet=wallet)
+    """Get clearinghouse state for a strategy wallet.
+
+    Unwraps the 'data' envelope so callers get {main: {...}, xyz: {...}}
+    directly. Error responses (no 'data' key) pass through unchanged.
+    """
+    result = mcporter_call("strategy_get_clearinghouse_state", strategy_wallet=wallet)
+    if isinstance(result, dict) and isinstance(result.get("data"), dict):
+        inner = result["data"]
+        if "main" in inner or "xyz" in inner:
+            return inner
+    return result
 
 
 def create_position(wallet: str, orders: list, reason: str = "") -> dict:
