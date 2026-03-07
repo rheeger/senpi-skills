@@ -16,12 +16,14 @@ Complete JSON schema for DSL v4/v5 state files. One state file per position. v5 
   "strategyId": "uuid-of-strategy",
   "phase": 1,
   "phase1": {
+    "enabled": true,
     "retraceThreshold": 0.03,
     "consecutiveBreachesRequired": 3,
     "absoluteFloor": 28.00
   },
   "phase2TriggerTier": 1,
   "phase2": {
+    "enabled": true,
     "retraceThreshold": 0.015,
     "consecutiveBreachesRequired": 2
   },
@@ -33,7 +35,6 @@ Complete JSON schema for DSL v4/v5 state files. One state file per position. v5 
     {"triggerPct": 75, "lockPct": 60, "retrace": 0.008},
     {"triggerPct": 100, "lockPct": 80, "retrace": 0.006}
   ],
-  "breachDecay": "hard",
   "closeRetries": 2,
   "closeRetryDelaySec": 3,
   "maxFetchFailures": 10,
@@ -72,20 +73,22 @@ Complete JSON schema for DSL v4/v5 state files. One state file per position. v5 
 | `currentBreachCount` | int | Initialize to 0 |
 | `createdAt` | string | ISO 8601 timestamp |
 
-### phase1 Object
+### phase1 Object (capital protection — avoid losing original money)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `retraceThreshold` | float | Retrace from HW in **ROE** terms (e.g. 0.03 = 3% ROE). Script converts to price via ÷ leverage so 3% means 3% ROE at any leverage. |
+| `enabled` | bool | If true, Phase 1 is active. At least one of phase1.enabled or phase2.enabled must be true. |
+| `retraceThreshold` | float | Retrace from HW in **ROE** terms (e.g. 0.03 = 3% ROE). Script converts to price via ÷ leverage. |
 | `consecutiveBreachesRequired` | int | Checks below floor before close |
 | `absoluteFloor` | number | Hard price floor — max loss cap |
 
-### phase2 Object
+### phase2 Object (tier-based only)
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `enabled` | bool | If true, Phase 2 (tiers) is active. Tiers are used only in Phase 2. |
 | `retraceThreshold` | float | Default retrace (ROE fraction) for tiers without per-tier override |
-| `consecutiveBreachesRequired` | int | Consecutive breach checks before close (default: 1 — close on first breach in Phase 2) |
+| `consecutiveBreachesRequired` | int | Consecutive breach checks before close (default: 1 in Phase 2) |
 
 ### Tier Objects
 
@@ -99,7 +102,6 @@ Complete JSON schema for DSL v4/v5 state files. One state file per position. v5 
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `breachDecay` | `"hard"` | `"hard"` resets breach count to 0 on recovery; `"soft"` decays by 1 |
 | `closeRetries` | `2` | Close attempts before setting `pendingClose` |
 | `closeRetryDelaySec` | `3` | Seconds between retry attempts |
 | `maxFetchFailures` | `10` | Auto-deactivate after this many consecutive fetch failures |

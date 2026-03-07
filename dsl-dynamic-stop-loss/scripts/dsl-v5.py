@@ -60,7 +60,7 @@ def list_strategy_state_files(state_dir: str, strategy_id: str) -> list[tuple[st
     if not os.path.isdir(strategy_dir):
         return out
     for name in os.listdir(strategy_dir):
-        if "_archived" in name or ".archived" in name:
+        if name.startswith("strategy-") or "_archived" in name or ".archived" in name:
             continue
         path = os.path.join(strategy_dir, name)
         if not name.endswith(".json") or not os.path.isfile(path):
@@ -86,6 +86,30 @@ def dex_and_lookup_symbol(asset: str) -> tuple[str, str]:
 DSL_ACTIVE_STATUSES = ("ACTIVE", "PAUSED")
 
 
+def _mcp_result_ok(result) -> bool:
+    """2-tuple (result, error): success when error is None; 3-tuple (success, *rest): success when first is True."""
+    if not isinstance(result, tuple) or len(result) < 2:
+        return True
+    if len(result) == 2:
+        return result[1] is None
+    return result[0] is True
+
+
+def _retry_mcp_call(fn, *args, max_attempts=4, delay_seconds=1.0, **kwargs):
+    """Run fn(*args, **kwargs); on failure, retry up to max_attempts (1 initial + 3 retries)."""
+    last_result = None
+    for attempt in range(max_attempts):
+        try:
+            last_result = fn(*args, **kwargs)
+            if _mcp_result_ok(last_result):
+                return last_result
+        except Exception as e:
+            last_result = (None, str(e))
+        if attempt + 1 < max_attempts:
+            time.sleep(delay_seconds)
+    return last_result
+
+
 def _unwrap_mcporter_response(stdout_str: str) -> dict | None:
     """Unwrap mcporter MCP response. May be { content: [{ type, text: '<json>' }] } or direct { success, data }.
     Returns the inner payload (parsed content[0].text or raw) for further use.
@@ -109,8 +133,8 @@ def _unwrap_mcporter_response(stdout_str: str) -> dict | None:
     return raw
 
 
-def _mcp_strategy_get(strategy_id: str) -> tuple[dict | None, str | None]:
-    """Call senpi strategy_get via mcporter. Returns (strategy dict with status, strategyWalletAddress, ...), error."""
+def _mcp_strategy_get_once(strategy_id: str) -> tuple[dict | None, str | None]:
+    """Single attempt: (strategy dict, error)."""
     try:
         r = subprocess.run(
             ["mcporter", "call", "senpi", "strategy_get", "--args", json.dumps({"strategy_id": strategy_id})],
@@ -134,6 +158,11 @@ def _mcp_strategy_get(strategy_id: str) -> tuple[dict | None, str | None]:
         return None, str(e)
 
 
+def _mcp_strategy_get(strategy_id: str) -> tuple[dict | None, str | None]:
+    """Call senpi strategy_get via mcporter. Returns (strategy dict, error). 4 attempts (1 initial + 3 retries) on failure."""
+    return _retry_mcp_call(_mcp_strategy_get_once, strategy_id)
+
+
 def get_strategy_active_and_wallet(strategy_id: str) -> tuple[bool, str | None, str | None, bool]:
     """Check if strategy is active via Senpi MCP strategy_get (not clearinghouse).
     Returns (active, wallet, message, confirmed_inactive).
@@ -153,9 +182,8 @@ def get_strategy_active_and_wallet(strategy_id: str) -> tuple[bool, str | None, 
     return True, wallet, None, False
 
 
-def _mcp_clearinghouse(wallet: str) -> tuple[dict | None, str | None]:
-    """Call senpi strategy_get_clearinghouse_state via mcporter. Single call returns data.main + data.xyz.
-    Returns (data dict with main/xyz and assetPositions, error)."""
+def _mcp_clearinghouse_once(wallet: str) -> tuple[dict | None, str | None]:
+    """Single attempt: (data dict with main/xyz and assetPositions), error."""
     try:
         r = subprocess.run(
             ["mcporter", "call", "senpi", "strategy_get_clearinghouse_state", "--args", json.dumps({"strategy_wallet": wallet})],
@@ -170,6 +198,11 @@ def _mcp_clearinghouse(wallet: str) -> tuple[dict | None, str | None]:
         return data, None
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
         return None, str(e)
+
+
+def _mcp_clearinghouse(wallet: str) -> tuple[dict | None, str | None]:
+    """Call senpi strategy_get_clearinghouse_state via mcporter. 4 attempts (1 initial + 3 retries) on failure."""
+    return _retry_mcp_call(_mcp_clearinghouse_once, wallet)
 
 
 def get_active_position_coins(wallet: str) -> tuple[set[str], str | None]:
@@ -230,10 +263,8 @@ def _unwrap_mcp_response(raw: dict) -> dict | None:
     return raw
 
 
-def fetch_price_mcp(dex: str, lookup_symbol: str) -> tuple[float | None, str | None]:
-    """Fetch mid price via MCP only: senpi market_get_prices then allMids fallback.
-    MCP expects dex '' for main (passing 'main' causes INTERNAL error). xyz response uses keys like xyz:SILVER.
-    """
+def _fetch_price_mcp_once(dex: str, lookup_symbol: str) -> tuple[float | None, str | None]:
+    """Single attempt: fetch mid price via MCP (market_get_prices then allMids fallback)."""
     try:
         dex = dex.strip() if dex else ""
         if dex.lower() == "main":
@@ -276,6 +307,11 @@ def fetch_price_mcp(dex: str, lookup_symbol: str) -> tuple[float | None, str | N
         return None, str(e)
 
 
+def fetch_price_mcp(dex: str, lookup_symbol: str) -> tuple[float | None, str | None]:
+    """Fetch mid price via MCP only. 4 attempts (1 initial + 3 retries) on failure."""
+    return _retry_mcp_call(_fetch_price_mcp_once, dex, lookup_symbol)
+
+
 # ---------------------------------------------------------------------------
 # State normalization (backfill missing phase1/phase2 for older state files)
 # ---------------------------------------------------------------------------
@@ -288,8 +324,8 @@ DEFAULT_PHASE2_BREACHES = 1
 
 
 def normalize_state_phase_config(state: dict) -> bool:
-    """Ensure phase1 and phase2 exist with required fields. Backfills missing keys from schema defaults.
-    Allows older state files (e.g. missing phase2) to run without KeyError.
+    """Ensure phase1 and phase2 exist with required fields and enabled flags. Backfills missing keys.
+    At most two phases; phase1 = capital protection, phase2 = tier-based.
     Returns True if any keys were backfilled (caller may persist state file).
     """
     changed = False
@@ -297,6 +333,9 @@ def normalize_state_phase_config(state: dict) -> bool:
         state["phase1"] = {}
         changed = True
     p1 = state["phase1"]
+    if "enabled" not in p1:
+        p1["enabled"] = True
+        changed = True
     if "retraceThreshold" not in p1:
         p1["retraceThreshold"] = DEFAULT_PHASE1_RETRACE
         changed = True
@@ -320,6 +359,9 @@ def normalize_state_phase_config(state: dict) -> bool:
         state["phase2"] = {}
         changed = True
     p2 = state["phase2"]
+    if "enabled" not in p2:
+        p2["enabled"] = True
+        changed = True
     if "retraceThreshold" not in p2:
         p2["retraceThreshold"] = DEFAULT_PHASE2_RETRACE
         changed = True
@@ -381,7 +423,7 @@ def apply_tier_upgrades(
                     tier_floor = min(tier_floor, float(stored))
             state["currentTierIndex"] = tier_idx
             state["tierFloorPrice"] = tier_floor
-            if phase == 1 and tier_idx >= state.get("phase2TriggerTier", 0):
+            if phase == 1 and tier_idx >= state.get("phase2TriggerTier", 0) and state.get("phase2", {}).get("enabled", True):
                 state["phase"] = 2
                 breach_count = 0
                 state["currentBreachCount"] = 0
@@ -443,12 +485,10 @@ def update_breach_count(state: dict, breached: bool, decay_mode: str) -> int:
 # Edit position (sync SL) and open orders (MCP)
 # ---------------------------------------------------------------------------
 
-def _mcp_edit_position(
+def _mcp_edit_position_once(
     wallet: str, coin: str, stop_loss_price: float, order_type: str = "LIMIT"
 ) -> tuple[bool, str | None, int | None]:
-    """Call senpi edit_position to set/update SL at price. Returns (success, error_message, sl_order_id_from_response).
-    sl_order_id_from_response is None if API does not return it (use strategy_get_open_orders to resolve).
-    """
+    """Single attempt: (success, error_message, sl_order_id_from_response)."""
     args = {
         "strategyWalletAddress": wallet,
         "coin": coin,
@@ -468,7 +508,6 @@ def _mcp_edit_position(
             err = raw.get("error", {})
             msg = err.get("message", err.get("description", str(err))) if isinstance(err, dict) else str(err)
             return False, msg, None
-        # MCP EditPosition returns data.ordersUpdated.stopLoss.orderId (or data = raw when unwrapped)
         data = raw.get("data") or raw
         oid = None
         if isinstance(data, dict):
@@ -489,9 +528,15 @@ def _mcp_edit_position(
         return False, str(e), None
 
 
-def _mcp_strategy_get_open_orders(wallet: str, dex: str = "") -> tuple[list[dict], str | None]:
-    """Call senpi strategy_get_open_orders. Returns (list of orders with oid, coin, triggerPx, etc.), error.
-    dex must match the position's dex (same as for market price): '' for main, 'xyz' for xyz assets."""
+def _mcp_edit_position(
+    wallet: str, coin: str, stop_loss_price: float, order_type: str = "LIMIT"
+) -> tuple[bool, str | None, int | None]:
+    """Call senpi edit_position to set/update SL at price. 4 attempts (1 initial + 3 retries) on failure."""
+    return _retry_mcp_call(_mcp_edit_position_once, wallet, coin, stop_loss_price, order_type)
+
+
+def _mcp_strategy_get_open_orders_once(wallet: str, dex: str = "") -> tuple[list[dict], str | None]:
+    """Single attempt: (list of orders, error)."""
     args = {"strategy_wallet": wallet, "dex": dex}
     try:
         r = subprocess.run(
@@ -512,10 +557,13 @@ def _mcp_strategy_get_open_orders(wallet: str, dex: str = "") -> tuple[list[dict
         return [], str(e)
 
 
-def _mcp_execution_get_order_status(wallet: str, order_id: int) -> tuple[bool, str | None, str | None]:
-    """Call senpi execution_get_order_status. Returns (success, order_status, error).
-    order_status is e.g. 'open', 'filled', 'canceled' when success; None on error or unknownOid.
-    """
+def _mcp_strategy_get_open_orders(wallet: str, dex: str = "") -> tuple[list[dict], str | None]:
+    """Call senpi strategy_get_open_orders. 4 attempts (1 initial + 3 retries) on failure."""
+    return _retry_mcp_call(_mcp_strategy_get_open_orders_once, wallet, dex)
+
+
+def _mcp_execution_get_order_status_once(wallet: str, order_id: int) -> tuple[bool, str | None, str | None]:
+    """Single attempt: (success, order_status, error)."""
     args = {"user": wallet, "orderId": order_id}
     try:
         r = subprocess.run(
@@ -541,6 +589,11 @@ def _mcp_execution_get_order_status(wallet: str, order_id: int) -> tuple[bool, s
         return False, None, "execution_get_order_status: unexpected response shape"
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
         return False, None, str(e)
+
+
+def _mcp_execution_get_order_status(wallet: str, order_id: int) -> tuple[bool, str | None, str | None]:
+    """Call senpi execution_get_order_status. 4 attempts (1 initial + 3 retries) on failure."""
+    return _retry_mcp_call(_mcp_execution_get_order_status_once, wallet, order_id)
 
 
 def _resolve_sl_order_id_after_edit(
@@ -910,7 +963,7 @@ def process_one_position(state_file: str, strategy_id: str, now: str) -> None:
     sl_initial_sync = sl_synced_this_tick and not had_sl_order_before
 
     breached = price <= effective_floor if is_long else price >= effective_floor
-    breach_count = update_breach_count(state, breached, state.get("breachDecay", "hard"))
+    breach_count = update_breach_count(state, breached, "hard")
     force_close = state.get("pendingClose", False)
     should_close = breach_count >= breaches_needed or force_close
 
@@ -974,7 +1027,7 @@ def main() -> None:
             print(json.dumps({
                 "status": "strategy_inactive",
                 "strategy_id": strategy_id,
-                "message": "Strategy not active (Senpi MCP). State files cleaned. Agent: remove cron for this strategy.",
+                "message": "Strategy not active (Senpi MCP). State files cleaned. Agent: remove OpenClaw cron for this strategy.",
                 "reason": active_error,
                 "state_files_deleted": deleted,
                 "time": now,
