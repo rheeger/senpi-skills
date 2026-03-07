@@ -3,3 +3,10 @@ design/*
 .env
 __pycache__/
 *.pyc
+
+# Runtime/generated artifacts on deployed hosts
+fox-strategy/data/
+tiger/state/
+tiger/tiger-config.json
+tiger/scripts/mcporter
+tiger-strategy/scripts/mcporter
