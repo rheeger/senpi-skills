@@ -88,8 +88,8 @@ DSL_ACTIVE_STATUSES = ("ACTIVE", "PAUSED")
 
 def _mcp_result_ok(result) -> bool:
     """2-tuple (result, error): success when error is None; 3-tuple (success, *rest): success when first is True."""
-    if not isinstance(result, tuple) or len(result) < 2:
-        return True
+    if result is None or not isinstance(result, tuple) or len(result) < 2:
+        return False
     if len(result) == 2:
         return result[1] is None
     return result[0] is True
@@ -226,13 +226,15 @@ def get_active_position_coins(wallet: str) -> tuple[set[str], str | None]:
 
 
 def cleanup_strategy_state_dir(state_dir: str, strategy_id: str) -> int:
-    """Remove only active .json state files in strategy dir (excludes *_archived_* files). Return count removed."""
+    """Remove only active position .json state files in strategy dir.
+    Skips strategy-*.json (config), *_archived_*, and *.archived* files. Return count removed.
+    """
     deleted = 0
     strategy_dir = os.path.join(state_dir, strategy_id)
     if not os.path.isdir(strategy_dir):
         return 0
     for name in os.listdir(strategy_dir):
-        if "_archived" in name or ".archived" in name:
+        if name.startswith("strategy-") or "_archived" in name or ".archived" in name:
             continue
         path = os.path.join(strategy_dir, name)
         if name.endswith(".json") and os.path.isfile(path):
@@ -464,6 +466,13 @@ def compute_effective_floor(
     )
     retrace_price = retrace_roe / leverage
     breaches_needed = state["phase2"]["consecutiveBreachesRequired"]
+    if tier_idx >= 0 and tier_idx < len(tiers) and isinstance(tiers[tier_idx], dict):
+        tier = tiers[tier_idx]
+        if "breachesRequired" in tier:
+            try:
+                breaches_needed = int(tier["breachesRequired"])
+            except (TypeError, ValueError):
+                pass
     if is_long:
         trailing_floor = round(hw * (1 - retrace_price), 4)
         effective_floor = max(tier_floor or 0, trailing_floor)

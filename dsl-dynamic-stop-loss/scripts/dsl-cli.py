@@ -110,8 +110,8 @@ def list_position_state_files(state_dir: str, strategy_id: str) -> list[tuple[st
 
 # Retries: 2-tuple (result, error) success when error is None; 3-tuple (success, *rest) success when first is True.
 def _mcp_result_ok(result: Any) -> bool:
-    if not isinstance(result, tuple) or len(result) < 2:
-        return True
+    if result is None or not isinstance(result, tuple) or len(result) < 2:
+        return False
     if len(result) == 2:
         return result[1] is None
     return result[0] is True
@@ -451,14 +451,20 @@ def _ensure_phase_defaults(base: dict) -> None:
 def _merge_inline_config(base: dict, inline_config: dict | None) -> None:
     if not inline_config:
         return
+    inline_has_tiers = False
     for k, v in inline_config.items():
         if k == "tiers":
             base["tiers"] = list(v) if isinstance(v, list) else base.get("tiers", [])
+            inline_has_tiers = True
         elif isinstance(v, dict) and isinstance(base.get(k), dict):
             base[k] = {**base[k], **v}
         else:
             base[k] = v
-    if isinstance(base.get("phase2"), dict) and "tiers" in base["phase2"]:
+    if (
+        not inline_has_tiers
+        and isinstance(base.get("phase2"), dict)
+        and "tiers" in base["phase2"]
+    ):
         base["tiers"] = list(base["phase2"]["tiers"])
 
 
