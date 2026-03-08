@@ -1,0 +1,45 @@
+{
+  "strategyId": "",
+  "wallet": "",
+  "chatId": "",
+  "maxPositions": 3,
+  "leverage": {"default": 8, "min": 5, "max": 10},
+  "entry": {
+    "topNTraders": 20,
+    "minWhaleWinRate": 55,
+    "minWhaleTrades": 10,
+    "maxTrackedWhales": 10,
+    "minWhaleCount": 2,
+    "minHoldMinutes": 10,
+    "marginPct": 0.15,
+    "bannedPrefixes": ["xyz:"]
+  },
+  "dsl": {
+    "phase1RetraceRoe": 10,
+    "phase1HardTimeoutMin": 60,
+    "phase1WeakPeakMin": 30,
+    "phase1DeadWeightMin": 15,
+    "tiers": [
+      {"triggerPct": 5, "lockPct": 2},
+      {"triggerPct": 10, "lockPct": 5},
+      {"triggerPct": 20, "lockPct": 14},
+      {"triggerPct": 30, "lockPct": 24},
+      {"triggerPct": 50, "lockPct": 44},
+      {"triggerPct": 75, "lockPct": 60},
+      {"triggerPct": 100, "lockPct": 90}
+    ]
+  },
+  "risk": {
+    "maxEntriesPerDay": 6,
+    "maxDailyLossPct": 8,
+    "maxDrawdownPct": 20,
+    "maxSingleLossPct": 5,
+    "maxConsecutiveLosses": 3,
+    "cooldownMinutes": 60
+  },
+  "execution": {
+    "entryOrderType": "FEE_OPTIMIZED_LIMIT",
+    "entryEnsureTaker": true,
+    "exitOrderType": "MARKET"
+  }
+}
