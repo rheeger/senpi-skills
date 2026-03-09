@@ -78,8 +78,16 @@ def get_active_dsl_states(strategy_key):
                 state = json.load(fh)
             if not isinstance(state, dict):
                 continue
-            # Extract asset from filename: dsl-HYPE.json -> HYPE
+            # Normalize DSL filename back to the logical asset key.
+            # Examples:
+            # - HYPE.json -> HYPE
+            # - xyz--GOLD.json -> xyz:GOLD
+            # - legacy/misnamed GOLD.json with dex=xyz -> xyz:GOLD
             asset = os.path.basename(f).replace("dsl-", "").replace(".json", "")
+            if asset.startswith("xyz--"):
+                asset = asset.replace("xyz--", "xyz:", 1)
+            elif state.get("dex") == "xyz" and not asset.startswith("xyz:"):
+                asset = f"xyz:{asset}"
             schema_ok, schema_err = validate_dsl_state(state, f)
             states[asset] = {
                 "active": state.get("active", False),
@@ -171,8 +179,12 @@ def check_strategy(strategy_key, cfg):
                 # (prevents cascading create/deactivate cycles from bugs #2/#5)
                 clean_coin_check = coin.replace("xyz:", "")
                 recently_deactivated = False
-                existing_path = dsl_state_path(strategy_key, clean_coin_check)
-                if os.path.exists(existing_path):
+                existing_paths = [
+                    dsl_state_path(strategy_key, coin),
+                    dsl_state_path(strategy_key, clean_coin_check),
+                ]
+                existing_path = next((p for p in existing_paths if os.path.exists(p)), None)
+                if existing_path:
                     try:
                         with open(existing_path) as _ef:
                             existing_state = json.load(_ef)
@@ -211,7 +223,7 @@ def check_strategy(strategy_key, cfg):
                         )
                         new_state["wallet"] = wallet
                         new_state["dex"] = _detect_dex(coin)
-                        path = dsl_state_path(strategy_key, clean_coin)
+                        path = dsl_state_path(strategy_key, coin)
                         atomic_write(path, new_state)
                         issues.append({
                             "level": "CRITICAL",
@@ -260,7 +272,7 @@ def check_strategy(strategy_key, cfg):
                     )
                     new_state["wallet"] = wallet
                     new_state["dex"] = _detect_dex(coin)
-                    path = dsl_state_path(strategy_key, clean_coin)
+                    path = dsl_state_path(strategy_key, coin)
                     atomic_write(path, new_state)
                     issues.append({
                         "level": "CRITICAL",
@@ -306,7 +318,7 @@ def check_strategy(strategy_key, cfg):
                     )
                     new_state["wallet"] = wallet
                     new_state["dex"] = _detect_dex(coin)
-                    path = dsl_state_path(strategy_key, clean_coin)
+                    path = dsl_state_path(strategy_key, coin)
                     atomic_write(path, new_state)
                     issues.append({
                         "level": "CRITICAL",

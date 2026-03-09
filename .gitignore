@@ -10,3 +10,9 @@ tiger/state/
 tiger/tiger-config.json
 tiger/scripts/mcporter
 tiger-strategy/scripts/mcporter
+
+# Strategy runtime output files
+*-history.json
+*-output.json
+fox-strategy/scripts/*-history.json
+fox-strategy/scripts/*-output.json
