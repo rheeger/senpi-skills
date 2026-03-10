@@ -102,11 +102,6 @@ ROE-based trailing stop loss with time decay and partial take-profit.
 3. Hedge v2: every 60s, `OPENCLAW_WORKSPACE=/data/workspace python3 scripts/hedge-monitor-v2.py`
 4. Health: every 10min, `OPENCLAW_WORKSPACE=/data/workspace python3 scripts/health.py`
 
-## Setup
-
-When creating the strategy wallet, include skill attribution (see `references/skill-attribution.md`):
-- `skill_name: "hawk-trading-bot"`, `skill_version: "1.0"`
-
 ## Config
 
 `hype-config.json` — `entry_v2` section controls scanner v2 params.

@@ -85,7 +85,7 @@ def run():
     hedge_cfg = config.get("hedge", {})
 
     if not wallet or not hedge_cfg.get("enabled", False):
-        lib.output_json({"success": True, "heartbeat": "HEARTBEAT_OK", "note": "hedging disabled or no wallet"})
+        lib.output_json({"success": True, "heartbeat": "NO_REPLY", "note": "hedging disabled or no wallet"})
         return
 
     hedge_state = lib.load_state("hedge_state.json")
@@ -100,7 +100,7 @@ def run():
             lib.save_state(hedge_state, "hedge_state.json")
             lib.output_json({"success": True, "action": "HEDGE_CLOSED", "reason": "no main position", "result": result})
             return
-        lib.output_json({"success": True, "heartbeat": "HEARTBEAT_OK", "note": "no main position"})
+        lib.output_json({"success": True, "heartbeat": "NO_REPLY", "note": "no main position"})
         return
 
     main_funding = get_funding_rate(config["asset"])
@@ -176,7 +176,7 @@ def run():
         return
 
     lib.output_json({
-        "success": True, "heartbeat": "HEARTBEAT_OK",
+        "success": True, "heartbeat": "NO_REPLY",
         "main": f"{'LONG' if main_pos['is_long'] else 'SHORT'} HYPE ROE {main_pos['roe']:.1f}%",
         "funding": main_funding,
         "hedge_active": bool(hedge_state.get("active_hedge"))

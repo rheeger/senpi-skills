@@ -53,7 +53,7 @@ def run():
     risk = config.get("risk", {})
 
     if not wallet:
-        lib.output_json({"success": True, "heartbeat": "HEARTBEAT_OK", "note": "no wallet"})
+        lib.output_json({"success": True, "heartbeat": "NO_REPLY", "note": "no wallet"})
         return
 
     counter = lib.load_trade_counter()
@@ -165,7 +165,7 @@ def run():
         "peak": round(peak, 2),
         "entries_today": counter.get("entries", 0),
         "alerts": alerts,
-        "heartbeat": "HEARTBEAT_OK" if not alerts else None,
+        "heartbeat": "NO_REPLY" if not alerts else None,
     })
 
 

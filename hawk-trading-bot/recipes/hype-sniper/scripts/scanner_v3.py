@@ -283,35 +283,29 @@ def score_signal(coin, snapshot, cfg, smart_money, active_coins):
     if range_30m is not None and range_30m < cfg["chop_range_max_pct"]:
         return None
 
-    # Volume filter (soft — reduces score instead of blocking)
-    vol_score = 1.0
+    # Volume filter — hard block if below threshold
     if vol_ratio is not None:
         if vol_ratio < cfg["volume_spike_ratio"]:
-            vol_score = 0.5  # halve score but don't block
+            return None  # no volume = no conviction
         elif vol_ratio > 2.0:
-            vol_score = 1.5  # boost for strong volume
-        reasons.append(f"vol {vol_ratio:.2f}x")
+            reasons.append(f"vol spike {vol_ratio:.2f}x")
+        else:
+            reasons.append(f"vol {vol_ratio:.2f}x")
 
-    # 15m agreement
-    if mom_15m is not None:
+    # 15m agreement — hard requirement, no override
+    if cfg.get("require_15m_agreement", True) and mom_15m is not None:
         agrees = (mom_5m > 0 and mom_15m > 0) or (mom_5m < 0 and mom_15m < 0)
         if not agrees:
-            if abs(mom_5m) < threshold * cfg["strong_momentum_multiplier"]:
-                return None
-            reasons.append(f"15m disagrees ({mom_15m:+.3f}%) OVERRIDE")
-        else:
-            reasons.append(f"15m confirms {mom_15m:+.3f}%")
+            return None  # 15m disagrees = fakeout wick
+        reasons.append(f"15m confirms {mom_15m:+.3f}%")
 
-    # 1h trend filter — hard block on counter-trend
-    if hourly_trend == "BEARISH" and direction == "LONG":
-        if abs(mom_5m) < threshold * cfg["strong_momentum_multiplier"]:
+    # 1h trend filter — hard block on counter-trend, no override
+    if cfg.get("require_1h_trend_alignment", True):
+        if hourly_trend == "BEARISH" and direction == "LONG":
             return None
-        reasons.append(f"1h bearish ({reds} red) OVERRIDE")
-    elif hourly_trend == "BULLISH" and direction == "SHORT":
-        if abs(mom_5m) < threshold * cfg["strong_momentum_multiplier"]:
+        if hourly_trend == "BULLISH" and direction == "SHORT":
             return None
-        reasons.append(f"1h bullish ({greens} green) OVERRIDE")
-    elif hourly_trend == "BEARISH" and direction == "SHORT":
+    if hourly_trend == "BEARISH" and direction == "SHORT":
         reasons.append("1h trend aligned ↓")
     elif hourly_trend == "BULLISH" and direction == "LONG":
         reasons.append("1h trend aligned ↑")
@@ -319,11 +313,9 @@ def score_signal(coin, snapshot, cfg, smart_money, active_coins):
     # Funding filter
     if funding is not None:
         if direction == "LONG" and funding > cfg["funding_long_max"]:
-            if abs(mom_5m) < threshold * cfg["strong_momentum_multiplier"]:
-                return None
+            return None
         elif direction == "SHORT" and funding < cfg["funding_short_min"]:
-            if abs(mom_5m) < threshold * cfg["strong_momentum_multiplier"]:
-                return None
+            return None
 
     # Already in this coin?
     if coin in active_coins:
@@ -333,23 +325,19 @@ def score_signal(coin, snapshot, cfg, smart_money, active_coins):
     # Base score = absolute momentum magnitude
     score = abs(mom_5m)
 
-    # Volume multiplier
-    score *= vol_score
-
     # 15m momentum boost
     if mom_15m is not None and ((mom_5m > 0 and mom_15m > 0) or (mom_5m < 0 and mom_15m < 0)):
         score += abs(mom_15m) * 0.5
 
-    # Smart money alignment boost
+    # Smart money — hard block if against, boost if aligned
     sm = smart_money.get(coin, {})
     if sm:
         sm_dir = sm.get("direction", "")
+        if cfg.get("smart_money_hard_block", True) and sm_dir and sm_dir != direction:
+            return None  # never trade against the whales
         if sm_dir == direction:
             score *= cfg["smart_money_weight"]
             reasons.append(f"smart money aligned ({sm.get('pct_of_gains', 0):.1f}% of gains)")
-        elif sm_dir and sm_dir != direction:
-            score *= 0.5  # penalty for going against smart money
-            reasons.append(f"against smart money ({sm_dir})")
 
     # Hourly trend alignment boost
     if (hourly_trend == "BEARISH" and direction == "SHORT") or \
@@ -515,7 +503,7 @@ def run():
     cfg = get_config(config)
 
     if not wallet:
-        lib.output_json({"success": True, "heartbeat": "HEARTBEAT_OK", "note": "no wallet"})
+        lib.output_json({"success": True, "heartbeat": "NO_REPLY", "note": "no wallet"})
         return
 
     # Gate check — risk guardian may have closed the gate
@@ -536,7 +524,7 @@ def run():
             except (ValueError, TypeError):
                 pass
         if gate != "OPEN":
-            lib.output_json({"success": True, "heartbeat": "HEARTBEAT_OK",
+            lib.output_json({"success": True, "heartbeat": "NO_REPLY",
                              "note": f"gate={gate}: {counter.get('gateReason', '')}"})
             return
 
@@ -547,7 +535,7 @@ def run():
     active_coins, account_value = get_active_positions(wallet)
     if len(active_coins) >= cfg["max_concurrent_positions"]:
         lib.output_json({
-            "success": True, "heartbeat": "HEARTBEAT_OK",
+            "success": True, "heartbeat": "NO_REPLY",
             "note": f"max positions ({len(active_coins)}/{cfg['max_concurrent_positions']})",
             "active": active_coins
         })
@@ -557,7 +545,7 @@ def run():
     risk_cfg = config.get("risk", {})
     max_entries = risk_cfg.get("max_entries_per_day", 10)
     if counter.get("entries", 0) >= max_entries:
-        lib.output_json({"success": True, "heartbeat": "HEARTBEAT_OK",
+        lib.output_json({"success": True, "heartbeat": "NO_REPLY",
                          "note": f"max entries ({counter['entries']}/{max_entries})"})
         return
 
@@ -615,7 +603,7 @@ def run():
     # No signals?
     if not signals:
         lib.output_json({
-            "success": True, "heartbeat": "HEARTBEAT_OK",
+            "success": True, "heartbeat": "NO_REPLY",
             "note": "no signals across all assets",
             "scanned": len(SCAN_ASSETS),
             "diagnostics": diagnostics,

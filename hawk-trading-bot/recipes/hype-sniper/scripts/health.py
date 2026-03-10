@@ -14,7 +14,7 @@ def run():
     wallet = config.get("strategy_wallet", "")
 
     if not wallet:
-        lib.output_json({"success": True, "heartbeat": "HEARTBEAT_OK", "note": "no wallet configured"})
+        lib.output_json({"success": True, "heartbeat": "NO_REPLY", "note": "no wallet configured"})
         return
 
     # Load health state

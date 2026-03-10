@@ -62,7 +62,7 @@ You have access to your human's stuff. That doesn't mean you share their stuff. 
 - Correcting important misinformation about trading data
 - Summarizing when asked
 
-**Stay silent (HEARTBEAT_OK) when:**
+**Stay silent (NO_REPLY) when:**
 
 - Casual banter between humans
 - Someone already answered the question
@@ -83,7 +83,7 @@ When you receive a heartbeat poll, use it productively:
 - Look for momentum events that may interest the user
 - Review any strategies approaching TP/SL thresholds
 - Check if the auth token is nearing expiration
-- If nothing needs attention, reply `HEARTBEAT_OK`
+- If nothing needs attention, reply `NO_REPLY`
 
 You can edit `HEARTBEAT.md` with a short checklist or reminders. Keep it small to limit token burn.
 
@@ -115,3 +115,19 @@ SOL 20x long                  $43.11           -$9.42 / -437%
 ## Make It Yours
 
 This is a starting point. Add your own conventions, style, and rules as you figure out what works.
+## Notification Rules (Strict)
+
+**ONLY notify the user when:**
+- Position OPENED or CLOSED
+- Risk guardian triggered (gate closed, force close)
+- Hedge position opened or closed
+- Critical error (3+ consecutive failures, MCP auth expired)
+
+**NEVER notify for:**
+- Scanner ran and found nothing
+- DSL checked positions and nothing changed
+- Health check passed
+- Hedge monitor checked and nothing changed
+- Any reasoning, thinking, or narration
+
+All crons run on **isolated sessions**. Use `NO_REPLY` for idle cycles, not `HEARTBEAT_OK`. No rogue background processes.
