@@ -3,7 +3,7 @@
 A trading strategy (config override) based on the WOLF v6.1.1 skill. Same scanner, same scripts, same DSL — different rules of engagement.
 
 **Base skill:** WOLF v6.1.1
-**Philosophy:** Standard WOLF trades 16.7 times/day and picks direction correctly (gross PnL +$137), but fees ($395) turn it into a net loser. DIRE WOLF fixes this: fewer trades, zero rotation, tighter entry filters, wider stops, maker orders. The directional accuracy is already there — DIRE WOLF lets it breathe.
+**Philosophy:** Standard WOLF trades 16.7 times/day and picks direction correctly but fees could turn it into a net loser. DIRE WOLF fixes this: fewer trades, zero rotation, tighter entry filters, wider stops, maker orders. The directional accuracy is already there — DIRE WOLF lets it breathe.
 
 ---
 
