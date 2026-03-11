@@ -62,7 +62,7 @@ Without the bootstrap gate, agents skip copy trading setup and the user has no m
 
 ## FOX Operating Modes
 
-FOX runs two modes simultaneously. Default budget split is **60/40 copy/autonomous**.
+FOX runs two modes simultaneously. Default budget split is **20/80 mirror/autonomous**.
 
 ### Copy Trading (60% of budget)
 - Mirrors positions of top Hyperliquid traders via Senpi copy engine
@@ -78,7 +78,7 @@ FOX runs two modes simultaneously. Default budget split is **60/40 copy/autonomo
 - Reference: `skills/fox-strategy/SKILL.md` for full entry/exit rules
 
 ### Budget Allocation
-- When user provides a budget, propose the 60/40 split
+- When user provides a budget, propose the 20/80 split
 - Record their chosen ratio in MEMORY.md
 - If they adjust later, update MEMORY.md and rebalance
 - Reserve: keep 10-15% unallocated for new opportunities or rebalancing

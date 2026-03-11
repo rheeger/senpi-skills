@@ -8,7 +8,7 @@ The ambush sniper. Catches explosive First Jumps — assets rocketing from obscu
 
 FOX scans Hyperliquid's smart money leaderboard every 3 minutes looking for First Jump signals — assets that jump 15+ ranks in a single scan with positive velocity and multiple confirming reasons. When a qualifying signal fires, FOX enters immediately with maker orders and protects the position with DSL v5 trailing stops synced to Hyperliquid.
 
-FOX also runs a copy trading mode that mirrors positions of top-performing traders. Default budget split: **60% copy trading / 40% autonomous** (configurable).
+FOX also runs a copy trading mode that mirrors positions of top-performing traders. Default budget split: **20% mirror trading / 80% autonomous** (configurable).
 
 ## What's in v1.4
 
@@ -110,7 +110,7 @@ FOX is the best-performing skill in the Senpi zoo as-is. For users who want to e
 - **Stops were the problem, not direction** — 79% of trades hit floor SL before the move materialized
 - **Dead weight cut was killing winners** — removed in v1.1+
 - **Fee drag compounds** — every upgrade tightens the same thing: fewer trades, higher conviction, wider stops
-- **Copy trading provides baseline income** — 60/40 split covers autonomous losses while the scanner improves
+- **Mirror trading provides baseline income** — 20/80 split gives autonomous the majority of capital since it's now the proven edge
 
 ## Requirements
 

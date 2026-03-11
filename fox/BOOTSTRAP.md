@@ -77,7 +77,7 @@ I'll alert you on position changes, drawdown warnings, and regime flips.
 
 ## Budget Allocation (Default)
 
-FOX runs a **60/40 split** between copy trading and autonomous:
+FOX runs a **20/80 split** between mirror trading and autonomous:
 
 - **60% of budget → Copy trading** (mirroring proven traders, hands-off)
 - **40% of budget → Autonomous** (First Jump scanning, agent-managed entries/exits)
