@@ -2,7 +2,7 @@
 
 **Target:** Every Senpi skill should use DSL High Water Mode as the default DSL configuration.
 **Spec:** https://github.com/Senpi-ai/senpi-skills/blob/main/dsl-dynamic-stop-loss/dsl-high-water-spec%201.0.md
-**Status:** The DSL v5.2 engine does not yet support `lockMode: "pct_of_high_water"`. Until the engine update ships, all skills must use the legacy fallback tiers below.
+**Status:** DSL v5.3 supports `lockMode: "pct_of_high_water"`. Use the High Water tiers in state files (with `lockHwPct`). Legacy fallback tiers remain valid for backward compatibility.
 
 ---
 
@@ -22,16 +22,13 @@ Add these fields to your DSL config section:
 }
 ```
 
-### Step 2: Use fallback tiers in DSL state files (until engine update)
+### Step 2: Use High Water tiers in DSL state files (DSL v5.3+)
 
-When creating DSL state files via `dsl-cli.py` or manually, use the `tiersLegacyFallback` tiers with standard `lockPct` fields. Do NOT include `lockMode` or `lockHwPct` — the current engine will error or ignore them.
+When creating DSL state files via `dsl-cli.py` or manually, use the `tiers` array with `lockHwPct` and set `lockMode: "pct_of_high_water"`. The engine will trail the floor as a percentage of high-water ROE.
 
-### Step 3: After engine update
+### Step 3: Legacy fallback (optional)
 
-Once DSL v5.2 supports `pct_of_high_water`:
-1. Switch state file tiers from `tiersLegacyFallback` to `tiers` (with `lockHwPct`)
-2. Add `lockMode: "pct_of_high_water"` to state files
-3. Existing positions on legacy tiers continue working — only new positions get High Water
+To keep using fixed-ROE tiers instead of High Water, use `tiersLegacyFallback` with `lockPct` and omit `lockMode` (or set `lockMode: "fixed_roe"`). Existing positions on legacy tiers continue working unchanged.
 
 ---
 
@@ -348,23 +345,19 @@ Once DSL v5.2 supports `pct_of_high_water`:
 
 ---
 
-## Workaround Instructions for Agents
+## Agent Instructions (DSL v5.3+)
 
-Add this to every skill's SKILL.md or cron mandate:
+Add this to every skill's SKILL.md or cron mandate when using High Water:
 
 ```
 DSL CONFIGURATION:
 Target: DSL High Water Mode (pct_of_high_water).
 Spec: https://github.com/Senpi-ai/senpi-skills/blob/main/dsl-dynamic-stop-loss/dsl-high-water-spec%201.0.md
 
-CURRENT WORKAROUND (until DSL engine supports lockMode):
-Use the tiersLegacyFallback tiers from config with standard lockPct fields.
-Do NOT include lockMode or lockHwPct in state files — the current engine will error.
-
-AFTER ENGINE UPDATE:
-Switch to the tiers array with lockHwPct fields.
-Add lockMode: "pct_of_high_water" to every new state file.
-Existing positions on legacy tiers continue working unchanged.
+DSL v5.3+ supports lockMode: "pct_of_high_water":
+Use the tiers array with lockHwPct fields in state files.
+Add lockMode: "pct_of_high_water" to every new state file (or set via config when using dsl-cli add-dsl/update-dsl).
+Legacy tiers (lockPct only) continue to work with lockMode: "fixed_roe" or when lockMode is omitted.
 ```
 
 ## Tier Design Philosophy

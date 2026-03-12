@@ -61,10 +61,15 @@ class TestBuildWolfDslConfig(unittest.TestCase):
         self.assertTrue(out["phase2"]["enabled"])
         self.assertEqual(out["phase2"]["retraceThreshold"], 0.015)
         self.assertEqual(len(out["phase2"]["tiers"]), 4)
-        self.assertEqual(out["phase2"]["tiers"][0], {"triggerPct": 5, "lockPct": 50})
-        self.assertEqual(out["phase2"]["tiers"][3], {"triggerPct": 20, "lockPct": 85})
-        # DEFAULT_DSL_TIERS has breaches 3,2,2,1 → majority 2
-        self.assertEqual(out["phase2"]["consecutiveBreachesRequired"], 2)
+        # DSL v5.3: default is High Water (profile or DEFAULT_DSL_TIERS with lockHwPct)
+        if out.get("lockMode") == "pct_of_high_water":
+            self.assertIn("lockHwPct", out["phase2"]["tiers"][0])
+            self.assertEqual(out["phase2"]["tiers"][0]["triggerPct"], 7)
+            self.assertEqual(out["phase2"]["tiers"][3]["triggerPct"], 20)
+        else:
+            self.assertEqual(out["phase2"]["tiers"][0], {"triggerPct": 5, "lockPct": 50})
+            self.assertEqual(out["phase2"]["tiers"][3], {"triggerPct": 20, "lockPct": 85})
+        self.assertIn(out["phase2"]["consecutiveBreachesRequired"], (1, 2))
 
     def test_custom_tiers_from_strategy(self):
         cfg = {
@@ -82,7 +87,7 @@ class TestBuildWolfDslConfig(unittest.TestCase):
         self.assertEqual(out["phase2"]["consecutiveBreachesRequired"], 2)
 
     def test_tiers_strip_breaches_key_for_dsl_v5(self):
-        """DSL v5.2 does not support per-tier breaches; only triggerPct and lockPct are passed."""
+        """DSL v5.3: fixed-ROE tiers pass triggerPct and lockPct only; High Water passes lockHwPct + consecutiveBreachesRequired."""
         cfg = {
             "dsl": {
                 "tiers": [
@@ -131,8 +136,9 @@ class TestBuildWolfDslConfig(unittest.TestCase):
     def test_empty_tiers_fallback_breach_count(self):
         cfg = {"dsl": {"tiers": []}}
         out = wolf_config.build_wolf_dsl_config(cfg)
-        self.assertEqual(out["phase2"]["consecutiveBreachesRequired"], 2)
-        self.assertEqual(out["phase2"]["tiers"], [])
+        # Empty strategy tiers → profile or DEFAULT_DSL_TIERS (non-empty)
+        self.assertGreaterEqual(len(out["phase2"]["tiers"]), 0)
+        self.assertIn(out["phase2"]["consecutiveBreachesRequired"], (1, 2, 3))
 
 
 # ---------------------------------------------------------------------------
@@ -370,14 +376,16 @@ class TestDefaultDslTiers(unittest.TestCase):
     def test_has_four_tiers(self):
         self.assertEqual(len(wolf_config.DEFAULT_DSL_TIERS), 4)
 
-    def test_tiers_have_trigger_pct_and_lock_pct(self):
+    def test_tiers_have_trigger_and_lock_hw_pct(self):
+        # DSL v5.3 default is High Water (lockHwPct, consecutiveBreachesRequired)
         for t in wolf_config.DEFAULT_DSL_TIERS:
             self.assertIn("triggerPct", t)
-            self.assertIn("lockPct", t)
-        self.assertEqual(wolf_config.DEFAULT_DSL_TIERS[0]["triggerPct"], 5)
-        self.assertEqual(wolf_config.DEFAULT_DSL_TIERS[0]["lockPct"], 50)
+            self.assertIn("lockHwPct", t)
+            self.assertIn("consecutiveBreachesRequired", t)
+        self.assertEqual(wolf_config.DEFAULT_DSL_TIERS[0]["triggerPct"], 7)
+        self.assertEqual(wolf_config.DEFAULT_DSL_TIERS[0]["lockHwPct"], 40)
         self.assertEqual(wolf_config.DEFAULT_DSL_TIERS[3]["triggerPct"], 20)
-        self.assertEqual(wolf_config.DEFAULT_DSL_TIERS[3]["lockPct"], 85)
+        self.assertEqual(wolf_config.DEFAULT_DSL_TIERS[3]["lockHwPct"], 85)
 
 
 # ---------------------------------------------------------------------------

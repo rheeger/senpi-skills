@@ -111,6 +111,18 @@ class TestDslV5NormalizeState(unittest.TestCase):
         changed2 = dsl_v5.normalize_state_phase_config(state)
         self.assertFalse(changed2)
 
+    def test_normalize_state_backfills_high_water_roe(self):
+        """State with highWaterPrice but no highWaterRoe gets highWaterRoe backfilled."""
+        state = {
+            "entryPrice": 100.0,
+            "leverage": 10,
+            "direction": "LONG",
+            "highWaterPrice": 110.0,
+        }
+        dsl_v5.normalize_state_phase_config(state)
+        self.assertIn("highWaterRoe", state)
+        self.assertEqual(state["highWaterRoe"], 100.0)  # (110-100)/100 * 10 * 100
+
 
 class TestDslV5TradingLogic(unittest.TestCase):
     def test_update_high_water(self):
@@ -118,11 +130,22 @@ class TestDslV5TradingLogic(unittest.TestCase):
         hw = dsl_v5.update_high_water(state, 105.0, True)
         self.assertEqual(hw, 105.0)
         self.assertEqual(state["highWaterPrice"], 105.0)
+        self.assertIn("highWaterRoe", state)
         hw2 = dsl_v5.update_high_water(state, 103.0, True)
         self.assertEqual(hw2, 105.0)
         state_short = {"highWaterPrice": 100.0}
         hw3 = dsl_v5.update_high_water(state_short, 95.0, False)
         self.assertEqual(hw3, 95.0)
+
+    def test_update_high_water_sets_high_water_roe(self):
+        state = {
+            "highWaterPrice": 100.0,
+            "entryPrice": 100.0,
+            "leverage": 10,
+            "direction": "LONG",
+        }
+        dsl_v5.update_high_water(state, 110.0, True)
+        self.assertEqual(state["highWaterRoe"], 100.0)  # (110-100)/100 * 10 * 100 = 100% ROE
 
     def test_apply_tier_upgrades(self):
         state = {
@@ -154,6 +177,71 @@ class TestDslV5TradingLogic(unittest.TestCase):
         self.assertEqual(tier_idx2, 1)
         self.assertTrue(tier_changed2)
 
+    def test_apply_tier_upgrades_no_lock_mode_fixed_roe(self):
+        """State with no lockMode behaves as fixed_roe (lockPct = fraction of range)."""
+        state = {
+            "tiers": [{"triggerPct": 10, "lockPct": 20}],
+            "currentTierIndex": -1,
+            "tierFloorPrice": None,
+            "phase": 2,
+            "currentBreachCount": 0,
+            "entryPrice": 100.0,
+            "highWaterPrice": 110.0,
+            "highWaterRoe": 100.0,
+            "phase2": {"enabled": True},
+            "phase2TriggerTier": 0,
+        }
+        tier_idx, tier_floor, _, _ = dsl_v5.apply_tier_upgrades(state, 15.0, True, 110.0)
+        self.assertEqual(tier_idx, 0)
+        # LONG: entry + (hw - entry) * lockPct/100 = 100 + 10*0.2 = 102
+        self.assertAlmostEqual(tier_floor, 102.0, places=2)
+
+    def test_apply_tier_upgrades_pct_of_high_water(self):
+        """lockMode pct_of_high_water: floor = entry * (1 + (highWaterRoe * lockHwPct/100)/100/leverage)."""
+        state = {
+            "tiers": [
+                {"triggerPct": 7, "lockHwPct": 40, "consecutiveBreachesRequired": 3},
+                {"triggerPct": 20, "lockHwPct": 85, "consecutiveBreachesRequired": 1},
+            ],
+            "currentTierIndex": -1,
+            "tierFloorPrice": None,
+            "phase": 2,
+            "currentBreachCount": 0,
+            "entryPrice": 100.0,
+            "leverage": 10,
+            "highWaterPrice": 110.0,
+            "highWaterRoe": 100.0,
+            "phase2": {"enabled": True},
+            "phase2TriggerTier": 0,
+            "lockMode": "pct_of_high_water",
+        }
+        tier_idx, tier_floor, _, _ = dsl_v5.apply_tier_upgrades(state, 25.0, True, 110.0)
+        self.assertEqual(tier_idx, 1)
+        # Tier 1: lockHwPct=85, highWaterRoe=100 -> tier_floor_roe = 85; price = 100*(1+85/100/10) = 108.5
+        self.assertAlmostEqual(tier_floor, 108.5, places=2)
+        self.assertAlmostEqual(state["tierFloorPrice"], 108.5, places=2)
+
+    def test_apply_tier_upgrades_pct_of_high_water_recalc_every_tick(self):
+        """In pct_of_high_water, floor is recalculated every tick from current highWaterRoe."""
+        state = {
+            "tiers": [{"triggerPct": 10, "lockHwPct": 85}],
+            "currentTierIndex": 0,
+            "tierFloorPrice": 105.0,
+            "phase": 2,
+            "currentBreachCount": 0,
+            "entryPrice": 100.0,
+            "leverage": 10,
+            "highWaterPrice": 110.0,
+            "highWaterRoe": 50.0,
+            "phase2": {"enabled": True},
+            "lockMode": "pct_of_high_water",
+        }
+        # highWaterRoe advances to 100 -> floor should be 100*(1+85/100/10)=108.5 (ratchet keeps it)
+        state["highWaterRoe"] = 100.0
+        tier_idx, tier_floor, _, _ = dsl_v5.apply_tier_upgrades(state, 15.0, True, 110.0)
+        self.assertEqual(tier_idx, 0)
+        self.assertAlmostEqual(tier_floor, 108.5, places=2)
+
     def test_compute_effective_floor(self):
         state = {
             "phase1": {"retraceThreshold": 0.03, "consecutiveBreachesRequired": 3, "absoluteFloor": 97.0},
@@ -167,6 +255,21 @@ class TestDslV5TradingLogic(unittest.TestCase):
         self.assertGreater(eff, 0)
         self.assertGreater(needed, 0)
         self.assertEqual(retrace, 0.03)
+
+    def test_compute_effective_floor_per_tier_breaches(self):
+        """Per-tier consecutiveBreachesRequired (and breachesRequired fallback) override phase2 default."""
+        state = {
+            "phase2": {"retraceThreshold": 0.015, "consecutiveBreachesRequired": 1},
+            "tiers": [
+                {"triggerPct": 10, "lockPct": 5, "consecutiveBreachesRequired": 3},
+                {"triggerPct": 20, "lockPct": 14, "breachesRequired": 2},
+            ],
+            "leverage": 10,
+        }
+        _, _, needed_t0, _ = dsl_v5.compute_effective_floor(state, 2, 0, 102.0, 105.0, True)
+        self.assertEqual(needed_t0, 3)
+        _, _, needed_t1, _ = dsl_v5.compute_effective_floor(state, 2, 1, 103.0, 105.0, True)
+        self.assertEqual(needed_t1, 2)
 
     def test_update_breach_count(self):
         state = {"currentBreachCount": 0}
@@ -408,6 +511,43 @@ class TestDslCliValidate(unittest.TestCase):
         })
         self.assertIn("phase2 only mode requires a non-empty tiers array", errs)
 
+    def test_validate_dsl_config_high_water_mode(self):
+        """lockMode pct_of_high_water: lockHwPct required, 0-100, increasing; consecutiveBreachesRequired 1-5."""
+        self.assertEqual(
+            dsl_cli.validate_dsl_config({
+                "lockMode": "pct_of_high_water",
+                "tiers": [
+                    {"triggerPct": 7, "lockHwPct": 40, "consecutiveBreachesRequired": 3},
+                    {"triggerPct": 20, "lockHwPct": 85, "consecutiveBreachesRequired": 1},
+                ],
+            }),
+            [],
+        )
+        errs = dsl_cli.validate_dsl_config({
+            "lockMode": "pct_of_high_water",
+            "tiers": [{"triggerPct": 10}]  # missing lockHwPct
+        })
+        self.assertTrue(any("lockHwPct" in e for e in errs))
+        errs2 = dsl_cli.validate_dsl_config({
+            "lockMode": "pct_of_high_water",
+            "tiers": [
+                {"triggerPct": 10, "lockHwPct": 50},
+                {"triggerPct": 20, "lockHwPct": 40},  # not increasing
+            ],
+        })
+        self.assertTrue(any("strictly greater" in e for e in errs2))
+        errs3 = dsl_cli.validate_dsl_config({
+            "lockMode": "pct_of_high_water",
+            "tiers": [{"triggerPct": 10, "lockHwPct": 50, "consecutiveBreachesRequired": 10}],
+        })
+        self.assertTrue(any("1–5" in e for e in errs3))
+
+    def test_validate_dsl_config_fixed_roe_requires_lock_pct(self):
+        """Without lockMode or with fixed_roe, tiers require lockPct."""
+        self.assertEqual(dsl_cli.validate_dsl_config({"tiers": [{"triggerPct": 10, "lockPct": 5}]}), [])
+        errs = dsl_cli.validate_dsl_config({"tiers": [{"triggerPct": 10}]})
+        self.assertTrue(any("lockPct" in e for e in errs))
+
 
 class TestDslCliConfig(unittest.TestCase):
     def test_load_config_source_inline(self):
@@ -438,6 +578,35 @@ class TestDslCliConfig(unittest.TestCase):
         self.assertEqual(out.get("phase2TriggerTier"), 1)
         self.assertIn("tiers", out)
 
+    def test_resolve_config_preserves_legacy_tiers_when_lock_mode_absent(self):
+        """When lockMode is absent, existing tiers are preserved and lockMode is inferred (no overwrite with DEFAULT_TIERS_HIGH_WATER)."""
+        legacy_tiers = [
+            {"triggerPct": 10, "lockPct": 5},
+            {"triggerPct": 20, "lockPct": 14},
+        ]
+        base = {"phase1": {"enabled": True}, "tiers": legacy_tiers}
+        out = dsl_cli.resolve_config(base, None)
+        self.assertEqual(out.get("lockMode"), "fixed_roe", "lockMode should be inferred from lockPct tiers")
+        self.assertEqual(len(out["tiers"]), 2)
+        self.assertEqual(out["tiers"][0]["lockPct"], 5)
+        self.assertEqual(out["tiers"][1]["triggerPct"], 20)
+        # High-water tiers (lockHwPct) infer pct_of_high_water
+        hw_tiers = [{"triggerPct": 7, "lockHwPct": 40, "consecutiveBreachesRequired": 3}]
+        base_hw = {"phase1": {"enabled": True}, "tiers": hw_tiers}
+        out_hw = dsl_cli.resolve_config(base_hw, None)
+        self.assertEqual(out_hw.get("lockMode"), "pct_of_high_water")
+        self.assertEqual(len(out_hw["tiers"]), 1)
+        self.assertEqual(out_hw["tiers"][0]["lockHwPct"], 40)
+
+    def test_resolve_config_fixed_roe_gets_lock_pct_tiers(self):
+        """When lockMode is explicitly fixed_roe and no tiers are provided, default tiers use lockPct (not lockHwPct)."""
+        base = {"phase1": {"enabled": True}, "lockMode": "fixed_roe"}
+        out = dsl_cli.resolve_config(base, None)
+        self.assertEqual(out.get("lockMode"), "fixed_roe")
+        self.assertGreater(len(out["tiers"]), 0)
+        self.assertIn("lockPct", out["tiers"][0], "fixed_roe default tiers must have lockPct for engine")
+        self.assertNotIn("lockHwPct", out["tiers"][0])
+
     def test_calc_absolute_floor(self):
         # LONG: entry * (1 - retrace/lev)
         f = dsl_cli.calc_absolute_floor(100.0, 10.0, 0.03, "LONG")
@@ -459,6 +628,11 @@ class TestDslCliConfig(unittest.TestCase):
         self.assertEqual(trigger, 0)
         self.assertEqual(len(tiers), 1)
         self.assertEqual(tiers[0]["triggerPct"], 10)
+        # fixed_roe with no tiers must get lockPct default tiers (not lockHwPct)
+        config_fixed = {"phase1": {"enabled": True}, "phase2": {"enabled": True}, "lockMode": "fixed_roe"}
+        _, _, _, tiers_fixed = dsl_cli.config_to_phase1_phase2_tiers(config_fixed, 100.0, 10.0, "LONG")
+        self.assertGreater(len(tiers_fixed), 0)
+        self.assertIn("lockPct", tiers_fixed[0])
         with self.assertRaises(ValueError):
             dsl_cli.config_to_phase1_phase2_tiers(
                 {"phase1": {"enabled": False}, "phase2": {"enabled": False}},
@@ -500,6 +674,11 @@ class TestDslCliPositionState(unittest.TestCase):
         self.assertEqual(state["phase1"]["retraceThreshold"], 0.02)
         self.assertEqual(state["phase2TriggerTier"], 1)
         self.assertEqual(len(state["tiers"]), 1)
+        updated2 = dsl_cli.patch_config_into_state(state, {"lockMode": "pct_of_high_water", "phase2TriggerRoe": 7})
+        self.assertIn("lockMode", updated2)
+        self.assertIn("phase2TriggerRoe", updated2)
+        self.assertEqual(state["lockMode"], "pct_of_high_water")
+        self.assertEqual(state["phase2TriggerRoe"], 7)
 
     def test_build_position_state(self):
         config = {
@@ -515,10 +694,19 @@ class TestDslCliPositionState(unittest.TestCase):
         self.assertEqual(state["asset"], "ETH")
         self.assertEqual(state["entryPrice"], 100.0)
         self.assertEqual(state["highWaterPrice"], 100.0)
+        self.assertEqual(state["highWaterRoe"], 0)
+        self.assertEqual(state["lockMode"], "fixed_roe")
         self.assertEqual(state["currentTierIndex"], -1)
         self.assertTrue(state["active"])
         self.assertIn("phase1", state)
         self.assertIn("tiers", state)
+        state_hw = dsl_cli.build_position_state(
+            "ETH", "main", "0xwallet", "strat-1",
+            100.0, 1.0, 10.0, "LONG",
+            {**config, "lockMode": "pct_of_high_water", "phase2TriggerRoe": 7}, "2024-03-07T12:00:00.000Z",
+        )
+        self.assertEqual(state_hw["lockMode"], "pct_of_high_water")
+        self.assertEqual(state_hw["phase2TriggerRoe"], 7)
 
 
 class TestDslCliStrategyJson(unittest.TestCase):

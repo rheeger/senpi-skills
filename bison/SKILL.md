@@ -8,7 +8,7 @@ description: >-
 license: Apache-2.0
 metadata:
   author: jason-goldberg
-  version: "1.0"
+  version: "1.1"
   platform: senpi
   exchange: hyperliquid
 ---
@@ -41,6 +41,8 @@ When creating DSL state files for any BISON position, you MUST include:
 ```
 
 **If `tiers` or `lockMode` is missing from the state file, the DSL engine falls back to flat 1.5% retrace and High Water Mode is silently disabled. This defeats the entire purpose of BISON. Always verify the state file contains these fields after creation.**
+
+**DSL default:** Use this skill's **`config/dsl-profile.json`** as the default when setting up DSL (e.g. `dsl-cli.py add-dsl` / `update-dsl` with `--configuration @<path-to-bison>/config/dsl-profile.json`). Use it unless the user explicitly provides a custom DSL configuration via the agent.
 
 Phase 1 conviction-scaled floors (also mandatory in every state file):
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""DSL v5 — Strategy-scoped cron, MCP clearinghouse + price, archive on close.
+"""DSL v5.3 — Strategy-scoped cron, MCP clearinghouse + price, archive on close.
 Cron is per strategy (DSL_STATE_DIR + DSL_STRATEGY_ID only). Each run:
 1. Check if strategy is active via MCP; if not, cleanup active state files and output strategy_inactive.
 2. For each state file with slOrderId: call execution_get_order_status; if filled, rename to {asset}_archived_sl_{epoch}.json.
@@ -342,6 +342,18 @@ DEFAULT_PHASE2_RETRACE = 0.015
 DEFAULT_PHASE2_BREACHES = 1
 
 
+def _high_water_roe(state: dict, hw: float) -> float:
+    """Compute high-water ROE % from high-water price. Used for pct_of_high_water floor."""
+    entry = state.get("entryPrice") or 0.0
+    leverage = max(1, state.get("leverage", 1))
+    is_long = (state.get("direction", "LONG").upper() == "LONG")
+    if entry <= 0:
+        return 0.0
+    if is_long:
+        return (hw - entry) / entry * leverage * 100
+    return (entry - hw) / entry * leverage * 100
+
+
 def normalize_state_phase_config(state: dict) -> bool:
     """Ensure phase1 and phase2 exist with required fields and enabled flags. Backfills missing keys.
     At most two phases; phase1 = capital protection, phase2 = tier-based.
@@ -437,6 +449,17 @@ def normalize_state_phase_config(state: dict) -> bool:
             changed = True
         p1.pop("deadWeightCutMin", None)
 
+    # Backfill highWaterRoe when highWaterPrice exists (for pct_of_high_water floor calc).
+    if "highWaterPrice" in state and state.get("highWaterRoe") is None:
+        try:
+            state["highWaterRoe"] = round(
+                _high_water_roe(state, float(state["highWaterPrice"])), 4
+            )
+            changed = True
+        except (TypeError, ValueError):
+            state["highWaterRoe"] = 0.0
+            changed = True
+
     return changed
 
 
@@ -445,7 +468,7 @@ def normalize_state_phase_config(state: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 def update_high_water(state: dict, price: float, is_long: bool) -> float:
-    """Update state high water; return new hw."""
+    """Update state high water; return new hw. Also keeps highWaterRoe in sync for pct_of_high_water mode."""
     hw = state["highWaterPrice"]
     if is_long and price > hw:
         hw = price
@@ -453,15 +476,24 @@ def update_high_water(state: dict, price: float, is_long: bool) -> float:
     elif not is_long and price < hw:
         hw = price
         state["highWaterPrice"] = hw
+    state["highWaterRoe"] = round(_high_water_roe(state, hw), 4)
     return hw
+
+
+def _tier_floor_from_roe(state: dict, tier_floor_roe: float, is_long: bool) -> float:
+    """Convert tier floor ROE %% to price. LONG: entry*(1+roe/100/lev), SHORT: entry*(1-roe/100/lev)."""
+    entry = state["entryPrice"]
+    leverage = max(1, state.get("leverage", 1))
+    if is_long:
+        return round(entry * (1 + tier_floor_roe / 100 / leverage), 4)
+    return round(entry * (1 - tier_floor_roe / 100 / leverage), 4)
 
 
 def apply_tier_upgrades(
     state: dict, upnl_pct: float, is_long: bool, hw: float
 ) -> tuple[int, float | None, bool, int]:
     """Apply tier upgrades based on ROE. Mutates state. Returns (tier_idx, tier_floor, tier_changed, previous_tier_idx).
-    Tier floor = entry + (hw - entry) * lockPct/100 (LONG) or entry - (entry - hw) * lockPct/100 (SHORT):
-    lockPct is the fraction of the entry→hw range to lock, not ROE %.
+    Tier floor: fixed_roe uses lockPct as fraction of (entry→hw) range; pct_of_high_water uses lockHwPct %% of highWaterRoe.
     """
     tiers = state["tiers"]
     tier_idx = state["currentTierIndex"]
@@ -471,6 +503,7 @@ def apply_tier_upgrades(
     entry = state["entryPrice"]
     previous_tier_idx = tier_idx
     tier_changed = False
+    lock_mode = state.get("lockMode", "fixed_roe")
 
     for i, tier in enumerate(tiers):
         if i <= tier_idx:
@@ -478,12 +511,16 @@ def apply_tier_upgrades(
         if upnl_pct >= tier["triggerPct"]:
             tier_idx = i
             tier_changed = True
-            # Floor = entry + fraction of (entry → hw) range; lockPct = that fraction
-            if is_long:
-                tier_floor = round(entry + (hw - entry) * tier["lockPct"] / 100, 4)
+            if lock_mode == "pct_of_high_water" and "lockHwPct" in tier:
+                hw_roe = state.get("highWaterRoe") or 0.0
+                tier_floor_roe = hw_roe * tier["lockHwPct"] / 100
+                tier_floor = _tier_floor_from_roe(state, tier_floor_roe, is_long)
             else:
-                tier_floor = round(entry - (entry - hw) * tier["lockPct"] / 100, 4)
-            # Ratchet: never regress vs stored (e.g. v4 ROE-based floor may be higher for LONG)
+                lock_pct = tier.get("lockPct", 0)
+                if is_long:
+                    tier_floor = round(entry + (hw - entry) * lock_pct / 100, 4)
+                else:
+                    tier_floor = round(entry - (entry - hw) * lock_pct / 100, 4)
             stored = state.get("tierFloorPrice")
             if stored is not None and isinstance(stored, (int, float)):
                 if is_long:
@@ -497,6 +534,22 @@ def apply_tier_upgrades(
                 breach_count = 0
                 state["currentBreachCount"] = 0
                 phase = 2
+
+    # High Water mode: recalc floor every tick for current tier (floor trails high water).
+    if phase == 2 and tier_idx >= 0 and lock_mode == "pct_of_high_water":
+        current_tier = tiers[tier_idx]
+        if "lockHwPct" in current_tier:
+            hw_roe = state.get("highWaterRoe") or 0.0
+            tier_floor_roe = hw_roe * current_tier["lockHwPct"] / 100
+            new_floor = _tier_floor_from_roe(state, tier_floor_roe, is_long)
+            stored = state.get("tierFloorPrice")
+            if stored is not None and isinstance(stored, (int, float)):
+                if is_long:
+                    new_floor = max(new_floor, float(stored))
+                else:
+                    new_floor = min(new_floor, float(stored))
+            tier_floor = new_floor
+            state["tierFloorPrice"] = tier_floor
 
     return tier_idx, tier_floor, tier_changed, previous_tier_idx
 
@@ -529,14 +582,16 @@ def compute_effective_floor(
         else state["phase2"]["retraceThreshold"]
     )
     retrace_price = retrace_roe / leverage
-    breaches_needed = state["phase2"]["consecutiveBreachesRequired"]
+    phase2 = state.get("phase2") or {}
+    breaches_needed = phase2.get("consecutiveBreachesRequired", 1)
     if tier_idx >= 0 and tier_idx < len(tiers) and isinstance(tiers[tier_idx], dict):
         tier = tiers[tier_idx]
-        if "breachesRequired" in tier:
-            try:
-                breaches_needed = int(tier["breachesRequired"])
-            except (TypeError, ValueError):
-                pass
+        raw = tier.get("consecutiveBreachesRequired", tier.get("breachesRequired", breaches_needed))
+        try:
+            breaches_needed = int(raw)
+        except (TypeError, ValueError):
+            pass  # keep previous breaches_needed so max(1, breaches_needed) does not see non-numeric
+    breaches_needed = max(1, breaches_needed)
     if is_long:
         trailing_floor = round(hw * (1 - retrace_price), 4)
         effective_floor = max(tier_floor or 0, trailing_floor)
@@ -921,15 +976,19 @@ def build_output(
     ) if is_long else (
         (price / hw - 1) * 100 if hw > 0 else 0
     )
+    def _lock_label(t):
+        if t.get("lockHwPct") is not None:
+            return f"lock {t['lockHwPct']}%hw"
+        return f"lock {t.get('lockPct', 0)}%"
     tier_name = (
-        f"Tier {tier_idx+1} ({tiers[tier_idx]['triggerPct']}%→lock {tiers[tier_idx]['lockPct']}%)"
-        if tier_idx >= 0 else "None"
+        f"Tier {tier_idx+1} ({tiers[tier_idx]['triggerPct']}%→{_lock_label(tiers[tier_idx])})"
+        if 0 <= tier_idx < len(tiers) else "None"
     )
     previous_tier_name = None
     if tier_changed:
-        if previous_tier_idx >= 0:
+        if 0 <= previous_tier_idx < len(tiers):
             t = tiers[previous_tier_idx]
-            previous_tier_name = f"Tier {previous_tier_idx+1} ({t['triggerPct']}%→lock {t['lockPct']}%)"
+            previous_tier_name = f"Tier {previous_tier_idx+1} ({t['triggerPct']}%→{_lock_label(t)})"
         else:
             previous_tier_name = "None (Phase 1)"
     locked_profit = (
@@ -944,7 +1003,8 @@ def build_output(
         except (ValueError, TypeError):
             pass
     distance_to_next_tier = None
-    if tier_idx + 1 < len(tiers):
+    # tier_idx -1 (Phase 1, no tier reached) → next tier is first tier (index 0); allow so monitoring can show distance to first tier
+    if tier_idx >= -1 and tier_idx + 1 < len(tiers):
         distance_to_next_tier = round(tiers[tier_idx + 1]["triggerPct"] - upnl_pct, 2)
 
     status = "inactive" if closed else ("pending_close" if state.get("pendingClose") else "active")
@@ -1202,7 +1262,7 @@ def process_one_position(state_file: str, strategy_id: str, now: str) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="DSL v5 — strategy-scoped trailing stop cron.")
+    parser = argparse.ArgumentParser(description="DSL v5.3 — strategy-scoped trailing stop cron.")
     parser.add_argument("--strategy-id", default="", help="Strategy UUID (overrides DSL_STRATEGY_ID env)")
     parser.add_argument("--state-dir", default="", help="DSL state directory (overrides DSL_STATE_DIR env)")
     args = parser.parse_args()

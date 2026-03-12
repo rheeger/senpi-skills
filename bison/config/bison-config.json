@@ -39,6 +39,9 @@
     }
   },
   "dsl": {
+    "lockMode": "pct_of_high_water",
+    "phase2TriggerRoe": 10,
+    "cronIntervalMinutes": 3,
     "phase1RetraceRoe": 15,
     "phase1HardTimeoutMin": 0,
     "phase1WeakPeakMin": 0,
@@ -87,8 +90,21 @@
       "roeMin": 15,
       "hwStaleMin": 120
     },
-    "lockMode": "pct_of_high_water",
-    "phase2TriggerRoe": 10,
+    "tiersLegacyFallback": [
+      {"triggerPct": 5,  "lockPct": 1.5},
+      {"triggerPct": 10, "lockPct": 5},
+      {"triggerPct": 15, "lockPct": 10, "retrace": 0.015},
+      {"triggerPct": 25, "lockPct": 18, "retrace": 0.012},
+      {"triggerPct": 40, "lockPct": 30, "retrace": 0.010},
+      {"triggerPct": 60, "lockPct": 48, "retrace": 0.008},
+      {"triggerPct": 80, "lockPct": 65, "retrace": 0.006},
+      {"triggerPct": 100, "lockPct": 85, "retrace": 0.005}
+    ],
+    "execution": {
+      "phase1SlOrderType": "MARKET",
+      "phase2SlOrderType": "MARKET",
+      "breachCloseOrderType": "MARKET"
+    },
     "convictionTiers": [
       {
         "minScore": 6,
@@ -111,7 +127,7 @@
         "weakPeakCutMin": 0,
         "deadWeightCutMin": 0
       }
-    ],
+    ], 
     "_spec": "https://github.com/Senpi-ai/senpi-skills/blob/main/dsl-dynamic-stop-loss/dsl-high-water-spec%201.0.md"
   },
   "risk": {
