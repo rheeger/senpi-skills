@@ -142,6 +142,8 @@ Each skill is self-contained in its own directory. Trading strategies are config
 
 All skills use [DSL High Water Mode](./dsl-dynamic-stop-loss/dsl-high-water-spec%201.0.md) as the target trailing stop configuration. See the [adoption guide](./dsl-dynamic-stop-loss/dsl-high-water-adoption-guide.md) for per-skill tier tables.
 
+**When adding a new skill**, add an entry to [`catalog.json`](./catalog.json). This file is the machine-readable registry used by the onboarding agent to present skills to users. Each entry needs an `id`, `name`, `emoji`, `tagline`, `group`, and `sort_order` — see existing entries for reference.
+
 ## License
 
 Apache-2.0 — Built by [Senpi](https://senpi.ai). Attribution required for derivative works.
