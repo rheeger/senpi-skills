@@ -127,7 +127,8 @@
         "weakPeakCutMin": 0,
         "deadWeightCutMin": 0
       }
-    ]
+    ], 
+    "_spec": "https://github.com/Senpi-ai/senpi-skills/blob/main/dsl-dynamic-stop-loss/dsl-high-water-spec%201.0.md"
   },
   "risk": {
     "maxEntriesPerDay": 6,
