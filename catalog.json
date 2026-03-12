@@ -1,0 +1,219 @@
+{
+  "_version": "1.0",
+  "_updated": "2026-03-11",
+  "_instructions": "Agent reads this file to build the onboarding skill catalog. Only entries with user_facing=true are shown to users. Group by 'group', sort within group by 'sort_order'. Infrastructure skills (DSL, fee optimizer, scanners) have user_facing=false and are never displayed.",
+
+  "groups": [
+    {"id": "proven",   "emoji": "🏆", "label": "Proven Performers"},
+    {"id": "single",   "emoji": "🎯", "label": "Single-Asset Hunters"},
+    {"id": "multi",    "emoji": "🔬", "label": "Multi-Signal Strategies"},
+    {"id": "alt",      "emoji": "🕵️", "label": "Alternative Edge"},
+    {"id": "variant",  "emoji": "🔧", "label": "Strategy Variants"}
+  ],
+
+  "skills": [
+    {
+      "id": "fox-strategy",
+      "name": "FOX",
+      "emoji": "🦊",
+      "tagline": "Catches explosive First Jumps on the leaderboard before the crowd.",
+      "group": "proven",
+      "sort_order": 1,
+      "performance": "+18.1% ROI",
+      "min_budget": 500,
+      "risk_level": "moderate",
+      "base_skill": null,
+      "branch": "main",
+      "predators_url": "https://senpi.ai/predators/fox"
+    },
+    {
+      "id": "viper",
+      "name": "Viper",
+      "emoji": "🐍",
+      "tagline": "Trades range-bound chop at support/resistance. Works when nothing is trending.",
+      "group": "proven",
+      "sort_order": 2,
+      "performance": "+6.2% ROI",
+      "min_budget": 500,
+      "risk_level": "moderate",
+      "base_skill": null,
+      "branch": "viper-2-0"
+    },
+    {
+      "id": "grizzly-strategy",
+      "name": "Grizzly",
+      "emoji": "🐻",
+      "tagline": "BTC only. Every signal source. 15-20x leverage. Maximum conviction.",
+      "group": "single",
+      "sort_order": 1,
+      "min_budget": 2000,
+      "risk_level": "aggressive",
+      "base_skill": null,
+      "branch": "main"
+    },
+    {
+      "id": "cheetah-strategy",
+      "name": "Cheetah",
+      "emoji": "🐆",
+      "tagline": "HYPE only. 8-12x leverage. Fastest predator for the fastest asset.",
+      "group": "single",
+      "sort_order": 2,
+      "min_budget": 1000,
+      "risk_level": "aggressive",
+      "base_skill": null,
+      "branch": "main"
+    },
+    {
+      "id": "tiger-strategy",
+      "name": "Tiger",
+      "emoji": "🐅",
+      "tagline": "5 parallel scanners, 230 assets, auto-optimizer that learns from results.",
+      "group": "multi",
+      "sort_order": 1,
+      "min_budget": 2000,
+      "risk_level": "moderate",
+      "base_skill": null,
+      "branch": "main"
+    },
+    {
+      "id": "cobra-strategy",
+      "name": "Cobra",
+      "emoji": "🐍",
+      "tagline": "Triple convergence. Only strikes when price, volume, and new money all agree.",
+      "group": "multi",
+      "sort_order": 2,
+      "min_budget": 500,
+      "risk_level": "moderate",
+      "base_skill": null,
+      "branch": "main"
+    },
+    {
+      "id": "bison-strategy",
+      "name": "Bison",
+      "emoji": "🦬",
+      "tagline": "Conviction holder. Top 10 assets, 4h trend thesis, holds hours to days.",
+      "group": "multi",
+      "sort_order": 3,
+      "min_budget": 2000,
+      "risk_level": "aggressive",
+      "base_skill": null,
+      "branch": "main"
+    },
+    {
+      "id": "hawk-strategy",
+      "name": "Hawk",
+      "emoji": "🦅",
+      "tagline": "Scans 4 markets every 30s, picks the single strongest signal.",
+      "group": "multi",
+      "sort_order": 4,
+      "min_budget": 1000,
+      "risk_level": "moderate",
+      "base_skill": null,
+      "branch": "main"
+    },
+    {
+      "id": "scorpion-strategy",
+      "name": "Scorpion",
+      "emoji": "🦂",
+      "tagline": "Mirrors whale wallets. Exits the instant they do.",
+      "group": "alt",
+      "sort_order": 1,
+      "min_budget": 500,
+      "risk_level": "moderate",
+      "base_skill": null,
+      "branch": "main"
+    },
+    {
+      "id": "owl-strategy",
+      "name": "Owl",
+      "emoji": "🦉",
+      "tagline": "Pure contrarian. Enters against extreme crowding when exhaustion signals fire.",
+      "group": "alt",
+      "sort_order": 2,
+      "min_budget": 1000,
+      "risk_level": "aggressive",
+      "base_skill": null,
+      "branch": "main"
+    },
+    {
+      "id": "croc-strategy",
+      "name": "Croc",
+      "emoji": "🐊",
+      "tagline": "Funding rate arbitrage. Collects payments while waiting for the snap.",
+      "group": "alt",
+      "sort_order": 3,
+      "min_budget": 500,
+      "risk_level": "moderate",
+      "base_skill": null,
+      "branch": "main"
+    },
+    {
+      "id": "shark",
+      "name": "Shark",
+      "emoji": "🦈",
+      "tagline": "Smart money consensus + liquidation cascade front-running.",
+      "group": "alt",
+      "sort_order": 4,
+      "min_budget": 1000,
+      "risk_level": "aggressive",
+      "base_skill": null,
+      "branch": "main"
+    },
+    {
+      "id": "wolf-strategy",
+      "name": "Wolf",
+      "emoji": "🐺",
+      "tagline": "Pack hunter. Leaderboard momentum, enters early on what smart money is buying.",
+      "group": "alt",
+      "sort_order": 5,
+      "min_budget": 500,
+      "risk_level": "moderate",
+      "base_skill": null,
+      "branch": "main"
+    },
+    {
+      "id": "dire-wolf",
+      "name": "Dire Wolf",
+      "emoji": "🐺",
+      "tagline": "Wolf in sniper mode. Fewer trades, zero rotation, maker fees.",
+      "group": "variant",
+      "sort_order": 1,
+      "min_budget": 1000,
+      "risk_level": "moderate",
+      "base_skill": "wolf-strategy"
+    },
+    {
+      "id": "feral-fox",
+      "name": "Feral Fox",
+      "emoji": "🦊",
+      "tagline": "FOX with higher conviction filters. Score 7+, 3 reasons minimum.",
+      "group": "variant",
+      "sort_order": 2,
+      "min_budget": 500,
+      "risk_level": "moderate",
+      "base_skill": "fox-strategy"
+    },
+    {
+      "id": "ghost-fox",
+      "name": "Ghost Fox",
+      "emoji": "👻",
+      "tagline": "Feral Fox + infinite trailing at 85% of peak. No ceiling.",
+      "group": "variant",
+      "sort_order": 3,
+      "min_budget": 500,
+      "risk_level": "moderate",
+      "base_skill": "fox-strategy"
+    },
+    {
+      "id": "mamba",
+      "name": "Mamba",
+      "emoji": "🐍",
+      "tagline": "Viper + infinite trailing. Catches the bounce AND the breakout.",
+      "group": "variant",
+      "sort_order": 4,
+      "min_budget": 500,
+      "risk_level": "moderate",
+      "base_skill": "viper"
+    }
+  ]
+}

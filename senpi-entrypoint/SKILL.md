@@ -106,15 +106,34 @@ Load and follow the `senpi-onboard` skill instructions. Pass this context:
 
 **Run this step always:** after Step 1 completes, or immediately when the initial check found `SENPI_AUTH_TOKEN` set. Do not skip this step when the user already has a token — they still need to see the skill catalog.
 
-List available trading skills:
+Fetch the skill catalog:
 
 ```bash
-npx skills add https://github.com/Senpi-ai/senpi-skills --list
+CATALOG=$(curl -s https://raw.githubusercontent.com/Senpi-ai/senpi-skills/refs/heads/main/catalog.json)
 ```
 
-Present the catalog to the user. If the command fails, point the user to the
-official [Senpi Skills repository](https://github.com/Senpi-ai/senpi-skills)
-to browse available skills.
+If the command fails or returns empty, point the user to the official [Senpi Skills repository](https://github.com/Senpi-ai/senpi-skills) to browse available skills.
+
+Render the catalog using the following rules:
+1. Parse `CATALOG` as JSON
+2. Group skills by the `group` field, using the `groups` array for display order, emoji, and label
+3. Sort within each group by `sort_order`
+4. For each skill: `{emoji} {name} — {tagline}` and append `{performance}` if present
+5. If the user's balance is known from Step 2.5, note which skills require more capital (`min_budget > balance`)
+
+Present using this template:
+```
+Senpi Predators — AI trading strategies, all open source, all tracked live.
+
+{for each group}
+{group.emoji} {group.label}:
+  {skill.emoji} {skill.name} — {skill.tagline} {skill.performance if present}
+{end}
+
+All tracked live at senpi.ai/predators
+
+Which sounds interesting? I can explain any in detail or deploy one right now.
+```
 
 **Gate — verify before proceeding:** User has seen the skill catalog.
 
