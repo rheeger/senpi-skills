@@ -516,9 +516,11 @@ def build_wolf_dsl_config(cfg):
     strategy_dsl = cfg.get("dsl", {})
     tiers = strategy_dsl.get("tiers") or (profile.get("tiers") if isinstance(profile, dict) else None) or DEFAULT_DSL_TIERS
 
-    # High Water when tiers have lockHwPct (from strategy or profile/default)
+    # High Water: driven by dsl-profile.json lockMode; fallback to inferring from tiers (lockHwPct)
     use_high_water = False
-    if tiers and isinstance(tiers, list) and len(tiers) > 0:
+    if isinstance(profile, dict) and profile.get("lockMode") is not None:
+        use_high_water = profile.get("lockMode") == "pct_of_high_water"
+    elif tiers and isinstance(tiers, list) and len(tiers) > 0:
         first = tiers[0]
         use_high_water = isinstance(first, dict) and "lockHwPct" in first
 
