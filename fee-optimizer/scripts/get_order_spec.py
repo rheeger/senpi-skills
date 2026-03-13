@@ -14,7 +14,7 @@ CONTEXTS = ("entry", "entry_resting", "exit_tp", "exit_sl", "exit_emergency")
 
 
 def get_order_spec(context: str, execution_timeout_seconds: int | None = 45) -> dict:
-    if context == "entry":
+    if context in ("entry", "exit_tp"):
         spec = {
             "orderType": "FEE_OPTIMIZED_LIMIT",
             "feeOptimizedLimitOptions": {"ensureExecutionAsTaker": True},
@@ -24,14 +24,6 @@ def get_order_spec(context: str, execution_timeout_seconds: int | None = 45) -> 
         return spec
     if context == "entry_resting":
         return {"orderType": "FEE_OPTIMIZED_LIMIT"}
-    if context == "exit_tp":
-        spec = {
-            "orderType": "FEE_OPTIMIZED_LIMIT",
-            "feeOptimizedLimitOptions": {"ensureExecutionAsTaker": True},
-        }
-        if execution_timeout_seconds is not None:
-            spec["feeOptimizedLimitOptions"]["executionTimeoutSeconds"] = execution_timeout_seconds
-        return spec
     if context in ("exit_sl", "exit_emergency"):
         return {"orderType": "MARKET"}
     raise ValueError(f"Unknown context: {context}. Use one of: {CONTEXTS}")
