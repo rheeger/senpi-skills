@@ -1,6 +1,6 @@
-# dsl-high-water-implementation-spec
-
 # DSL High Water Mode — Implementation Spec for dsl-v5.py
+
+**Version:** DSL v5.3.1 (2026-03-13) — ALL ITEMS IMPLEMENTED. Per-tick recalculation, lockMode support, per-tier breaches, SL auto-sync, highWaterRoe tracking — all shipped.
 
 ## Summary
 
@@ -179,17 +179,19 @@ Add to `dsl-cli.py validate`:
 
 ## Testing Checklist
 
-- [ ]  State file with no `lockMode` → behaves exactly as current (fixed_roe)
-- [ ]  State file with `lockMode: "fixed_roe"` → same as current
-- [ ]  State file with `lockMode: "pct_of_high_water"` + `lockHwPct` tiers → floor is percentage of hwROE
-- [ ]  High water advances from 20% to 50% ROE at Tier 5 (85%) → floor moves from 17% to 42.5%
-- [ ]  High water advances → SL synced to Hyperliquid at new floor
-- [ ]  High water flat (no new peak) → SL not re-synced (saves API calls)
-- [ ]  Per-tier breach count: Tier 1 at 3 breaches, Tier 5 at 1 breach
-- [ ]  Tier with only `lockPct` (no `lockHwPct`) → uses lockPct regardless of lockMode
-- [ ]  LONG direction: floor calculation correct
-- [ ]  SHORT direction: floor calculation correct
-- [ ]  Mixed state files in same strategy dir (some fixed, some HW) → each uses its own lockMode
+Implemented in `scripts/test_all_methods.py` as `TestDslHighWaterChecklist`. Run: `python3 scripts/test_all_methods.py`
+
+- [x]  State file with no `lockMode` → behaves exactly as current (fixed_roe) — `test_checklist_1_state_no_lock_mode_behaves_fixed_roe`
+- [x]  State file with `lockMode: "fixed_roe"` → same as current — `test_checklist_2_state_lock_mode_fixed_roe_same_as_current`
+- [x]  State file with `lockMode: "pct_of_high_water"` + `lockHwPct` tiers → floor is percentage of hwROE — `test_checklist_3_pct_of_high_water_floor_is_percentage_of_hw_roe`
+- [x]  High water advances from 20% to 50% ROE at Tier 5 (85%) → floor moves from 17% to 42.5% — `test_checklist_4_high_water_20_to_50_roe_tier5_85_floor_17_to_42_5`
+- [x]  High water advances → SL synced to Hyperliquid at new floor — `test_checklist_5_high_water_advances_sl_would_sync` (asserts need_sync when floor changes)
+- [x]  High water flat (no new peak) → SL not re-synced (saves API calls) — `test_checklist_6_high_water_flat_sl_not_resynced`
+- [x]  Per-tier breach count: Tier 1 at 3 breaches, Tier 5 at 1 breach — `test_checklist_7_per_tier_breach_count_tier1_3_tier5_1`
+- [x]  Tier with only `lockPct` (no `lockHwPct`) → uses lockPct regardless of lockMode — `test_checklist_8_tier_only_lock_pct_uses_lock_pct_regardless_of_lock_mode`
+- [x]  LONG direction: floor calculation correct — `test_checklist_9_long_floor_calculation_correct`
+- [x]  SHORT direction: floor calculation correct — `test_checklist_10_short_floor_calculation_correct`
+- [x]  Mixed state files in same strategy dir (some fixed, some HW) → each uses its own lockMode — `test_checklist_11_mixed_state_files_each_uses_own_lock_mode`
 
 ## Priority
 
