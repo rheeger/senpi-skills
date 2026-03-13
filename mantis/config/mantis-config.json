@@ -5,15 +5,32 @@
   "maxPositions": 3,
   "leverage": {"default": 8, "min": 5, "max": 10},
   "entry": {
-    "topNTraders": 30,
-    "minWhaleWinRate": 55,
-    "minWhaleTrades": 15,
-    "minWhalePnl": 0,
-    "maxTrackedWhales": 15,
-    "minWhaleCount": 4,
-    "minHoldMinutes": 30,
-    "minVolRatio": 0.5,
-    "minScore": 12,
+    "momentumEvents": {
+      "minTier": 1,
+      "maxLookbackMinutes": 60,
+      "minEventsPerAsset": 2,
+      "traderQuality": {
+        "allowedTCS": ["Elite", "Reliable"],
+        "allowedTAS": ["Tactical", "Patient", "Active"],
+        "blockedTAS": ["Degen"],
+        "minConcentration": 0.4
+      }
+    },
+    "marketConfirmation": {
+      "enabled": true,
+      "minTraderCount": 5,
+      "topNTraders": 200
+    },
+    "volumeConfirmation": {
+      "enabled": true,
+      "minVolRatio": 0.5
+    },
+    "regimeFilter": {
+      "enabled": true,
+      "penalty": -3,
+      "_note": "penalty not block — SM momentum may override regime"
+    },
+    "minScore": 10,
     "marginPctBase": 0.25,
     "bannedPrefixes": ["xyz:"],
     "dynamicSlots": {
@@ -38,7 +55,7 @@
     "phase2TriggerRoe": 8,
     "consecutiveBreachesRequired": 3,
     "tiers": [
-      {"triggerPct": 8,  "lockHwPct": 25, "consecutiveBreachesRequired": 3, "_note": "whale timing is uncertain — wide early"},
+      {"triggerPct": 8,  "lockHwPct": 25, "consecutiveBreachesRequired": 3, "_note": "SM timing is uncertain — wide early"},
       {"triggerPct": 15, "lockHwPct": 45, "consecutiveBreachesRequired": 2},
       {"triggerPct": 25, "lockHwPct": 65, "consecutiveBreachesRequired": 2},
       {"triggerPct": 40, "lockHwPct": 80, "consecutiveBreachesRequired": 1},

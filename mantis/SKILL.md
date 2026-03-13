@@ -1,38 +1,31 @@
 ---
 name: mantis-strategy
 description: >-
-  MANTIS — High-conviction whale mirror. Evolved from SCORPION's live trading lessons.
-  4+ whale consensus required (not 2). 30-minute aging filter (not 10). Volume confirmation.
-  Whale quality weighting by win rate and P&L. BTC regime awareness. Wide Phase 1 DSL (5% retrace).
-  Immediate DSL arming — no naked positions. DSL High Water Mode (mandatory).
-  The praying mantis: perfectly still, strikes only when the kill is certain.
+  MANTIS v2.0 — Momentum Event Consensus. Complete rewrite from v1.0. Uses
+  leaderboard_get_momentum_events (real-time threshold crossings) instead of
+  discovery_get_top_traders (stale positions). When 2+ quality SM traders
+  cross momentum thresholds on the same asset/direction within 60 minutes,
+  confirmed by market concentration + volume, MANTIS enters with the momentum.
+  Replaces both MANTIS v1.0 and SCORPION v1.1.
 license: Apache-2.0
 metadata:
   author: jason-goldberg
-  version: "1.0"
+  version: "2.0"
   platform: senpi
   exchange: hyperliquid
 ---
 
-# MANTIS — High-Conviction Whale Mirror
+# MANTIS v2.0 — Momentum Event Consensus
 
-Evolved from SCORPION. Same thesis (mirror the whales), completely different execution.
+Follow smart money ACTIONS, not stale positions.
 
-SCORPION's live trading revealed three failure modes: entering on 2-whale consensus (noise), mirroring after 10 minutes (scalp chasing), and tight Phase 1 stops (chopped out of correct trades). MANTIS fixes all three and adds volume confirmation, whale quality scoring, and regime awareness.
+## Why v2.0 Is a Complete Rewrite
 
-The praying mantis: perfectly still, watching everything, strikes only when the kill is certain.
+**v1.0 was broken at the data source level.** It used `discovery_get_top_traders` to find historically good whales, then read their current open positions via `market_get_positions`. This returned ALL positions including legacy ones — BTC shorts opened months ago at $89-108k showed up as "fresh 8-whale consensus" when they were actually stale hedges. The 30-minute aging filter only checked "how long have we been seeing this position in our scans," not when the whale actually opened it.
 
-## What Changed vs SCORPION
+**v2.0 uses `leaderboard_get_momentum_events` as the primary data source.** These are real-time threshold-crossing events ($2M+/$5.5M+/$10M+) within a 4-hour rolling window. They capture when a trader's delta PnL crosses a significance level — this is an ACTION, not a stale position. Combined with `leaderboard_get_markets` for aggregate SM concentration and `market_get_asset_data` for volume confirmation.
 
-| Problem | SCORPION | MANTIS | Result |
-|---|---|---|---|
-| Too many low-conviction entries | 2 whales to enter | **4 whales minimum** | Eliminates noise trades |
-| Mirroring scalps | 10 min aging filter | **30 min aging filter** | Only mirrors conviction holds |
-| Chopped out of winners | 3% Phase 1 retrace | **5% Phase 1 retrace** | Survives normal volatility |
-| No whale quality filter | All whales equal | **Quality scoring (WR, P&L, trade count)** | Better whales = higher score |
-| No volume check | Mirror into anything | **Volume confirmation required** | Won't enter dead markets |
-| No regime awareness | Ignores BTC macro | **Regime penalty** | Penalizes counter-trend mirrors |
-| DSL sometimes missing | Manual DSL creation | **Immediate arming mandatory** | Zero naked positions |
+**SCORPION v1.1 is deprecated.** It had the same stale-position problem with even looser filters (2 whales, 10min). Result: 406 trades, -24% ROI. MANTIS v2.0 replaces both skills.
 
 ## MANDATORY: DSL High Water Mode
 
@@ -40,116 +33,104 @@ The praying mantis: perfectly still, watching everything, strikes only when the 
 
 Spec: https://github.com/Senpi-ai/senpi-skills/blob/main/dsl-dynamic-stop-loss/dsl-high-water-spec%201.0.md
 
-When creating DSL state files, you MUST include:
+DSL tiers in `mantis-config.json`. Arm DSL immediately after every entry fill. Zero naked positions.
 
-```json
-{
-  "lockMode": "pct_of_high_water",
-  "phase2TriggerRoe": 8,
-  "tiers": [
-    {"triggerPct": 8,  "lockHwPct": 25, "consecutiveBreachesRequired": 3},
-    {"triggerPct": 15, "lockHwPct": 45, "consecutiveBreachesRequired": 2},
-    {"triggerPct": 25, "lockHwPct": 65, "consecutiveBreachesRequired": 2},
-    {"triggerPct": 40, "lockHwPct": 80, "consecutiveBreachesRequired": 1},
-    {"triggerPct": 60, "lockHwPct": 85, "consecutiveBreachesRequired": 1}
-  ]
-}
-```
+## Five-Gate Entry Model
 
-**FALLBACK:** Use `tiersLegacyFallback` from config until engine supports `pct_of_high_water`.
+### Gate 1 — Momentum Events (primary signal)
 
-**CRITICAL: Run `dsl-cli.py add-dsl` IMMEDIATELY after every entry fill. No position is allowed to exist without an active DSL state file. Zero exceptions.**
+Poll `leaderboard_get_momentum_events` for recent tier 1+ crossings within the last 60 minutes. These are traders whose delta PnL just crossed $2M+ (T1), $5.5M+ (T2), or $10M+ (T3).
 
-## How MANTIS Trades
+Each event includes:
+- `top_positions`: snapshot of which markets drove the momentum, with direction and delta PnL
+- `concentration`: how focused the trader's gains are (0-1)
+- `trader_tags`: TCS (Elite/Reliable/Streaky/Choppy) and TAS (Patient/Tactical/Active/Degen)
+- `tier`: 1/2/3 significance level
 
-### Whale Discovery
+Group events by asset+direction. **2+ unique traders** on the same asset/direction = consensus.
 
-Every scan, MANTIS discovers top 30 traders from the leaderboard and scores them by quality:
+### Gate 2 — Trader Quality Filter
 
-| Metric | Points |
-|---|---|
-| Win rate ≥ 70% | 3 |
-| Win rate ≥ 60% | 2 |
-| Win rate ≥ 55% | 1 |
-| P&L > $50K | 3 |
-| P&L > $10K | 2 |
-| P&L > $1K | 1 |
-| 100+ trades | 1 |
+Not all momentum events are equal. Filter by:
+- **TCS (Trading Consistency Score)**: Only Elite and Reliable. Streaky/Choppy traders filtered out.
+- **TAS (Trading Activity Style)**: Block Degen. Allow Patient, Tactical, Active.
+- **Concentration ≥ 0.4**: Trader's gains are focused, not spread thin across 20 positions.
 
-Minimum to track: 55% win rate, 15+ trades. Max 15 whales tracked.
+### Gate 3 — Market Confirmation
 
-### Entry (5-gate filter)
+Call `leaderboard_get_markets` to check aggregate SM concentration on the asset. Requires 5+ top traders with significant positions in this market. This confirms the momentum events aren't isolated — the broader SM community is active here.
 
-| Gate | Requirement | Why |
-|---|---|---|
-| 1. Consensus | 4+ whales aligned on same asset/direction | Eliminates noise |
-| 2. Persistence | Consensus held 30+ minutes | Filters scalps |
-| 3. Volume | Current volume ≥ 50% of 6h average | Don't mirror into dead markets |
-| 4. Score | Combined score ≥ 12 (whales × 2 + quality + persistence + volume + regime) | High conviction only |
-| 5. DSL arming | `dsl-cli.py add-dsl` IMMEDIATELY after fill | No naked positions |
+### Gate 4 — Volume Confirmation
+
+Call `market_get_asset_data` to check 1h volume. Current volume must be ≥ 50% of 6h average. Don't enter into dead markets where you'll get chopped up on spread.
+
+### Gate 5 — Regime Filter (penalty, not block)
+
+Check BTC 4h regime. If entering counter-trend (long in bearish, short in bullish), apply -3 score penalty. SM momentum may override regime, so this is a penalty not a block. Regime-aligned entries get +1 bonus.
 
 ### Scoring
 
-| Component | Points |
-|---|---|
-| Whale count × 2 | 8-12+ (4-6 whales) |
-| Total whale quality | 4-20+ (sum of individual scores) |
-| Persistence bonus | +1 per 30min held, max +3 |
-| Volume bonus | +1 if volume > 1.5x average |
-| Regime penalty | -2 if counter-trend to BTC macro |
-
-Minimum score to enter: 12. In practice, 4 high-quality whales holding for 30+ minutes with volume typically scores 16-20+.
-
-### Hold
-
-The sting: when the primary whale exits, MANTIS exits immediately — regardless of P&L or DSL state. This is SCORPION's best feature, preserved in MANTIS.
-
-### DSL: Wide Phase 1, High Water Phase 2
-
-| Setting | SCORPION | MANTIS |
+| Component | Points | Notes |
 |---|---|---|
-| Phase 1 retrace | 3% | **5%** |
-| Phase 2 trigger | 7% ROE | **8% ROE** |
-| T1 lock | 35% HW | **25% HW** (wider — whale timing is uncertain) |
-| 85% trail at | +30% ROE | **+60% ROE** |
-| Stagnation TP | 5% ROE, 30min | **10% ROE, 60min** |
-| Floor | 1.5% notional | **3% notional** |
+| Trader count | 2 per trader | Core signal strength |
+| Avg tier | 1-3 | Higher tiers = bigger moves |
+| Avg concentration | 1-2 | High conviction traders |
+| Market confirmation | 1-2 | Hot market bonus |
+| Volume strength | 0-1 | Strong volume bonus |
+| Regime alignment | -3 to +1 | Penalty/bonus |
+
+**Minimum score: 10** to trigger entry.
+
+## Entry Direction
+
+MANTIS enters **WITH** the smart money momentum. If SM is long, MANTIS goes long. This is follow-the-leader, not contrarian (that's OWL's job).
+
+## Risk Management
+
+| Rule | Value |
+|---|---|
+| Max positions | 3 |
+| Max entries/day | 3 base, up to 6 on profitable days |
+| Absolute floor | 3% notional |
+| Drawdown halt | 20% from peak |
+| Daily loss limit | 8% |
+| Cooldown after 3 consecutive losses | 90 min |
+| Stagnation TP | 10% ROE stale for 1 hour |
+
+## Cron Architecture
+
+| Cron | Interval | Session | Purpose |
+|---|---|---|---|
+| Scanner | 5 min | isolated | Momentum events + consensus + all gates |
+| DSL v5 | 3 min | isolated | High Water Mode trailing stops |
+
+Both crons MUST be isolated sessions with `agentTurn` payload. Use `NO_REPLY` for idle cycles.
 
 ## Notification Policy
 
-**ONLY alert:** Position OPENED (asset, direction, whale count, quality, hold time), position CLOSED (DSL or whale exit with reason), risk triggered, critical error.
-**NEVER alert:** Scanner found nothing, whale tracking updates, DSL routine, any reasoning.
-All crons isolated. `NO_REPLY` for idle cycles.
+**ONLY alert:** Position OPENED (asset, direction, trader count, avg tier, score breakdown), position CLOSED (DSL or thesis exit with reason), risk guardian triggered, critical error.
+
+**NEVER alert:** Scanner found no events, quality filter removed events, no consensus, gates failed, DSL routine check, any reasoning.
+
+## What "Working Correctly" Looks Like
+
+- **Zero trades for hours:** Normal. Momentum events that pass ALL five gates are rare by design.
+- **Events seen but no consensus:** The quality filter and 2+ trader requirement are doing their job.
+- **Consensus found but score too low:** Volume or regime gates keeping us out of bad setups.
+- **1-2 trades per day:** Ideal. This is a patience skill.
 
 ## Bootstrap Gate
 
-Check `config/bootstrap-complete.json` every session. If missing:
+On EVERY session, check if `config/bootstrap-complete.json` exists. If not:
 1. Verify Senpi MCP
 2. Create scanner cron (5 min, isolated) and DSL cron (3 min, isolated)
 3. Write `config/bootstrap-complete.json`
-4. Send: "🦗 MANTIS is online. Tracking whales. 4+ consensus at 30min+ to strike. Silence = no conviction."
-
-## Expected Behavior
-
-| Metric | SCORPION | MANTIS (expected) |
-|---|---|---|
-| Trades/day | 3-6 | **1-3** (4 whale gate filters most) |
-| Win rate | ~40-45% | **~55-60%** (higher conviction entries) |
-| Avg winner | 10-25% ROE | **20-50%+ ROE** (wider DSL, High Water) |
-| Avg loser | -8 to -15% ROE | **-15 to -25% ROE** (wider floor) |
-| Profit factor | < 1.0 (losing) | **Target 1.3-1.8** |
-
-Fewer trades, higher win rate, bigger winners. The same math as every other upgrade in the zoo: fewer trades, higher conviction, wider stops.
+4. Send: "🦗 MANTIS v2.0 is online. Monitoring momentum events for SM consensus. Silence = no conviction."
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `scripts/mantis-scanner.py` | Whale discovery + consensus + volume + regime + persistence |
-| `scripts/mantis_config.py` | Shared config, MCP helpers |
-| `config/mantis-config.json` | All variables with DSL High Water + legacy fallback |
-
-## License
-
-Apache-2.0 — Built by Senpi (https://senpi.ai). Attribution required for derivative works.
-Source: https://github.com/Senpi-ai/senpi-skills
+| `scripts/mantis-scanner.py` | Five-gate scanner (momentum events → quality → markets → volume → regime) |
+| `scripts/mantis_config.py` | Shared config, MCP helpers, state I/O |
+| `config/mantis-config.json` | All configurable variables with DSL High Water tiers |

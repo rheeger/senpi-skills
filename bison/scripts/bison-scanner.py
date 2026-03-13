@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-# Senpi BISON Scanner v1.0
+# Senpi BISON Scanner v1.1
 # Copyright 2026 Senpi (https://senpi.ai)
 # Licensed under Apache-2.0 — attribution required for derivative works
 # Source: https://github.com/Senpi-ai/senpi-skills
-"""BISON Scanner — Conviction Holder.
+"""BISON Scanner v1.1 — Conviction Holder.
 
 Top 10 assets by volume only. Enters when multi-signal thesis converges.
 Holds through pullbacks with wide DSL bands that tighten as profit grows.
 Re-evaluates thesis every scan — exits when the reason you entered dies,
 not when price retraces 1.5%.
+
+v1.1: Daily entry cap now only enforced when cumulative day PnL is negative.
+When positive (or zero), the counter resets in batches of baseMax (3) —
+BISON can keep trading as long as it's making money. absoluteMax still
+applies as the hard ceiling per batch to prevent runaway in a single cycle.
 
 The big-game hunter. Fewer trades, longer holds, bigger moves.
 
@@ -306,21 +311,47 @@ def run():
         })
         return
 
-    # CHECK 2: Dynamic entry cap
+    # CHECK 2: Dynamic entry cap (v1.1 — batch reload when profitable)
+    # The cap only hard-blocks when cumulative day PnL is negative.
+    # When PnL >= 0, BISON gets another batch of baseMax entries.
+    # absoluteMax still caps each batch to prevent runaway.
     dynamic = entry_cfg.get("dynamicSlots", {})
     if dynamic.get("enabled", True):
         base_max = dynamic.get("baseMax", 3)
         day_pnl = tc.get("realizedPnl", 0)
-        effective_max = base_max
-        for t in dynamic.get("unlockThresholds", []):
-            if day_pnl >= t.get("pnl", 999999):
-                effective_max = t.get("maxEntries", effective_max)
-        max_entries = min(effective_max, dynamic.get("absoluteMax", 6))
+        entries_used = tc.get("entries", 0)
+
+        # v1.1: when profitable, reload in batches of baseMax
+        if day_pnl >= 0 and entries_used >= base_max:
+            # How many full batches have been used?
+            # Allow another batch since we're still profitable
+            batches_used = entries_used // base_max
+            effective_max = (batches_used + 1) * base_max
+            # Still respect absoluteMax as hard ceiling per day
+            hard_max = dynamic.get("absoluteMax", 6)
+            # v1.1: when profitable, absoluteMax doesn't cap — only baseMax batches matter
+            # But unlockThresholds can raise it further based on realized PnL
+            for t in dynamic.get("unlockThresholds", []):
+                if day_pnl >= t.get("pnl", 999999):
+                    hard_max = max(hard_max, t.get("maxEntries", hard_max))
+            max_entries = effective_max
+        elif day_pnl < 0:
+            # Negative PnL: enforce original cap strictly
+            effective_max = base_max
+            for t in dynamic.get("unlockThresholds", []):
+                if day_pnl >= t.get("pnl", 999999):
+                    effective_max = t.get("maxEntries", effective_max)
+            max_entries = min(effective_max, dynamic.get("absoluteMax", 6))
+        else:
+            # First batch (entries < baseMax), just use baseMax
+            max_entries = base_max
     else:
         max_entries = config.get("risk", {}).get("maxEntriesPerDay", 4)
 
     if tc.get("entries", 0) >= max_entries:
-        cfg.output({"success": True, "heartbeat": "NO_REPLY", "note": f"max entries ({max_entries})"})
+        pnl_status = "positive" if tc.get("realizedPnl", 0) >= 0 else "negative"
+        cfg.output({"success": True, "heartbeat": "NO_REPLY",
+                     "note": f"max entries ({max_entries}), pnl={pnl_status}"})
         return
 
     if len(positions) >= max_positions:

@@ -1,10 +1,12 @@
 ---
 name: bison-strategy
 description: >-
-  BISON — Conviction holder for top 10 Hyperliquid assets by volume. Enters on 4h trend structure
+  BISON v1.1 — Conviction holder for top 10 Hyperliquid assets by volume. Enters on 4h trend structure
   + 1h momentum + SM alignment convergence. Holds through pullbacks with DSL High Water Mode
   (mandatory). Re-evaluates thesis every 5 min — exits when conviction breaks, not when price
   retraces. Wide Phase 1 floors, no time-based exits, infinite trailing at 85% of peak.
+  v1.1: daily entry cap only enforced when day PnL is negative. When profitable, reloads
+  in batches of 3 — BISON keeps trading as long as it's making money.
 license: Apache-2.0
 metadata:
   author: jason-goldberg
@@ -41,8 +43,6 @@ When creating DSL state files for any BISON position, you MUST include:
 ```
 
 **If `tiers` or `lockMode` is missing from the state file, the DSL engine falls back to flat 1.5% retrace and High Water Mode is silently disabled. This defeats the entire purpose of BISON. Always verify the state file contains these fields after creation.**
-
-**DSL default:** Use this skill's **`config/dsl-profile.json`** as the default when setting up DSL (e.g. `dsl-cli.py add-dsl` / `update-dsl` with `--configuration @<path-to-bison>/config/dsl-profile.json`). Use it unless the user explicitly provides a custom DSL configuration via the agent.
 
 Phase 1 conviction-scaled floors (also mandatory in every state file):
 
@@ -109,7 +109,7 @@ Both crons MUST be isolated sessions with `agentTurn` payload. Use `NO_REPLY` fo
 | Rule | Value |
 |---|---|
 | Max positions | 3 |
-| Max entries/day | 3 base, up to 6 on profitable days |
+| Max entries/day | 3 per batch; unlimited batches when day PnL ≥ 0. Hard cap when negative. |
 | Absolute floor | 3% notional (~30% ROE at 10x) |
 | G5 per-position cap | 8% of account |
 | G2 drawdown halt | 25% from peak |

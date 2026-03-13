@@ -1,116 +1,216 @@
 #!/usr/bin/env python3
-# Senpi MANTIS Scanner v1.0
+# Senpi MANTIS Scanner v2.0
 # Copyright 2026 Senpi (https://senpi.ai)
 # Licensed under Apache-2.0 — attribution required for derivative works
 # Source: https://github.com/Senpi-ai/senpi-skills
-"""MANTIS Scanner — High-Conviction Whale Mirror.
+"""MANTIS v2.0 — Momentum Event Consensus.
 
-Evolved from SCORPION's live trading lessons: too few whales required,
-too short aging filter, too tight stops. MANTIS fixes all three and adds
-volume confirmation, whale quality weighting, and regime awareness.
+COMPLETE REWRITE from v1.0. The v1.0 scanner used discovery_get_top_traders
+to find historically good whales, then read their CURRENT OPEN POSITIONS.
+This surfaced legacy positions (months-old shorts from $90k+) as "fresh
+consensus" — the entire data source was wrong.
 
-The praying mantis: perfectly still, watching everything, strikes only
-when the kill is certain.
+v2.0 uses leaderboard_get_momentum_events as the primary data source.
+These are REAL-TIME threshold-crossing events that fire when a trader's
+delta PnL crosses significance levels ($2M+/$5.5M+/$10M+) within a
+4-hour rolling window. This captures ACTIONS, not stale positions.
 
-Key differences from SCORPION:
-  1. 4+ whale consensus required (SCORPION: 2)
-  2. 30-minute aging filter (SCORPION: 10 min)
-  3. Whale quality weighting — recent P&L, win rate, avg hold time
-  4. Volume confirmation — don't mirror into dead volume
-  5. Regime filter — don't short in strong bull regimes or vice versa
-  6. Wide Phase 1 DSL (5% retrace, SCORPION: 3%)
-  7. Immediate DSL arming — no naked positions ever
+Five-gate entry model:
+  1. MOMENTUM EVENTS — 2+ recent events on same asset/direction within 60min
+  2. TRADER QUALITY — filter by TCS (Elite/Reliable) and concentration
+  3. MARKET CONFIRMATION — leaderboard_get_markets shows elevated SM count
+  4. VOLUME CONFIRMATION — current volume alive (≥50% of 6h avg)
+  5. REGIME FILTER — penalty (not block) for counter-trend entries
+
+Enters WITH smart money momentum, not against it.
 
 Runs every 5 minutes.
 """
 
 import sys
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mantis_config as cfg
 
 
-# ─── Whale Discovery & Scoring ────────────────────────────────
+# ─── Gate 1: Momentum Event Fetching ─────────────────────────
 
-def discover_whales(entry_cfg):
-    """Get top traders and score them by quality."""
-    data = cfg.mcporter_call("discovery_get_top_traders",
-                              timeframe="30d", limit=entry_cfg.get("topNTraders", 30))
+def fetch_momentum_events(entry_cfg):
+    """Fetch recent momentum events from the leaderboard.
+    These are real-time threshold crossings — NOT stale positions."""
+    mom_cfg = entry_cfg.get("momentumEvents", {})
+    min_tier = mom_cfg.get("minTier", 1)
+    lookback_min = mom_cfg.get("maxLookbackMinutes", 60)
+
+    # Time range: last N minutes
+    now = datetime.now(timezone.utc)
+    from_time = (now - timedelta(minutes=lookback_min)).isoformat()
+
+    data = cfg.mcporter_call("leaderboard_get_momentum_events",
+                              tier=min_tier, limit=200,
+                              **{"from": from_time})
     if not data or not data.get("success"):
         return []
 
-    traders = data.get("data", data)
-    if isinstance(traders, dict):
-        traders = traders.get("traders", [])
+    events = data.get("data", data)
+    if isinstance(events, dict):
+        events = events.get("events", events.get("data", []))
+    if not isinstance(events, list):
+        return []
 
-    min_wr = entry_cfg.get("minWhaleWinRate", 55)
-    min_trades = entry_cfg.get("minWhaleTrades", 15)
-    min_pnl = entry_cfg.get("minWhalePnl", 0)
+    return events
 
-    qualified = []
-    for t in traders:
-        wr = float(t.get("winRate", t.get("win_rate", 0)))
-        trades = int(t.get("totalTrades", t.get("total_trades", 0)))
-        pnl = float(t.get("pnl", t.get("totalPnl", 0)))
-        address = t.get("address", t.get("trader", ""))
 
-        if wr < min_wr or trades < min_trades or pnl < min_pnl:
+def filter_quality_events(events, entry_cfg):
+    """Gate 2: Filter events by trader quality (TCS, TAS, concentration)."""
+    mom_cfg = entry_cfg.get("momentumEvents", {})
+    quality_cfg = mom_cfg.get("traderQuality", {})
+
+    allowed_tcs = set(quality_cfg.get("allowedTCS", ["Elite", "Reliable"]))
+    allowed_tas = set(quality_cfg.get("allowedTAS", ["Tactical", "Patient", "Active"]))
+    blocked_tas = set(quality_cfg.get("blockedTAS", ["Degen"]))
+    min_concentration = quality_cfg.get("minConcentration", 0.4)
+
+    filtered = []
+    for event in events:
+        tags = event.get("trader_tags", {})
+        if isinstance(tags, str):
+            # Handle case where tags is a JSON string
+            try:
+                import json
+                tags = json.loads(tags)
+            except Exception:
+                tags = {}
+
+        tcs = tags.get("TCS", tags.get("tcs", ""))
+        tas = tags.get("TAS", tags.get("tas", ""))
+
+        # TCS filter: only Elite/Reliable
+        if allowed_tcs and tcs and tcs not in allowed_tcs:
             continue
 
-        # Quality score: combines win rate, trade count, and P&L
-        quality = 0
-        if wr >= 70: quality += 3
-        elif wr >= 60: quality += 2
-        elif wr >= 55: quality += 1
-
-        if pnl > 50000: quality += 3
-        elif pnl > 10000: quality += 2
-        elif pnl > 1000: quality += 1
-
-        if trades > 100: quality += 1
-
-        qualified.append({
-            "address": address,
-            "winRate": wr,
-            "trades": trades,
-            "pnl": pnl,
-            "quality": quality,
-        })
-
-    qualified.sort(key=lambda x: x["quality"], reverse=True)
-    return qualified[:entry_cfg.get("maxTrackedWhales", 15)]
-
-
-def get_whale_positions(whales):
-    """Get current positions for all tracked whales."""
-    all_positions = []
-    for whale in whales:
-        data = cfg.mcporter_call("market_get_positions",
-                                  trader=whale["address"])
-        if not data or not data.get("success"):
+        # TAS filter: block Degen
+        if tas in blocked_tas:
             continue
-        positions = data.get("data", data)
-        if isinstance(positions, dict):
-            positions = positions.get("positions", [])
-        for pos in positions:
-            all_positions.append({
-                "whaleAddress": whale["address"],
-                "whaleQuality": whale["quality"],
-                "whaleWinRate": whale["winRate"],
-                "coin": pos.get("coin", pos.get("asset", "")),
-                "direction": "LONG" if float(pos.get("size", pos.get("szi", 0))) > 0 else "SHORT",
-                "size": abs(float(pos.get("size", pos.get("szi", 0)))),
-                "entryPx": float(pos.get("entryPx", pos.get("entry_price", 0))),
+
+        # Concentration filter
+        concentration = float(event.get("concentration", 0))
+        if concentration < min_concentration:
+            continue
+
+        filtered.append(event)
+
+    return filtered
+
+
+def build_consensus(events, entry_cfg):
+    """Group events by asset+direction to find consensus.
+    Returns consensus groups with 2+ events on the same side."""
+    mom_cfg = entry_cfg.get("momentumEvents", {})
+    min_events = mom_cfg.get("minEventsPerAsset", 2)
+
+    # Extract positions from events and group by asset+direction
+    votes = {}  # key: "BTC:LONG" -> list of events
+
+    for event in events:
+        top_positions = event.get("top_positions", [])
+        if isinstance(top_positions, str):
+            try:
+                import json
+                top_positions = json.loads(top_positions)
+            except Exception:
+                top_positions = []
+
+        trader_id = event.get("trader_id", event.get("address", ""))
+        tier = int(event.get("tier", 1))
+        concentration = float(event.get("concentration", 0))
+
+        for pos in top_positions:
+            market = pos.get("market", pos.get("coin", ""))
+            direction = pos.get("direction", "").upper()
+            delta_pnl = float(pos.get("delta_pnl", 0))
+
+            if not market or not direction:
+                continue
+
+            # Normalize direction
+            if direction in ("LONG", "BUY"):
+                direction = "LONG"
+            elif direction in ("SHORT", "SELL"):
+                direction = "SHORT"
+            else:
+                continue
+
+            key = f"{market}:{direction}"
+            if key not in votes:
+                votes[key] = {
+                    "coin": market,
+                    "direction": direction,
+                    "events": [],
+                    "traders": set(),
+                    "totalTier": 0,
+                    "totalConcentration": 0,
+                }
+            votes[key]["events"].append(event)
+            votes[key]["traders"].add(trader_id)
+            votes[key]["totalTier"] += tier
+            votes[key]["totalConcentration"] += concentration
+
+    # Filter to consensus groups (min_events unique traders)
+    consensus = []
+    for key, vote in votes.items():
+        if len(vote["traders"]) >= min_events:
+            consensus.append({
+                "coin": vote["coin"],
+                "direction": vote["direction"],
+                "traderCount": len(vote["traders"]),
+                "eventCount": len(vote["events"]),
+                "avgTier": vote["totalTier"] / len(vote["events"]),
+                "avgConcentration": vote["totalConcentration"] / len(vote["events"]),
+                "traders": list(vote["traders"]),
             })
-    return all_positions
+
+    return consensus
 
 
-# ─── Volume Confirmation ──────────────────────────────────────
+# ─── Gate 3: Market Confirmation ─────────────────────────────
+
+def check_market_concentration(coin, entry_cfg):
+    """Confirm SM concentration via leaderboard_get_markets."""
+    mkt_cfg = entry_cfg.get("marketConfirmation", {})
+    if not mkt_cfg.get("enabled", True):
+        return True, 0, 0
+
+    top_n = mkt_cfg.get("topNTraders", 200)
+    min_count = mkt_cfg.get("minTraderCount", 5)
+
+    data = cfg.mcporter_call("leaderboard_get_markets", limit=top_n)
+    if not data or not data.get("success"):
+        return False, 0, 0
+
+    markets = data.get("data", data)
+    if isinstance(markets, dict):
+        markets = markets.get("markets", [])
+
+    for m in markets:
+        if m.get("market", "") == coin:
+            trader_count = int(m.get("trader_count", 0))
+            percentage = float(m.get("percentage", 0))
+            return trader_count >= min_count, trader_count, percentage
+
+    return False, 0, 0
+
+
+# ─── Gate 4: Volume Confirmation ─────────────────────────────
 
 def check_volume(coin, entry_cfg):
     """Confirm the asset has active volume — don't mirror into dead markets."""
+    vol_cfg = entry_cfg.get("volumeConfirmation", {})
+    if not vol_cfg.get("enabled", True):
+        return True, 1.0
+
     data = cfg.mcporter_call("market_get_asset_data", asset=coin,
                               candle_intervals=["1h"],
                               include_funding=False, include_order_book=False)
@@ -125,13 +225,13 @@ def check_volume(coin, entry_cfg):
     avg_vol = sum(vols) / len(vols) if vols else 0
     latest_vol = vols[-1] if vols else 0
 
-    min_ratio = entry_cfg.get("minVolRatio", 0.5)
+    min_ratio = vol_cfg.get("minVolRatio", 0.5)
     ratio = latest_vol / avg_vol if avg_vol > 0 else 0
 
     return ratio >= min_ratio, ratio
 
 
-# ─── Regime Filter ────────────────────────────────────────────
+# ─── Gate 5: Regime Filter ───────────────────────────────────
 
 def get_btc_regime():
     """Simple BTC regime: bullish, bearish, or neutral."""
@@ -155,40 +255,68 @@ def get_btc_regime():
     return "NEUTRAL"
 
 
-# ─── Persistence Tracking ─────────────────────────────────────
+# ─── Scoring ─────────────────────────────────────────────────
 
-def check_consensus_persistence(state, coin, direction, whale_addresses, min_hold_min):
-    """Track how long a consensus has been held. Returns (persisted, minutes)."""
-    key = f"{coin}:{direction}"
-    tracking = state.get("consensusHistory", {})
-    now_ts = cfg.now_ts()
+def score_consensus(consensus, vol_ratio, mkt_trader_count, mkt_pct, regime, direction, entry_cfg):
+    """Score a consensus signal through all gates."""
+    score = 0
+    reasons = []
 
-    if key not in tracking:
-        tracking[key] = {
-            "firstSeen": cfg.now_iso(),
-            "ts": now_ts,
-            "whales": whale_addresses,
-        }
-        state["consensusHistory"] = tracking
-        return False, 0
+    # Trader count (core signal strength)
+    tc = consensus["traderCount"]
+    score += tc * 2
+    reasons.append(f"{tc}_momentum_traders")
 
-    entry = tracking[key]
-    minutes = (now_ts - entry.get("ts", now_ts)) / 60
+    # Tier bonus (higher tiers = bigger moves)
+    avg_tier = consensus["avgTier"]
+    if avg_tier >= 2.5:
+        score += 3
+        reasons.append(f"avg_tier_{avg_tier:.1f}_extreme")
+    elif avg_tier >= 1.5:
+        score += 2
+        reasons.append(f"avg_tier_{avg_tier:.1f}_strong")
+    else:
+        score += 1
+        reasons.append(f"avg_tier_{avg_tier:.1f}_base")
 
-    # Update whale list
-    entry["whales"] = whale_addresses
-    state["consensusHistory"] = tracking
+    # Concentration bonus (high conviction traders)
+    avg_conc = consensus["avgConcentration"]
+    if avg_conc > 0.7:
+        score += 2
+        reasons.append(f"high_conviction_{avg_conc:.0%}")
+    elif avg_conc > 0.5:
+        score += 1
+        reasons.append(f"moderate_conviction_{avg_conc:.0%}")
 
-    return minutes >= min_hold_min, minutes
+    # Market confirmation bonus
+    if mkt_trader_count > 10:
+        score += 2
+        reasons.append(f"market_hot_{mkt_trader_count}_traders_{mkt_pct:.0%}")
+    elif mkt_trader_count > 5:
+        score += 1
+        reasons.append(f"market_active_{mkt_trader_count}_traders")
 
+    # Volume bonus
+    if vol_ratio > 1.5:
+        score += 1
+        reasons.append(f"vol_strong_{vol_ratio:.1f}x")
+    else:
+        reasons.append(f"vol_{vol_ratio:.1f}x")
 
-def clear_stale_consensus(state, active_keys):
-    """Remove tracking for consensus that no longer exists."""
-    tracking = state.get("consensusHistory", {})
-    stale = [k for k in tracking if k not in active_keys]
-    for k in stale:
-        del tracking[k]
-    state["consensusHistory"] = tracking
+    # Regime filter (penalty, not block)
+    regime_cfg = entry_cfg.get("regimeFilter", {})
+    if regime_cfg.get("enabled", True):
+        if (direction == "LONG" and regime == "BEARISH") or \
+           (direction == "SHORT" and regime == "BULLISH"):
+            penalty = regime_cfg.get("penalty", -3)
+            score += penalty
+            reasons.append(f"regime_{regime}_penalty_{penalty}")
+        elif (direction == "LONG" and regime == "BULLISH") or \
+             (direction == "SHORT" and regime == "BEARISH"):
+            score += 1
+            reasons.append(f"regime_confirms_{regime}")
+
+    return score, reasons
 
 
 # ─── Main ─────────────────────────────────────────────────────
@@ -210,7 +338,6 @@ def run():
     entry_cfg = config.get("entry", {})
     max_positions = config.get("maxPositions", 3)
     our_coins = {p["coin"] for p in positions}
-    state = cfg.load_state("mantis-state.json")
 
     # Dynamic slots
     dynamic = entry_cfg.get("dynamicSlots", {})
@@ -227,140 +354,83 @@ def run():
 
     if tc.get("entries", 0) >= max_entries:
         cfg.output({"success": True, "heartbeat": "NO_REPLY", "note": f"max entries ({max_entries})"})
-        cfg.save_state(state, "mantis-state.json")
         return
 
     if len(positions) >= max_positions:
         cfg.output({"success": True, "heartbeat": "NO_REPLY", "note": "max positions"})
-        cfg.save_state(state, "mantis-state.json")
         return
 
-    # CHECK 1: Whale exit detection for held positions (the sting)
-    if positions:
-        whales = discover_whales(entry_cfg)
-        whale_positions = get_whale_positions(whales)
-        mirrored = state.get("mirrored", {})
-
-        for pos in positions:
-            coin = pos["coin"]
-            if coin not in mirrored:
-                continue
-
-            mirror_info = mirrored[coin]
-            original_whale = mirror_info.get("whaleAddress")
-
-            # Check if the whale we mirrored still holds this position
-            whale_still_holds = any(
-                wp["whaleAddress"] == original_whale and wp["coin"] == coin
-                for wp in whale_positions
-            )
-
-            if not whale_still_holds:
-                cfg.save_state(state, "mantis-state.json")
-                cfg.output({
-                    "success": True,
-                    "action": "whale_exit",
-                    "exits": [{
-                        "coin": coin,
-                        "direction": pos["direction"],
-                        "reason": f"whale_{original_whale[:8]}_exited",
-                        "upnl": pos.get("upnl", 0),
-                    }],
-                    "note": "whale exited — the sting fires, close immediately",
-                })
-                return
-
-    # CHECK 2: Discover and score whales
-    whales = discover_whales(entry_cfg)
-    if not whales:
-        cfg.output({"success": True, "heartbeat": "NO_REPLY", "note": "no qualified whales"})
-        cfg.save_state(state, "mantis-state.json")
+    # ── GATE 1: Fetch momentum events ─────────────────────────
+    events = fetch_momentum_events(entry_cfg)
+    if not events:
+        cfg.output({"success": True, "heartbeat": "NO_REPLY",
+                     "note": "no momentum events in lookback window"})
         return
 
-    whale_positions = get_whale_positions(whales)
+    # ── GATE 2: Filter by trader quality ──────────────────────
+    quality_events = filter_quality_events(events, entry_cfg)
+    if not quality_events:
+        cfg.output({"success": True, "heartbeat": "NO_REPLY",
+                     "note": f"{len(events)} events but none passed quality filter"})
+        return
 
-    # CHECK 3: Build consensus (4+ whales on same asset/direction)
-    votes = {}
-    for wp in whale_positions:
-        key = f"{wp['coin']}:{wp['direction']}"
-        if key not in votes:
-            votes[key] = {"coin": wp["coin"], "direction": wp["direction"],
-                          "whales": [], "totalQuality": 0}
-        votes[key]["whales"].append(wp["whaleAddress"])
-        votes[key]["totalQuality"] += wp["whaleQuality"]
+    # ── Build consensus (2+ quality traders on same asset/direction) ──
+    consensus_groups = build_consensus(quality_events, entry_cfg)
+    if not consensus_groups:
+        cfg.output({"success": True, "heartbeat": "NO_REPLY",
+                     "note": f"{len(quality_events)} quality events, no 2+ trader consensus"})
+        return
 
-    min_whale_count = entry_cfg.get("minWhaleCount", 4)
-    min_hold_min = entry_cfg.get("minHoldMinutes", 30)
+    # Get regime once (used for all candidates)
+    regime = get_btc_regime()
+
+    # ── Score each consensus group through remaining gates ────
+    signals = []
     banned = entry_cfg.get("bannedPrefixes", ["xyz:"])
 
-    active_keys = set()
-    signals = []
-
-    for key, vote in votes.items():
-        coin = vote["coin"]
-        direction = vote["direction"]
-        active_keys.add(key)
+    for group in consensus_groups:
+        coin = group["coin"]
+        direction = group["direction"]
 
         if coin in our_coins:
             continue
         if any(coin.startswith(p) for p in banned):
             continue
-        if len(vote["whales"]) < min_whale_count:
+
+        # GATE 3: Market confirmation
+        mkt_ok, mkt_count, mkt_pct = check_market_concentration(coin, entry_cfg)
+        if entry_cfg.get("marketConfirmation", {}).get("enabled", True) and not mkt_ok:
             continue
 
-        # CHECK 4: Persistence — consensus must hold 30+ minutes
-        persisted, minutes = check_consensus_persistence(
-            state, coin, direction, vote["whales"], min_hold_min
-        )
-        if not persisted:
-            continue
-
-        # CHECK 5: Volume confirmation — don't mirror into dead markets
+        # GATE 4: Volume confirmation
         vol_ok, vol_ratio = check_volume(coin, entry_cfg)
-        if not vol_ok:
+        if entry_cfg.get("volumeConfirmation", {}).get("enabled", True) and not vol_ok:
             continue
 
-        # CHECK 6: Regime filter — don't fight the macro
-        regime = get_btc_regime()
-        regime_penalty = 0
-        if (direction == "LONG" and regime == "BEARISH") or \
-           (direction == "SHORT" and regime == "BULLISH"):
-            regime_penalty = -2  # Penalty, not a block — whales might know something
-
-        # Score: whale count + quality + persistence + volume + regime
-        score = len(vote["whales"]) * 2
-        score += vote["totalQuality"]
-        score += min(int(minutes / 30), 3)  # Up to +3 for long persistence
-        score += 1 if vol_ratio > 1.5 else 0
-        score += regime_penalty
-
-        reasons = [
-            f"{len(vote['whales'])}_whales_aligned",
-            f"quality_{vote['totalQuality']}",
-            f"held_{minutes:.0f}min",
-            f"vol_{vol_ratio:.1f}x",
-        ]
-        if regime_penalty:
-            reasons.append(f"regime_{regime}_penalty")
-        if regime == direction.replace("LONG", "BULLISH").replace("SHORT", "BEARISH"):
-            reasons.append("regime_confirms")
+        # GATE 5 + Scoring
+        score, reasons = score_consensus(
+            group, vol_ratio, mkt_count, mkt_pct, regime, direction, entry_cfg
+        )
 
         signals.append({
-            "coin": coin, "direction": direction, "score": score,
-            "reasons": reasons, "whaleCount": len(vote["whales"]),
-            "whaleAddresses": vote["whales"], "totalQuality": vote["totalQuality"],
-            "persistMinutes": minutes, "volRatio": vol_ratio,
+            "coin": coin,
+            "direction": direction,
+            "score": score,
+            "reasons": reasons,
+            "traderCount": group["traderCount"],
+            "eventCount": group["eventCount"],
+            "avgTier": group["avgTier"],
+            "avgConcentration": group["avgConcentration"],
+            "volRatio": vol_ratio,
+            "marketTraderCount": mkt_count,
         })
-
-    clear_stale_consensus(state, active_keys)
-    cfg.save_state(state, "mantis-state.json")
 
     if not signals:
         cfg.output({"success": True, "heartbeat": "NO_REPLY",
-                     "note": f"tracking {len(whales)} whales, no 4+ consensus at 30min+"})
+                     "note": f"{len(consensus_groups)} consensus groups, none passed all gates"})
         return
 
-    min_score = entry_cfg.get("minScore", 12)
+    min_score = entry_cfg.get("minScore", 10)
     signals = [s for s in signals if s["score"] >= min_score]
 
     if not signals:
@@ -373,9 +443,9 @@ def run():
 
     # Conviction-scaled margin
     base_margin_pct = entry_cfg.get("marginPctBase", 0.25)
-    if best["whaleCount"] >= 6:
+    if best["traderCount"] >= 5:
         margin_pct = base_margin_pct * 1.5
-    elif best["whaleCount"] >= 5:
+    elif best["traderCount"] >= 3:
         margin_pct = base_margin_pct * 1.25
     else:
         margin_pct = base_margin_pct
@@ -383,27 +453,22 @@ def run():
 
     leverage = config.get("leverage", {}).get("default", 8)
 
-    # Record mirror for exit tracking
-    mirrored = state.get("mirrored", {})
-    mirrored[best["coin"]] = {
-        "whaleAddress": best["whaleAddresses"][0],
-        "whaleDirection": best["direction"],
-        "enteredAt": cfg.now_iso(),
-        "whaleCount": best["whaleCount"],
-    }
-    state["mirrored"] = mirrored
-    cfg.save_state(state, "mantis-state.json")
-
     cfg.output({
         "success": True,
         "signal": best,
         "entry": {
-            "coin": best["coin"], "direction": best["direction"],
-            "leverage": leverage, "margin": margin,
+            "coin": best["coin"],
+            "direction": best["direction"],
+            "leverage": leverage,
+            "margin": margin,
             "orderType": config.get("execution", {}).get("entryOrderType", "FEE_OPTIMIZED_LIMIT"),
         },
         "armDsl": True,
         "_note": "MANDATORY: run dsl-cli.py add-dsl IMMEDIATELY after entry fills. No naked positions.",
+        "eventsSeen": len(events),
+        "qualityEvents": len(quality_events),
+        "consensusGroups": len(consensus_groups),
+        "candidates": len(signals),
     })
 
 
