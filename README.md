@@ -90,7 +90,7 @@ These are plugins used by all skills automatically. Users don't need to install 
 | Plugin | Purpose |
 |---|---|
 | [DSL Dynamic Stop Loss](./dsl-dynamic-stop-loss) | Trailing stop engine. Supports fixed ROE tiers and [High Water Mode](./dsl-dynamic-stop-loss/dsl-high-water-spec%201.0.md) (percentage-of-peak locks). |
-| [ALO Guide](./alo-guide-for-agents.md) | Maker order execution for fee-optimized entries. |
+| [Fee Optimizer](./fee-optimizer) | When to use ALO vs MARKET, standard order params, fee computations (FDR, maker %). |
 | [Senpi Onboard](./senpi-onboard) | Agent onboarding and account setup. |
 | [Getting Started Guide](./senpi-getting-started-guide) | Interactive first-trade tutorial. |
 | [Emerging Movers](./emerging-movers) | Leaderboard scanner shared by FOX and WOLF. |
