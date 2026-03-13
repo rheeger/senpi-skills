@@ -65,7 +65,7 @@ Spec: https://github.com/Senpi-ai/senpi-skills/blob/main/dsl-dynamic-stop-loss/d
 
 DSL tiers in `wolverine-config.json`. Arm DSL immediately after every entry fill. Zero naked positions.
 
-## Why HYPE-Only at 7-12x Leverage
+## Why HYPE-Only at 5-10x Leverage
 
 - **Native to Hyperliquid** — deepest on-exchange liquidity for HYPE
 - **Platform momentum** — HYPE price correlates with Hyperliquid volume/TVL growth
@@ -99,9 +99,9 @@ Maximum score: ~18. Minimum to enter: 10.
 
 | Score | Leverage |
 |---|---|
-| 10-11 | 10x |
-| 12-13 | 11x |
-| 14+ | 12x |
+| 10-11 | 8x |
+| 12-13 | 9x |
+| 14+ | 10x |
 
 ### Conviction-Scaled Margin
 

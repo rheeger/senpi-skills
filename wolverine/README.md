@@ -4,7 +4,7 @@ Part of the [Senpi Trading Skills Zoo](https://github.com/Senpi-ai/senpi-skills)
 
 ## What WOLVERINE Does
 
-WOLVERINE is a single-asset alpha hunter for **HYPE** on Hyperliquid. It uses every available signal source (SM positioning, funding, OI, 4-timeframe trend, volume, BTC correlation) to build a conviction thesis, then trades it with 7-12x leverage and DSL High Water trailing stops.
+WOLVERINE is a single-asset alpha hunter for **HYPE** on Hyperliquid. It uses every available signal source (SM positioning, funding, OI, 4-timeframe trend, volume, BTC correlation) to build a conviction thesis, then trades it with 5-10x leverage and DSL High Water trailing stops.
 
 Based on GRIZZLY v2.0's three-mode lifecycle, adapted for HYPE's volatility profile.
 
@@ -49,7 +49,7 @@ wolverine-v1.0/
 |---|---|---|
 | Asset | BTC | HYPE |
 | Correlation | ETH | BTC |
-| Leverage | 12-20x | 7-12x |
+| Leverage | 12-20x | 5-10x |
 | Margin base | 30% | 20% |
 | DSL floor | 3.5% notional | 2.5% notional |
 | Stagnation TP | 12% ROE / 90 min | 10% ROE / 75 min |
