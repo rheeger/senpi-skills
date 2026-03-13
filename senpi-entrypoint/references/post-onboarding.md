@@ -1,5 +1,7 @@
 # Post-Onboarding Reference
 
+<!-- Used by senpi-entrypoint Step 2 (Welcome). Keep in sync with senpi-onboard/references/post-onboarding.md when updating welcome or catalog content. -->
+
 ## About Senpi
 
 Senpi is a trading platform on Hyperliquid — a high-performance perpetual futures DEX.
@@ -110,7 +112,7 @@ If the user asks what to deploy, recommend based on their balance:
 | Balance | Recommended | Why |
 |---|---|---|
 | < $500 | None — fund to $500+ | No catalog skill has min_budget below $500 |
-| $500-$2,000 | FOX, Viper, Cobra, Scorpion, Wolf, Croc, Owl, Cheetah, Hawk, Shark, Dire Wolf | Mid-range, multiple options |
+| $500-$2,000 | FOX, Viper, Cobra, Scorpion, Wolf, Croc, Owl | Mid-range, multiple options |
 | $2,000-$5,000 | Any skill | Full catalog available |
 | > $5,000 | Grizzly, Bison, Tiger, or multi-skill | Enough for high-leverage or multi-position strategies |
 
