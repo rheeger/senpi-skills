@@ -10,7 +10,7 @@ Usage:
     cfg = load_strategy("wolf-abc123")   # Specific strategy
     cfg = load_strategy()                # Default strategy
     strategies = load_all_strategies()   # All enabled strategies
-    path = dsl_state_path("wolf-abc123", "HYPE")  # DSL v5.2: {DSL_STATE_DIR}/{UUID}/{asset}.json
+    path = dsl_state_path("wolf-abc123", "HYPE")  # DSL v5.3: {DSL_STATE_DIR}/{UUID}/{asset}.json
 """
 
 import json, os, sys, glob, subprocess, time, tempfile, shlex, fcntl
@@ -26,7 +26,7 @@ LEGACY_STATE_PATTERN = os.path.join(WORKSPACE, "dsl-state-WOLF-*.json")
 
 # Skill attribution — injected automatically into every mcporter_call()
 SKILL_NAME = "wolf-strategy"
-SKILL_VERSION = "6.1.1"
+SKILL_VERSION = "6.3"
 
 
 def _fail(msg):
@@ -79,10 +79,10 @@ def _load_registry():
             "dsl": {
                 "preset": "aggressive",
                 "tiers": [
-                    {"triggerPct": 5, "lockPct": 50, "breaches": 3},
-                    {"triggerPct": 10, "lockPct": 65, "breaches": 2},
-                    {"triggerPct": 15, "lockPct": 75, "breaches": 2},
-                    {"triggerPct": 20, "lockPct": 85, "breaches": 1}
+                    {"triggerPct": 7, "lockHwPct": 40, "consecutiveBreachesRequired": 3},
+                    {"triggerPct": 12, "lockHwPct": 55, "consecutiveBreachesRequired": 2},
+                    {"triggerPct": 15, "lockHwPct": 75, "consecutiveBreachesRequired": 2},
+                    {"triggerPct": 20, "lockHwPct": 85, "consecutiveBreachesRequired": 1}
                 ]
             },
             "enabled": True
@@ -479,8 +479,15 @@ def validate_dsl_state(state, state_file=None):
     return True, None
 
 
-# Default tiers when strategy has none (DSL v5.2: no per-tier breach count)
+# Default tiers when strategy has none (DSL v5.3 High Water)
 DEFAULT_DSL_TIERS = [
+    {"triggerPct": 7, "lockHwPct": 40, "consecutiveBreachesRequired": 3},
+    {"triggerPct": 12, "lockHwPct": 55, "consecutiveBreachesRequired": 2},
+    {"triggerPct": 15, "lockHwPct": 75, "consecutiveBreachesRequired": 2},
+    {"triggerPct": 20, "lockHwPct": 85, "consecutiveBreachesRequired": 1},
+]
+# Legacy fixed-ROE tiers (when lockMode fixed_roe or fallback)
+DEFAULT_DSL_TIERS_LEGACY = [
     {"triggerPct": 5, "lockPct": 50, "breaches": 3},
     {"triggerPct": 10, "lockPct": 65, "breaches": 2},
     {"triggerPct": 15, "lockPct": 75, "breaches": 2},
@@ -502,17 +509,47 @@ def _load_wolf_dsl_profile():
 
 
 def build_wolf_dsl_config(cfg):
-    """Translate wolf strategy DSL config to DSL v5.2 format for dsl-cli.py --configuration.
-    Merges in cronIntervalMinutes and phase1.hardTimeout, weakPeakCut, deadWeightCut from
-    wolf-strategy/dsl-profile.json when present."""
+    """Translate wolf strategy DSL config to DSL v5.3 format for dsl-cli.py --configuration.
+    Uses wolf-strategy/dsl-profile.json when present (High Water); strategy dsl.tiers override profile tiers."""
     from collections import Counter
-    tiers = cfg.get("dsl", {}).get("tiers", DEFAULT_DSL_TIERS)
-    phase2_tiers = [
-        {"triggerPct": t["triggerPct"], "lockPct": t["lockPct"]}
-        for t in tiers
-    ]
-    breach_counts = [t.get("breachesRequired", t.get("breaches", 2)) for t in tiers]
-    phase2_breaches = Counter(breach_counts).most_common(1)[0][0] if breach_counts else 2
+    profile = _load_wolf_dsl_profile()
+    strategy_dsl = cfg.get("dsl", {})
+    tiers = strategy_dsl.get("tiers") or (profile.get("tiers") if isinstance(profile, dict) else None) or DEFAULT_DSL_TIERS
+
+    # High Water: driven by dsl-profile.json lockMode; fallback to inferring from tiers (lockHwPct).
+    # If profile says high water but strategy overrode with legacy lockPct-only tiers, use fixed_roe
+    # so we don't strip lockPct (which would produce 0% floor in the engine).
+    use_high_water = False
+    if isinstance(profile, dict) and profile.get("lockMode") is not None:
+        use_high_water = profile.get("lockMode") == "pct_of_high_water"
+    elif tiers and isinstance(tiers, list) and len(tiers) > 0:
+        first = tiers[0]
+        use_high_water = isinstance(first, dict) and "lockHwPct" in first
+    # Resolved tiers are legacy-only (lockPct, no lockHwPct): don't use high-water branch or we'd drop lockPct.
+    if use_high_water and tiers and isinstance(tiers, list):
+        any_legacy_only = any(
+            isinstance(t, dict) and "lockPct" in t and "lockHwPct" not in t for t in tiers
+        )
+        if any_legacy_only:
+            use_high_water = False
+
+    if use_high_water:
+        phase2_tiers = [
+            {k: t[k] for k in ("triggerPct", "lockHwPct", "consecutiveBreachesRequired") if k in t}
+            for t in tiers
+        ]
+        phase2_breaches = 2
+        if phase2_tiers:
+            b = [t.get("consecutiveBreachesRequired", t.get("breachesRequired", 2)) for t in tiers]
+            phase2_breaches = Counter(b).most_common(1)[0][0] if b else 2
+    else:
+        phase2_tiers = [
+            {"triggerPct": t["triggerPct"], "lockPct": t.get("lockPct", 50)}
+            for t in tiers
+        ]
+        breach_counts = [t.get("breachesRequired", t.get("breaches", 2)) for t in tiers]
+        phase2_breaches = Counter(breach_counts).most_common(1)[0][0] if breach_counts else 2
+
     phase1 = {
         "enabled": True,
         "retraceThreshold": 0.10,
@@ -527,11 +564,18 @@ def build_wolf_dsl_config(cfg):
             "consecutiveBreachesRequired": phase2_breaches,
             "tiers": phase2_tiers,
         },
+        "tiers": list(phase2_tiers),
     }
-    profile = _load_wolf_dsl_profile()
+    if use_high_water:
+        out["lockMode"] = "pct_of_high_water"
+        out["phase2TriggerRoe"] = (profile or {}).get("phase2TriggerRoe", 7)
     if isinstance(profile, dict):
         if profile.get("cronIntervalMinutes") is not None:
             out["cronIntervalMinutes"] = profile["cronIntervalMinutes"]
+        if profile.get("lockMode") and "lockMode" not in out:
+            out["lockMode"] = profile["lockMode"]
+        if profile.get("phase2TriggerRoe") is not None and "phase2TriggerRoe" not in out:
+            out["phase2TriggerRoe"] = profile["phase2TriggerRoe"]
         p1_profile = profile.get("phase1")
         if isinstance(p1_profile, dict):
             for key in ("hardTimeout", "weakPeakCut", "deadWeightCut"):

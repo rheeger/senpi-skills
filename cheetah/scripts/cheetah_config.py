@@ -1,4 +1,4 @@
-"""SCORPION Strategy — Shared config, MCP helpers, state I/O."""
+"""CHEETAH Strategy — Shared config, MCP helpers, state I/O."""
 # Copyright 2026 Senpi (https://senpi.ai)
 # Licensed under MIT
 # Source: https://github.com/Senpi-ai/senpi-skills
@@ -13,8 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 WORKSPACE = os.environ.get("OPENCLAW_WORKSPACE", "/data/workspace")
-SKILL_DIR = Path(WORKSPACE) / "skills" / "scorpion-strategy"
-CONFIG_PATH = SKILL_DIR / "config" / "scorpion-config.json"
+SKILL_DIR = Path(WORKSPACE) / "skills" / "cheetah-strategy"
+CONFIG_PATH = SKILL_DIR / "config" / "cheetah-config.json"
 STATE_DIR = SKILL_DIR / "state"
 
 STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -50,8 +50,8 @@ def load_config():
 
 
 def get_wallet_and_strategy():
-    wallet = os.environ.get("SCORPION_WALLET", "")
-    strategy_id = os.environ.get("SCORPION_STRATEGY_ID", "")
+    wallet = os.environ.get("CHEETAH_WALLET", "")
+    strategy_id = os.environ.get("CHEETAH_STRATEGY_ID", "")
     if not wallet or not strategy_id:
         config = load_config()
         wallet = wallet or config.get("wallet", "")

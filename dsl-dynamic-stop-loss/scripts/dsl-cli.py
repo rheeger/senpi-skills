@@ -269,6 +269,7 @@ def get_positions_from_clearinghouse(wallet: str) -> tuple[list[dict], str | Non
 # Config: defaults and resolution (configuration only, no presets)
 # ---------------------------------------------------------------------------
 
+# Legacy fixed-ROE tiers (used only when a config explicitly uses lockMode fixed_roe).
 DEFAULT_TIERS = [
     {"triggerPct": 10, "lockPct": 5},
     {"triggerPct": 20, "lockPct": 14},
@@ -277,6 +278,23 @@ DEFAULT_TIERS = [
     {"triggerPct": 75, "lockPct": 60, "retrace": 0.008},
     {"triggerPct": 100, "lockPct": 80, "retrace": 0.006},
 ]
+
+# Default when no dsl-profile is supplied: high water mode (pct_of_high_water) per dsl-profile.json.
+DEFAULT_LOCK_MODE = "pct_of_high_water"
+DEFAULT_PHASE2_TRIGGER_ROE = 7
+DEFAULT_TIERS_HIGH_WATER = [
+    {"triggerPct": 7, "lockHwPct": 40, "consecutiveBreachesRequired": 3},
+    {"triggerPct": 12, "lockHwPct": 55, "consecutiveBreachesRequired": 2},
+    {"triggerPct": 15, "lockHwPct": 75, "consecutiveBreachesRequired": 2},
+    {"triggerPct": 20, "lockHwPct": 85, "consecutiveBreachesRequired": 1},
+]
+
+
+def _default_tiers_for_lock_mode(lock_mode: str | None) -> list:
+    """Return default tiers for the given lockMode. fixed_roe uses lockPct tiers; else high-water."""
+    if lock_mode == "fixed_roe":
+        return list(DEFAULT_TIERS)
+    return list(DEFAULT_TIERS_HIGH_WATER)
 
 
 def normalize_asset_dex(asset: str, dex: str) -> tuple[str, str]:
@@ -370,13 +388,14 @@ def validate_dsl_config(cfg: dict) -> list[str]:
     if tiers is not None and not isinstance(tiers, list):
         errors.append("tiers must be an array")
     elif isinstance(tiers, list):
+        lock_mode = cfg.get("lockMode", "fixed_roe")
         prev_trigger = -1
+        prev_lock_hw = -1
         for i, t in enumerate(tiers):
             if not isinstance(t, dict):
                 errors.append(f"tiers[{i}] must be an object")
                 continue
             tp = t.get("triggerPct")
-            lp = t.get("lockPct")
             if tp is None:
                 errors.append(f"tiers[{i}]: triggerPct is required")
             else:
@@ -386,12 +405,30 @@ def validate_dsl_config(cfg: dict) -> list[str]:
                 elif tv <= prev_trigger:
                     errors.append(f"tiers[{i}]: triggerPct must be strictly greater than previous tier ({prev_trigger})")
                 prev_trigger = tv
-            if lp is None:
-                errors.append(f"tiers[{i}]: lockPct is required")
+            if lock_mode == "pct_of_high_water":
+                lhw = t.get("lockHwPct")
+                if lhw is None:
+                    errors.append(f"tiers[{i}]: lockHwPct is required when lockMode is pct_of_high_water")
+                else:
+                    lhwv = _safe_float(lhw, -1)
+                    if lhwv < 0 or lhwv > 100:
+                        errors.append(f"tiers[{i}]: lockHwPct must be a number between 0 and 100")
+                    elif lhwv <= prev_lock_hw:
+                        errors.append(f"tiers[{i}]: lockHwPct must be strictly greater than previous tier ({prev_lock_hw})")
+                    prev_lock_hw = lhwv
+                cbr = t.get("consecutiveBreachesRequired")
+                if cbr is not None:
+                    cbrv = _safe_int(cbr, -1)
+                    if cbrv < 1 or cbrv > 5:
+                        errors.append(f"tiers[{i}]: consecutiveBreachesRequired must be an integer 1–5")
             else:
-                lv = _safe_float(lp, -1)
-                if lv < 0 or lv > 100:
-                    errors.append(f"tiers[{i}]: lockPct must be a number between 0 and 100")
+                lp = t.get("lockPct")
+                if lp is None:
+                    errors.append(f"tiers[{i}]: lockPct is required")
+                else:
+                    lv = _safe_float(lp, -1)
+                    if lv < 0 or lv > 100:
+                        errors.append(f"tiers[{i}]: lockPct must be a number between 0 and 100")
             ret = t.get("retrace")
             if ret is not None:
                 rv = _safe_float(ret, -1)
@@ -487,24 +524,65 @@ def load_config_source(source: str) -> tuple[dict | None, str | None]:
         return None, str(e)
 
 
+def _infer_lock_mode_from_tiers(tiers: list) -> str:
+    """Infer lockMode from tier contents (mirrors build_position_state). lockHwPct -> pct_of_high_water, else fixed_roe."""
+    if not isinstance(tiers, list):
+        return DEFAULT_LOCK_MODE
+    return (
+        "pct_of_high_water"
+        if any(isinstance(t, dict) and "lockHwPct" in t for t in tiers)
+        else "fixed_roe"
+    )
+
+
 def _ensure_phase_defaults(base: dict) -> None:
+    """Apply defaults when config is missing; use high-water mode as default (no profile supplied)."""
     if "phase1" not in base:
         base["phase1"] = {"enabled": True, "retraceThreshold": 0.03, "consecutiveBreachesRequired": 3}
     elif isinstance(base.get("phase1"), dict) and "enabled" not in base["phase1"]:
         base["phase1"]["enabled"] = True
     if "phase2TriggerTier" not in base:
         base["phase2TriggerTier"] = 0
+    # When lockMode is missing: infer from existing tiers if present (preserve legacy/custom tiers); else apply high-water defaults.
+    if "lockMode" not in base:
+        raw_tiers = base.get("tiers") or (
+            base.get("phase2", {}).get("tiers") if isinstance(base.get("phase2"), dict) else None
+        )
+        existing_tiers = list(raw_tiers) if isinstance(raw_tiers, list) and len(raw_tiers) > 0 else []
+        if existing_tiers:
+            base["lockMode"] = _infer_lock_mode_from_tiers(existing_tiers)
+            if "phase2TriggerRoe" not in base:
+                base["phase2TriggerRoe"] = DEFAULT_PHASE2_TRIGGER_ROE
+            # Preserve existing tiers: set base and phase2 from canonical list (do not overwrite with DEFAULT_TIERS_HIGH_WATER).
+            base["tiers"] = list(existing_tiers)
+            if isinstance(base.get("phase2"), dict):
+                base["phase2"]["tiers"] = list(existing_tiers)
+            else:
+                base.setdefault("phase2", {})["tiers"] = list(existing_tiers)
+        else:
+            base["lockMode"] = DEFAULT_LOCK_MODE
+            base["phase2TriggerRoe"] = DEFAULT_PHASE2_TRIGGER_ROE
+            default_tiers = _default_tiers_for_lock_mode(DEFAULT_LOCK_MODE)
+            base["tiers"] = default_tiers
+            if isinstance(base.get("phase2"), dict):
+                base["phase2"]["tiers"] = default_tiers
+            else:
+                base.setdefault("phase2", {})["tiers"] = default_tiers
+    elif "phase2TriggerRoe" not in base:
+        base["phase2TriggerRoe"] = DEFAULT_PHASE2_TRIGGER_ROE
+    lock_mode = base.get("lockMode", DEFAULT_LOCK_MODE)
+    default_tiers = _default_tiers_for_lock_mode(lock_mode)
     if "phase2" not in base:
-        base["phase2"] = {"enabled": True, "retraceThreshold": 0.015, "consecutiveBreachesRequired": 1, "tiers": list(DEFAULT_TIERS)}
+        base["phase2"] = {"enabled": True, "retraceThreshold": 0.015, "consecutiveBreachesRequired": 1, "tiers": default_tiers}
     elif isinstance(base.get("phase2"), dict):
         if "enabled" not in base["phase2"]:
             base["phase2"]["enabled"] = True
         if "tiers" not in base["phase2"] and "tiers" not in base:
-            base["phase2"]["tiers"] = list(DEFAULT_TIERS)
+            base["phase2"]["tiers"] = default_tiers
     if "tiers" not in base and isinstance(base.get("phase2"), dict):
-        base["tiers"] = base["phase2"].get("tiers", list(DEFAULT_TIERS))
+        base["tiers"] = base["phase2"].get("tiers", default_tiers)
     elif "tiers" not in base:
-        base["tiers"] = list(DEFAULT_TIERS)
+        base["tiers"] = default_tiers
 
 
 def _merge_inline_config(base: dict, inline_config: dict | None) -> None:
@@ -561,8 +639,9 @@ def config_to_phase1_phase2_tiers(config: dict, entry_price: float, leverage: fl
     phase2_enabled = phase2.get("enabled", True)
     if not phase1_enabled and not phase2_enabled:
         raise ValueError("at least one of phase1.enabled or phase2.enabled must be true")
-    raw_tiers = config.get("tiers") or (phase2.get("tiers") if isinstance(phase2.get("tiers"), list) else None) or DEFAULT_TIERS
-    tiers = list(raw_tiers) if isinstance(raw_tiers, list) else list(DEFAULT_TIERS)
+    default_tiers = _default_tiers_for_lock_mode(config.get("lockMode"))
+    raw_tiers = config.get("tiers") or (phase2.get("tiers") if isinstance(phase2.get("tiers"), list) else None) or default_tiers
+    tiers = list(raw_tiers) if isinstance(raw_tiers, list) else default_tiers
     if phase2_enabled and not phase1_enabled and not tiers:
         raise ValueError("phase2 only requires non-empty tiers")
     if "absoluteFloor" not in phase1 or phase1["absoluteFloor"] is None:
@@ -597,11 +676,14 @@ def load_strategy_json(state_dir: str, strategy_id: str) -> tuple[dict | None, s
 
 
 def _default_strategy_config() -> dict:
+    """Default strategy config when no dsl-profile is supplied: high water mode."""
     return {
         "phase1": {"enabled": True, "retraceThreshold": 0.03, "consecutiveBreachesRequired": 3},
         "phase2TriggerTier": 0,
-        "phase2": {"enabled": True, "retraceThreshold": 0.015, "consecutiveBreachesRequired": 1, "tiers": list(DEFAULT_TIERS)},
-        "tiers": list(DEFAULT_TIERS),
+        "phase2TriggerRoe": DEFAULT_PHASE2_TRIGGER_ROE,
+        "lockMode": DEFAULT_LOCK_MODE,
+        "phase2": {"enabled": True, "retraceThreshold": 0.015, "consecutiveBreachesRequired": 1, "tiers": list(DEFAULT_TIERS_HIGH_WATER)},
+        "tiers": list(DEFAULT_TIERS_HIGH_WATER),
         "cronIntervalMinutes": 3,
     }
 
@@ -697,6 +779,15 @@ def build_position_state(
     phase1, phase2_trigger, phase2, tiers = config_to_phase1_phase2_tiers(
         config, entry_price, leverage, direction,
     )
+    # Default lockMode: high water when no profile supplied; infer from tiers when config has tiers but no lockMode (e.g. legacy lockPct).
+    if "lockMode" in config:
+        lock_mode = config["lockMode"]
+    else:
+        lock_mode = (
+            "pct_of_high_water"
+            if any(isinstance(t, dict) and "lockHwPct" in t for t in tiers)
+            else "fixed_roe"
+        )
     abs_floor = phase1["absoluteFloor"]
     initial_phase = 1 if phase1.get("enabled", True) else 2
     state = {
@@ -716,11 +807,15 @@ def build_position_state(
         "currentTierIndex": -1,
         "tierFloorPrice": None,
         "highWaterPrice": entry_price,
+        "highWaterRoe": 0,
         "floorPrice": abs_floor,
         "currentBreachCount": 0,
         "createdAt": now_iso,
         "cronIntervalMinutes": _safe_int(config.get("cronIntervalMinutes"), 3) or 3,
+        "lockMode": lock_mode,
     }
+    if config.get("phase2TriggerRoe") is not None:
+        state["phase2TriggerRoe"] = _safe_float(config["phase2TriggerRoe"], 0.0)
     return state
 
 
@@ -792,6 +887,12 @@ def patch_config_into_state(state: dict, cfg: dict) -> list[str]:
     if "cronIntervalMinutes" in cfg and cfg["cronIntervalMinutes"] is not None:
         state["cronIntervalMinutes"] = _safe_int(cfg["cronIntervalMinutes"], 3)
         updated.append("cronIntervalMinutes")
+    if "lockMode" in cfg:
+        state["lockMode"] = cfg["lockMode"]
+        updated.append("lockMode")
+    if "phase2TriggerRoe" in cfg:
+        state["phase2TriggerRoe"] = _safe_float(cfg["phase2TriggerRoe"], 0.0)
+        updated.append("phase2TriggerRoe")
     return updated
 
 

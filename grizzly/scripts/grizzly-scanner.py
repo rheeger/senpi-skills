@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-# Senpi GRIZZLY Scanner v1.0
+# Senpi GRIZZLY Scanner v2.0
 # Copyright 2026 Senpi (https://senpi.ai)
-# Licensed under Apache-2.0 — attribution required for derivative works
+# Licensed under MIT
 # Source: https://github.com/Senpi-ai/senpi-skills
-"""GRIZZLY Scanner — BTC Alpha Hunter.
+"""GRIZZLY v2.0 — BTC Alpha Hunter with Position Lifecycle.
 
-Single-asset focus. Stares at BTC and nothing else — reads every signal
-available (SM positioning, funding, OI, multi-timeframe trend, volume,
-ETH correlation) to build the highest-conviction BTC entries at 15-20x leverage.
+Single-asset focus. BTC only. Every signal source available (SM, funding, OI,
+4-timeframe trend, volume, ETH correlation). 15-20x leverage, maximum conviction.
 
-Deepest liquidity, most SM data, tightest spreads, most structural moves.
-DSL High Water Mode with BTC-specific wide tiers.
+v2.0 adds three-mode position lifecycle:
+  MODE 1 — HUNTING: normal scanning, all signals must align, score 10+ to enter
+  MODE 2 — RIDING: position open, DSL trails, monitor thesis
+  MODE 3 — STALKING: DSL closed, watch for reload on dip, or reset if thesis dies
+
+The loop: HUNTING → enter → RIDING → DSL closes → STALKING → reload or reset.
 
 Runs every 3 minutes.
 """
@@ -346,6 +349,142 @@ def evaluate_btc_position(direction, entry_cfg):
     return (len(invalidations) == 0), invalidations
 
 
+# ─── Stalk Evaluation (after DSL exit) ────────────────────────
+
+def evaluate_reload(exit_state, entry_cfg):
+    """Check if conditions are met to reload after a DSL exit.
+    Returns (should_reload, reasons) or (False, kill_reasons)."""
+
+    stalk_cfg = entry_cfg.get("stalk", {})
+    direction = exit_state.get("exitDirection")
+    exit_ts = exit_state.get("exitTimestamp", 0)
+    exit_vol = exit_state.get("exitEntryVolRatio", 1.0)
+    now = cfg.now_ts()
+    hours_stalking = (now - exit_ts) / 3600
+
+    # KILL: stalking too long — trend is over
+    max_stalk_hours = stalk_cfg.get("maxStalkHours", 6)
+    if hours_stalking > max_stalk_hours:
+        return False, ["stalk_timeout_{:.1f}h".format(hours_stalking)]
+
+    btc_data = get_btc_full_picture()
+    if not btc_data:
+        return False, ["data_unavailable"]
+
+    candles_5m = btc_data.get("candles", {}).get("5m", [])
+    candles_1h = btc_data.get("candles", {}).get("1h", [])
+    candles_4h = btc_data.get("candles", {}).get("4h", [])
+    funding = float(btc_data.get("funding", 0))
+
+    kill_reasons = []
+    reload_checks = []
+
+    # KILL CHECK: 4h trend reversed
+    trend_4h, _ = trend_structure(candles_4h)
+    expected_trend = "BULLISH" if direction == "LONG" else "BEARISH"
+    if trend_4h != expected_trend and trend_4h != "NEUTRAL":
+        kill_reasons.append(f"4h_trend_reversed_{trend_4h}")
+
+    # KILL CHECK: SM flipped
+    sm_dir, sm_pct, _ = get_btc_sm_direction()
+    if sm_dir and sm_dir != "NEUTRAL" and sm_dir != direction:
+        kill_reasons.append(f"sm_flipped_{sm_dir}")
+
+    # KILL CHECK: Funding spiked into extreme crowding
+    funding_ann = abs(funding) * 8760
+    max_funding = stalk_cfg.get("maxFundingAnnPct", 100)
+    if (direction == "LONG" and funding > 0 and funding_ann > max_funding) or \
+       (direction == "SHORT" and funding < 0 and funding_ann > max_funding):
+        kill_reasons.append(f"funding_extreme_{funding_ann:.0f}%ann")
+
+    # KILL CHECK: OI collapsed
+    if len(candles_1h) >= 6:
+        recent_vols = [float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles_1h[-3:]]
+        earlier_vols = [float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles_1h[-6:-3]]
+        avg_recent = sum(recent_vols) / len(recent_vols) if recent_vols else 0
+        avg_earlier = sum(earlier_vols) / len(earlier_vols) if earlier_vols else 1
+        if avg_earlier > 0:
+            oi_change = ((avg_recent - avg_earlier) / avg_earlier) * 100
+            if oi_change < -20:
+                kill_reasons.append(f"oi_collapsed_{oi_change:+.0f}%")
+
+    if kill_reasons:
+        return False, kill_reasons
+
+    # RELOAD CHECK 1: At least one completed 1h candle since exit
+    if len(candles_1h) >= 2:
+        last_completed_close_ts = candles_1h[-2].get("t", candles_1h[-2].get("T", 0))
+        if isinstance(last_completed_close_ts, str):
+            last_completed_close_ts = 0
+        # Simple check: must have been stalking for at least 30 min (roughly one 1h candle)
+        if hours_stalking < 0.5:
+            reload_checks.append("waiting_for_1h_candle")
+
+    # RELOAD CHECK 2: Fresh 5m momentum impulse
+    if len(candles_5m) >= 3:
+        mom_5m_1 = price_momentum(candles_5m, 1)
+        mom_5m_2 = price_momentum(candles_5m[:-1], 1)
+        if direction == "LONG":
+            if mom_5m_1 > 0.15 and mom_5m_1 > mom_5m_2:
+                reload_checks.append(f"fresh_5m_impulse_{mom_5m_1:+.2f}%")
+            else:
+                reload_checks.append("no_5m_impulse")
+        else:
+            if mom_5m_1 < -0.15 and mom_5m_1 < mom_5m_2:
+                reload_checks.append(f"fresh_5m_impulse_{mom_5m_1:+.2f}%")
+            else:
+                reload_checks.append("no_5m_impulse")
+
+    # RELOAD CHECK 3: OI stable or growing
+    if len(candles_1h) >= 4:
+        recent_v = sum(float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles_1h[-2:]) / 2
+        earlier_v = sum(float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles_1h[-4:-2]) / 2
+        if earlier_v > 0 and recent_v >= earlier_v * 0.8:
+            reload_checks.append("oi_stable")
+        else:
+            reload_checks.append("oi_declining")
+
+    # RELOAD CHECK 4: Volume at least 50% of original entry
+    min_vol_pct = stalk_cfg.get("minReloadVolPct", 50)
+    vol = volume_ratio(candles_5m)
+    if vol >= exit_vol * min_vol_pct / 100:
+        reload_checks.append(f"vol_sufficient_{vol:.1f}x")
+    else:
+        reload_checks.append(f"vol_weak_{vol:.1f}x")
+
+    # RELOAD CHECK 5: Funding not crowded
+    crowd_threshold = stalk_cfg.get("crowdedFundingAnnPct", 50)
+    if (direction == "LONG" and (funding <= 0 or funding_ann < crowd_threshold)) or \
+       (direction == "SHORT" and (funding >= 0 or funding_ann < crowd_threshold)):
+        reload_checks.append("funding_ok")
+    else:
+        reload_checks.append(f"funding_crowded_{funding_ann:.0f}%ann")
+
+    # RELOAD CHECK 6: SM still aligned
+    if sm_dir == direction:
+        reload_checks.append(f"sm_aligned_{sm_pct:.0f}%")
+    elif sm_dir == "NEUTRAL":
+        reload_checks.append("sm_neutral_ok")
+    else:
+        reload_checks.append(f"sm_not_aligned_{sm_dir}")
+
+    # RELOAD CHECK 7: 4h trend intact
+    if trend_4h == expected_trend:
+        reload_checks.append("4h_intact")
+    else:
+        reload_checks.append(f"4h_{trend_4h}")
+
+    # Count passes vs fails
+    fails = [r for r in reload_checks if any(bad in r for bad in
+              ["no_5m", "oi_declining", "vol_weak", "funding_crowded",
+               "sm_not_aligned", "waiting_for"])]
+
+    if not fails:
+        return True, reload_checks
+    else:
+        return False, reload_checks
+
+
 # ─── Main ─────────────────────────────────────────────────────
 
 def run():
@@ -363,10 +502,17 @@ def run():
 
     account_value, positions = cfg.get_positions(wallet)
     entry_cfg = config.get("entry", {})
+    state = cfg.load_state("grizzly-state.json")
+    current_mode = state.get("currentMode", "HUNTING")
     btc_position = next((p for p in positions if p["coin"] == "BTC"), None)
 
-    # CHECK 1: Re-evaluate thesis if holding BTC
-    if btc_position:
+    # ── MODE 2: RIDING ────────────────────────────────────────
+    if btc_position and current_mode in ("RIDING", "HUNTING"):
+        # We have a position — ensure we're in RIDING mode
+        if current_mode != "RIDING":
+            state["currentMode"] = "RIDING"
+            cfg.save_state(state, "grizzly-state.json")
+
         still_valid, reasons = evaluate_btc_position(btc_position["direction"], entry_cfg)
         if not still_valid:
             cfg.output({
@@ -380,13 +526,98 @@ def run():
                 }],
                 "note": "BTC thesis invalidated — conviction broken",
             })
+            # On thesis exit, go to HUNTING (thesis is dead, don't stalk)
+            state["currentMode"] = "HUNTING"
+            state.pop("exitState", None)
+            cfg.save_state(state, "grizzly-state.json")
             return
-        # Thesis intact — hold
+
         cfg.output({"success": True, "heartbeat": "NO_REPLY",
-                     "note": f"BTC {btc_position['direction']} thesis intact, holding"})
+                     "note": f"RIDING: BTC {btc_position['direction']} thesis intact"})
+        cfg.save_state(state, "grizzly-state.json")
         return
 
-    # CHECK 2: Entry cap
+    # ── Detect DSL exit: was RIDING, now no position ──────────
+    if not btc_position and current_mode == "RIDING":
+        # DSL closed our position. Transition to STALKING.
+        # Record exit state for reload evaluation
+        btc_data = get_btc_full_picture()
+        exit_vol = 1.0
+        if btc_data:
+            candles_5m = btc_data.get("candles", {}).get("5m", [])
+            exit_vol = volume_ratio(candles_5m) if candles_5m else 1.0
+
+        state["currentMode"] = "STALKING"
+        state["exitState"] = {
+            "exitDirection": state.get("lastDirection", "LONG"),
+            "exitTimestamp": cfg.now_ts(),
+            "exitEntryVolRatio": exit_vol,
+        }
+        cfg.save_state(state, "grizzly-state.json")
+        cfg.output({"success": True, "heartbeat": "NO_REPLY",
+                     "note": "DSL closed position — transitioning to STALKING mode"})
+        return
+
+    # ── MODE 3: STALKING ──────────────────────────────────────
+    if current_mode == "STALKING":
+        exit_state = state.get("exitState", {})
+        if not exit_state:
+            # Corrupted state — reset
+            state["currentMode"] = "HUNTING"
+            cfg.save_state(state, "grizzly-state.json")
+        else:
+            should_reload, reasons = evaluate_reload(exit_state, entry_cfg)
+
+            if should_reload:
+                # RELOAD: re-enter same direction
+                direction = exit_state["exitDirection"]
+                lev_cfg = config.get("leverage", {})
+                leverage = lev_cfg.get("default", 15)
+                base_margin_pct = entry_cfg.get("marginPctBase", 0.30)
+                margin = round(account_value * base_margin_pct, 2)
+
+                state["currentMode"] = "RIDING"
+                state["lastDirection"] = direction
+                state.pop("exitState", None)
+                cfg.save_state(state, "grizzly-state.json")
+
+                cfg.output({
+                    "success": True,
+                    "action": "reload",
+                    "entry": {
+                        "coin": "BTC",
+                        "direction": direction,
+                        "leverage": leverage,
+                        "margin": margin,
+                        "orderType": config.get("execution", {}).get("entryOrderType", "FEE_OPTIMIZED_LIMIT"),
+                    },
+                    "reasons": reasons,
+                    "note": f"STALKING → RELOAD: fresh impulse confirmed, re-entering BTC {direction}",
+                })
+                return
+
+            # Check for kill conditions (returned as reasons when should_reload=False)
+            kill_signals = [r for r in reasons if any(k in r for k in
+                           ["stalk_timeout", "4h_trend_reversed", "sm_flipped",
+                            "funding_extreme", "oi_collapsed"])]
+
+            if kill_signals:
+                state["currentMode"] = "HUNTING"
+                state.pop("exitState", None)
+                cfg.save_state(state, "grizzly-state.json")
+                cfg.output({"success": True, "heartbeat": "NO_REPLY",
+                             "note": f"STALKING → RESET: {kill_signals[0]}"})
+                return
+
+            # Still stalking, conditions not met yet
+            hours = (cfg.now_ts() - exit_state.get("exitTimestamp", cfg.now_ts())) / 3600
+            cfg.output({"success": True, "heartbeat": "NO_REPLY",
+                         "note": f"STALKING {hours:.1f}h — waiting for reload conditions"})
+            cfg.save_state(state, "grizzly-state.json")
+            return
+
+    # ── MODE 1: HUNTING ───────────────────────────────────────
+    # Entry cap
     dynamic = entry_cfg.get("dynamicSlots", {})
     if dynamic.get("enabled", True):
         base_max = dynamic.get("baseMax", 3)
@@ -403,7 +634,7 @@ def run():
         cfg.output({"success": True, "heartbeat": "NO_REPLY", "note": f"max entries ({max_entries})"})
         return
 
-    # CHECK 3: Build BTC thesis
+    # Build BTC thesis
     thesis = build_btc_thesis(entry_cfg)
 
     if not thesis or thesis["score"] < entry_cfg.get("minScore", 10):
@@ -431,6 +662,11 @@ def run():
     else:
         margin_pct = base_margin_pct
     margin = round(account_value * margin_pct, 2)
+
+    # Enter and switch to RIDING
+    state["currentMode"] = "RIDING"
+    state["lastDirection"] = thesis["direction"]
+    cfg.save_state(state, "grizzly-state.json")
 
     cfg.output({
         "success": True,

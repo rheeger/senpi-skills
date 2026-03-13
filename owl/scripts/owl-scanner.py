@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
-# Senpi OWL Scanner v5.0
+# Senpi OWL Scanner v5.2
 # Copyright 2026 Senpi (https://senpi.ai)
 # Licensed under Apache-2.0 — attribution required for derivative works
 # Source: https://github.com/Senpi-ai/senpi-skills
-"""OWL v5 — Pure Contrarian.
+"""OWL v5.2 — Pure Contrarian.
 
 One scanner. One thesis: the crowd is wrong.
 
-Monitors crowding across top 30 assets. When funding, OI, and SM all scream
-one direction AND exhaustion signals fire, enters the OTHER side.
+v5.2 changes:
+  - minFundingAnnualizedPct lowered from 20% to 12%. Assets below the funding
+    floor now score 0 on funding but continue through SM/OI checks instead of
+    early-returning. The minCrowdingScore of 8 remains the true quality gate.
+  - Added observability logging: top 3 crowding scores + active persistence
+    timers printed to stderr every scan cycle (not sent as notifications).
 
-Three phases per trade:
-  1. CROWDING — detect extreme one-sided positioning (score + persist 4h+)
-  2. EXHAUSTION — detect the crack (funding declining, OI cracking, volume spike)
-  3. ENTRY — all three converge, score 14+, enter against the crowd
+Monitors crowding across top 30 assets (funding extremity, OI concentration,
+SM tilt). When crowding persists 4+ hours AND exhaustion signals fire (volume
+declining, price stalling, RSI divergence), enters AGAINST the crowd to ride
+the liquidation unwind. 1-2 trades per day max.
 
 Re-evaluates held positions every scan: if the crowd comes BACK (re-crowding),
 exit immediately — the unwind thesis is dead.
-
-1-2 trades per day max. The patient predator.
 
 Runs every 15 minutes.
 """
@@ -85,7 +87,10 @@ def score_crowding(asset, crowding_cfg):
     crowd_direction = None  # the direction the CROWD is positioned
 
     # Funding extremity (biggest signal — funding IS the crowd's positioning)
-    min_funding = crowding_cfg.get("minFundingAnnualizedPct", 20)
+    # v5.2: lowered minFundingAnnualizedPct from 20→12. Below-floor assets
+    # now score 0 on funding but continue to SM/OI checks instead of early-returning.
+    # The minCrowdingScore of 8 remains the real quality gate.
+    min_funding = crowding_cfg.get("minFundingAnnualizedPct", 12)
     if funding_ann >= 60:
         score += 4
         details.append(f"funding_extreme_{funding_ann:.0f}%ann")
@@ -99,7 +104,11 @@ def score_crowding(asset, crowding_cfg):
         details.append(f"funding_elevated_{funding_ann:.0f}%ann")
         crowd_direction = "LONG" if funding > 0 else "SHORT"
     else:
-        return 0, None, []  # Not crowded enough — skip entirely
+        # v5.2: funding below floor — score 0 on this component but let SM/OI run.
+        # Still infer crowd direction from funding sign for SM confirmation check.
+        details.append(f"funding_below_floor_{funding_ann:.0f}%ann")
+        if funding != 0:
+            crowd_direction = "LONG" if funding > 0 else "SHORT"
 
     # SM concentration (top traders tilted one way)
     sm_tilt = abs(sm_long_pct - 50)
@@ -256,6 +265,33 @@ def check_recrowding(coin, our_direction, crowding_cfg):
     return False, []
 
 
+# ─── Observability (v5.2) ────────────────────────────────────
+
+def _log_observability(all_scores, state):
+    """Log top 3 crowding scores and active persistence timers to stderr.
+    This goes to the agent's internal log, NOT to notifications/Telegram.
+    Lets us answer 'is OWL seeing anything?' without config changes."""
+    import sys as _sys
+
+    top3 = sorted(all_scores, key=lambda x: x["score"], reverse=True)[:3]
+    lines = ["OWL SCAN — top crowding:"]
+    for s in top3:
+        lines.append(
+            f"  {s['coin']}: score={s['score']} dir={s['direction']} "
+            f"funding={s['funding_ann']:.0f}%ann {' '.join(s['details'][:3])}"
+        )
+
+    tracking = state.get("crowdingHistory", {})
+    if tracking:
+        now_ts = cfg.now_ts()
+        lines.append("  persistence timers:")
+        for coin, entry in tracking.items():
+            hours = (now_ts - entry.get("ts", now_ts)) / 3600
+            lines.append(f"    {coin}: {hours:.1f}h (peak={entry.get('peakScore', '?')})")
+
+    print("\n".join(lines), file=_sys.stderr)
+
+
 # ─── Main ─────────────────────────────────────────────────────
 
 def run():
@@ -330,13 +366,20 @@ def run():
     min_total_score = entry_cfg.get("minScore", 14)
 
     candidates = []
+    all_scores = []  # v5.2: observability — track ALL crowding scores
 
     for asset in assets:
+        # Phase 1: Score crowding (score everything for observability)
+        crowd_score, crowd_direction, crowd_details = score_crowding(asset, crowding_cfg)
+        all_scores.append({
+            "coin": asset["coin"], "score": crowd_score,
+            "direction": crowd_direction, "details": crowd_details,
+            "funding_ann": abs(asset["funding"]) * 8760,
+        })
+
         if asset["coin"] in active_coins:
             continue
 
-        # Phase 1: Score crowding
-        crowd_score, crowd_direction, crowd_details = score_crowding(asset, crowding_cfg)
         if crowd_score < min_crowd_score or not crowd_direction:
             clear_persistence(state, asset["coin"])
             continue
@@ -374,6 +417,9 @@ def run():
             "price": asset["price"],
             "funding": asset["funding"],
         })
+
+    # ── v5.2 OBSERVABILITY: log top 3 crowding scores + persistence timers ──
+    _log_observability(all_scores, state)
 
     cfg.save_state(state, "owl-state.json")
 

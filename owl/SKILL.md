@@ -1,27 +1,33 @@
 ---
 name: owl-strategy
 description: >-
-  OWL v5 — Pure contrarian. One scanner, one thesis: the crowd is wrong. Monitors crowding
+  OWL v5.2 — Pure contrarian. One scanner, one thesis: the crowd is wrong. Monitors crowding
   across top 30 assets (funding extremity, OI concentration, SM tilt). When crowding persists
   4+ hours AND exhaustion signals fire (volume declining, price stalling, RSI divergence),
   enters AGAINST the crowd to ride the liquidation unwind. 1-2 trades per day max.
   Re-crowding exit: if the crowd comes back, thesis is dead, exit immediately.
   DSL High Water Mode (mandatory). The patient predator.
+  v5.2: funding floor lowered from 20% to 12% so the five-factor scoring model actually runs.
+  Added observability logging (top 3 crowding scores per scan cycle).
 license: Apache-2.0
 metadata:
   author: jason-goldberg
-  version: "5.0"
+  version: "5.2"
   platform: senpi
   exchange: hyperliquid
 ---
 
-# OWL v5 — Pure Contrarian
+# OWL v5.2 — Pure Contrarian
 
 Wait for the crowd to overcommit. Wait for them to exhaust. Then eat their liquidations.
 
 **One scanner. One thesis.** Every other skill in the zoo enters WITH momentum, WITH the trend, WITH smart money. OWL is the only skill that enters AGAINST the crowd. The edge: crowded trades unwind violently and predictably.
 
 **v5 is a complete rebuild.** v1-v4 had 3 scanners (contrarian + momentum + correlation). The momentum and correlation scanners caused the agent to enter WITH the crowd while thinking it was contrarian. v5 has one scanner that does one thing: find crowded assets that are exhausting.
+
+**v5.2 fix: funding floor lowered from 20% → 12%.** At 20%, the funding gate hard-blocked every asset before SM concentration, OI concentration, or any other signal was evaluated. Hyperliquid funding rates rarely exceed ~11% annualized in normal conditions, so the five-factor scoring model was never running. At 12%, funding must still be meaningfully elevated, but assets with strong SM/OI crowding signals can now accumulate a score. The `minCrowdingScore` of 8 remains the real quality gate.
+
+**v5.2 also adds observability logging.** Every scan cycle logs the top 3 crowding scores and active persistence timers to stderr (internal log only, not notifications). This lets us diagnose "is OWL seeing anything?" without changing config or asking the agent.
 
 ## MANDATORY: DSL High Water Mode
 

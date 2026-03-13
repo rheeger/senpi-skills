@@ -8,7 +8,7 @@
     "minCrowdingScore": 8,
     "minPersistHours": 4,
     "reCrowdingMinScore": 6,
-    "minFundingAnnualizedPct": 20,
+    "minFundingAnnualizedPct": 12,
     "weights": {
       "fundingExtremity": 0.30,
       "smConcentration": 0.25,

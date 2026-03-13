@@ -1,11 +1,11 @@
 ---
 name: wolf-strategy
 description: >-
-  WOLF v6.2 — Fully autonomous multi-strategy trading for Hyperliquid perps via Senpi MCP.
+  WOLF v6.3 — Fully autonomous multi-strategy trading for Hyperliquid perps via Senpi MCP.
   Manages multiple strategies simultaneously, each with independent wallets, budgets, slots,
   and DSL configs. 5+N cron architecture: 5 shared wolf crons (Emerging Movers 3min, SM Flip 5min,
   Watchdog 5min, Risk Guardian 5min, Health Check 10min) plus one DSL v5.2 cron per strategy
-  (native Hyperliquid SL sync via dsl-dynamic-stop-loss skill). Same asset can be traded in
+  (native Hyperliquid SL sync via dsl-dynamic-stop-loss skill v5.3). Same asset can be traded in
   different strategies simultaneously. Enter early on first jumps, not at confirmed peaks.
   Dynamic risk-based leverage per strategy.
   Requires Senpi MCP connection, python3, mcporter CLI, OpenClaw cron system, and
@@ -13,7 +13,7 @@ description: >-
 
 ---
 
-# WOLF v6.2 — Autonomous Multi-Strategy Trading
+# WOLF v6.3 — Autonomous Multi-Strategy Trading
 
 The WOLF hunts for its human. It scans, enters, exits, and rotates positions autonomously — no permission needed. When criteria are met, it acts. Speed is edge.
 
@@ -23,7 +23,9 @@ The WOLF hunts for its human. It scans, enters, exits, and rotates positions aut
 
 **v6.1.1: Risk Guardian & strategy lock.** 6th cron (5min, Budget tier) enforcing account-level guard rails — daily loss halt, max entries per day, consecutive loss cooldown. Strategy lock for concurrency protection. Gate check in `open-position.py` refuses new entries when gate != OPEN.
 
-**v6.2: DSL v5.2 integration.** Replaced internal `dsl-combined.py` with the `dsl-dynamic-stop-loss` skill (v5.2). One DSL cron per strategy runs `dsl-v5.py` which provides native Hyperliquid stop-loss sync — between cron runs, HL's engine protects the position even if the cron is delayed. DSL state files moved to `{workspace}/dsl/{strategyId_UUID}/`. Migration script: `wolf-migrate-dsl.py`.
+**v6.3: DSL v5.3 High Water.** Default DSL profile and strategy config use High Water Mode (`lockMode: pct_of_high_water`) with `lockHwPct` tiers and per-tier `consecutiveBreachesRequired`. One DSL cron per strategy runs `dsl-v5.py` (v5.3); state files in `{workspace}/dsl/{strategyId_UUID}/`. Migration script: `wolf-migrate-dsl.py`.
+
+**v6.2: DSL v5.2 integration.** Replaced internal `dsl-combined.py` with the `dsl-dynamic-stop-loss` skill. Native Hyperliquid stop-loss sync via `dsl-v5.py`.
 
 ---
 
@@ -70,6 +72,8 @@ When a signal fires, it's routed to the best-fit strategy:
 2. Does any strategy already hold this asset? (skip within strategy, allow cross-strategy)
 3. Which strategy's risk profile matches? (aggressive gets FIRST_JUMPs, conservative gets DEEP_CLIMBERs)
 4. Route to best-fit -> open on that wallet -> create DSL state in that strategy's dir
+
+**DSL default:** Use this skill's **`dsl-profile.json`** as the default when setting up DSL (e.g. `dsl-cli.py add-dsl` / `update-dsl` with `--configuration @<path-to-wolf-strategy>/dsl-profile.json`). Use it unless the user explicitly provides a custom DSL configuration via the agent.
 
 ### Adding a Strategy
 ```bash
