@@ -52,7 +52,7 @@
     "phase1WeakPeakMin": 0,
     "phase1DeadWeightMin": 0,
     "floorBase": 0.025,
-    "phase2TriggerRoe": 6,
+    "phase2TriggerRoe": 3,
     "convictionTiers": [
       {
         "minScore": 8,
@@ -78,31 +78,34 @@
     ],
     "tiers": [
       {
-        "triggerPct": 5,
-        "lockHwPct": 20,
-        "consecutiveBreachesRequired": 3,
-        "_note": "HYPE is volatile \u2014 wide early"
+        "triggerPct": 3,
+        "lockHwPct": 40,
+        "consecutiveBreachesRequired": 2,
+        "_note": "HYPE reverses FAST — lock 40% immediately. At 9.3% peak = 3.7% floor"
+      },
+      {
+        "triggerPct": 6,
+        "lockHwPct": 55,
+        "consecutiveBreachesRequired": 2,
+        "_note": "Move confirmed — lock majority. At 9.3% peak = 5.1% floor"
       },
       {
         "triggerPct": 10,
-        "lockHwPct": 35,
-        "consecutiveBreachesRequired": 3
+        "lockHwPct": 70,
+        "consecutiveBreachesRequired": 1,
+        "_note": "Strong move — aggressive lock"
       },
       {
         "triggerPct": 20,
-        "lockHwPct": 55,
-        "consecutiveBreachesRequired": 2
+        "lockHwPct": 80,
+        "consecutiveBreachesRequired": 1,
+        "_note": "Big move — tight protection"
       },
       {
         "triggerPct": 35,
-        "lockHwPct": 70,
-        "consecutiveBreachesRequired": 1
-      },
-      {
-        "triggerPct": 50,
-        "lockHwPct": 85,
+        "lockHwPct": 88,
         "consecutiveBreachesRequired": 1,
-        "_note": "infinite trail at 85%"
+        "_note": "Infinite trail at 88% — tighter than other skills for HYPE speed"
       }
     ],
     "tiersLegacyFallback": [
@@ -147,8 +150,9 @@
     ],
     "stagnationTp": {
       "enabled": true,
-      "roeMin": 10,
-      "hwStaleMin": 75
+      "roeMin": 8,
+      "hwStaleMin": 45,
+      "_note": "HYPE moves fast — if ROE stalls at 8%+ for 45 min, take profit"
     }
   },
   "risk": {

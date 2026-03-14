@@ -9,15 +9,25 @@ description: >-
 license: MIT
 metadata:
   author: jason-goldberg
-  version: "1.0"
+  version: "1.1"
   platform: senpi
   exchange: hyperliquid
   base_skill: grizzly-v2.0
 ---
 
-# WOLVERINE v1.0 — HYPE Alpha Hunter with Position Lifecycle
+# WOLVERINE v1.1 — HYPE Alpha Hunter with Position Lifecycle
 
 One asset. Every signal. Maximum conviction. Reload-on-dip.
+
+## v1.1 Changes — DSL Recalibrated for HYPE Speed
+
+Day 1 data: Wolverine caught a textbook HYPE LONG — score 10+, SM aligned, peaked at +9.3% ROE (+$18.54). Then gave it ALL back because the DSL was too loose. Price dropped from +9.3% to -2.3% ROE faster than the 3-minute scan could react. The old Tier 1 locked only 20% of high water = 1.86% floor, which was meaningless.
+
+**v1.1 fix:** Phase 2 trigger lowered from 6% to 3% ROE. Tier 1 lock raised from 20% to 40%. Breaches reduced from 3 to 2. HYPE reverses fast — the DSL must lock profits aggressively.
+
+With v1.1 DSL, that same trade locks +3.7% ROE at worst instead of exiting at -2.3%.
+
+**Also in v1.1:** BTC correlation is bonus-only, never a gate or thesis exit. HYPE moves independently of BTC — up 50% while BTC dropped 30%. When BTC confirms, HYPE runs harder (+2 score bonus). When BTC diverges, it's a non-event.
 
 WOLVERINE stares at HYPE and nothing else. Every signal source available — smart money positioning, funding rate, open interest, 4-timeframe trend structure, volume, BTC correlation — feeds into a single thesis: is there a high-conviction HYPE trade right now?
 
