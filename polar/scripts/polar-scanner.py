@@ -123,20 +123,45 @@ def get_eth_sm_direction():
 
     markets = data.get("data", data)
     if isinstance(markets, dict):
-        markets = markets.get("markets", markets.get("leaderboard", []))
+        markets = markets.get("markets", markets.get("leaderboard", markets))
+    if isinstance(markets, dict):
+        markets = markets.get("markets", [])
+
+    # Aggregate long vs short entries for ETH
+    asset_long_pct = 0
+    asset_short_pct = 0
+    asset_traders = 0
+    found = False
 
     for m in markets:
         if not isinstance(m, dict):
             continue
-        if m.get("coin", m.get("asset", "")) == "ETH":
-            long_pct = float(m.get("longPct", m.get("pctOfGainsLong", 50)))
-            trader_count = int(m.get("traderCount", m.get("numTraders", 0)))
-            if long_pct > 58:
-                return "LONG", long_pct, trader_count
-            elif long_pct < 42:
-                return "SHORT", 100 - long_pct, trader_count
-            return "NEUTRAL", 50, trader_count
-    return None, 0, 0
+        token = m.get("token", m.get("coin", m.get("asset", "")))
+        if token != "ETH":
+            continue
+        found = True
+        direction = m.get("direction", "").lower()
+        pct = float(m.get("pct_of_top_traders_gain", m.get("longPct", 0)))
+        traders = int(m.get("trader_count", m.get("traderCount", 0)))
+        if direction == "long":
+            asset_long_pct = pct
+            asset_traders += traders
+        elif direction == "short":
+            asset_short_pct = pct
+            asset_traders += traders
+
+    if not found:
+        return None, 0, 0
+
+    total = asset_long_pct + asset_short_pct
+    if total == 0:
+        return "NEUTRAL", 50, asset_traders
+    long_ratio = (asset_long_pct / total) * 100 if total > 0 else 50
+    if long_ratio > 58:
+        return "LONG", long_ratio, asset_traders
+    elif long_ratio < 42:
+        return "SHORT", 100 - long_ratio, asset_traders
+    return "NEUTRAL", 50, asset_traders
 
 
 # ─── Thesis Builder (BTC Only) ───────────────────────────────
@@ -152,8 +177,9 @@ def build_eth_thesis(entry_cfg):
     candles_15m = eth_data.get("candles", {}).get("15m", [])
     candles_1h = eth_data.get("candles", {}).get("1h", [])
     candles_4h = eth_data.get("candles", {}).get("4h", [])
-    funding = float(eth_data.get("funding", 0))
-    oi = float(eth_data.get("openInterest", 0))
+    asset_ctx = eth_data.get("asset_context", {})
+    funding = float(asset_ctx.get("funding", eth_data.get("funding", 0)))
+    oi = float(asset_ctx.get("openInterest", eth_data.get("openInterest", 0)))
 
     if len(candles_5m) < 12 or len(candles_15m) < 8 or len(candles_1h) < 8 or len(candles_4h) < 6:
         return None
@@ -307,7 +333,8 @@ def evaluate_eth_position(direction, entry_cfg):
 
     candles_1h = eth_data.get("candles", {}).get("1h", [])
     candles_4h = eth_data.get("candles", {}).get("4h", [])
-    funding = float(eth_data.get("funding", 0))
+    asset_ctx = eth_data.get("asset_context", {})
+    funding = float(asset_ctx.get("funding", eth_data.get("funding", 0)))
 
     if len(candles_4h) < 6:
         return True, ["insufficient_data_hold"]
@@ -376,7 +403,8 @@ def evaluate_reload(exit_state, entry_cfg):
     candles_5m = eth_data.get("candles", {}).get("5m", [])
     candles_1h = eth_data.get("candles", {}).get("1h", [])
     candles_4h = eth_data.get("candles", {}).get("4h", [])
-    funding = float(eth_data.get("funding", 0))
+    asset_ctx = eth_data.get("asset_context", {})
+    funding = float(asset_ctx.get("funding", eth_data.get("funding", 0)))
 
     kill_reasons = []
     reload_checks = []
