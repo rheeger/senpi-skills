@@ -31,7 +31,7 @@ Scan HYPE every 3 minutes. All signals must align (4h trend, 1h momentum, SM, fu
 
 ### MODE 2 — RIDING
 
-Active position. DSL High Water trails it. Thesis re-evaluation every scan. If thesis breaks (4h trend flips, SM flips, funding extreme, volume dies, BTC diverges) -> thesis exit and reset to MODE 1. If DSL closes the position -> switch to MODE 3.
+Active position. DSL High Water trails it. Thesis re-evaluation every scan. If thesis breaks (4h trend flips, SM flips, funding extreme, volume dies) -> thesis exit and reset to MODE 1. If DSL closes the position -> switch to MODE 3. Note: BTC divergence does NOT invalidate HYPE thesis — HYPE moves independently.
 
 ### MODE 3 — STALKING
 
@@ -70,7 +70,7 @@ DSL tiers in `wolverine-config.json`. Arm DSL immediately after every entry fill
 - **Native to Hyperliquid** — deepest on-exchange liquidity for HYPE
 - **Platform momentum** — HYPE price correlates with Hyperliquid volume/TVL growth
 - **High volatility** — moves fast, rewards conviction entries with wide trails
-- **BTC as regime filter** — HYPE can decouple in platform-specific events but generally follows crypto macro
+- **BTC as bonus, not filter** — when BTC runs with HYPE, the move is amplified (+2 score bonus). But HYPE often decouples during platform-specific events, so BTC divergence is never a penalty or exit signal
 - **Lower leverage compensates for volatility** — 10x on HYPE captures large structural moves without overexposure
 
 ## How WOLVERINE Trades
@@ -89,7 +89,7 @@ Every 3 minutes, the scanner evaluates HYPE across all signal sources:
 | Funding pays to hold the direction | 2 | No |
 | Volume above average | 1-2 | No |
 | OI growing | 1 | No |
-| BTC confirms move | 1 | No |
+| BTC confirms move | 2 | No (bonus only — HYPE moves independently of BTC) |
 | RSI has room | 1 | No (blocks overbought/oversold) |
 | 4h momentum strength | 1 | No |
 

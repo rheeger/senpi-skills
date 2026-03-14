@@ -123,7 +123,9 @@ def get_hype_sm_direction():
 
     markets = data.get("data", data)
     if isinstance(markets, dict):
-        markets = markets.get("markets", markets.get("leaderboard", []))
+        markets = markets.get("markets", markets.get("leaderboard", markets))
+    if isinstance(markets, dict):
+        markets = markets.get("markets", [])
 
     for m in markets:
         if not isinstance(m, dict):
@@ -254,15 +256,17 @@ def build_hype_thesis(entry_cfg):
         score += 1
         reasons.append(f"oi_growing_{oi_proxy:+.0f}%")
 
-    # ── BTC correlation confirmation ──────────────────────────
+    # ── BTC correlation (bonus only, never a block or penalty) ─
+    # HYPE is driven by platform growth, not crypto macro.
+    # But when BTC runs, HYPE runs MORE. So BTC alignment is a strong bonus.
     corr_mom_15m, corr_mom_1h = get_btc_correlation()
     if corr_mom_15m is not None and corr_mom_1h is not None:
         corr_agrees = (direction == "LONG" and corr_mom_15m > 0 and corr_mom_1h > 0) or \
                      (direction == "SHORT" and corr_mom_15m < 0 and corr_mom_1h < 0)
         if corr_agrees:
-            score += 1
-            reasons.append(f"btc_confirms_{corr_mom_1h:+.2f}%")
-        # BTC disagreement is not a block — HYPE often follows BTC
+            score += 2
+            reasons.append(f"btc_confirms_{corr_mom_1h:+.2f}%_STRONG_BONUS")
+        # BTC divergence is NOT a penalty — HYPE often moves independently
 
     # ── RSI filter ────────────────────────────────────────────
     closes_1h = [float(c.get("close", c.get("c", 0))) for c in candles_1h]
@@ -340,13 +344,9 @@ def evaluate_hype_position(direction, entry_cfg):
         if avg_vol > 0 and all(v < avg_vol * 0.3 for v in recent_vols):
             invalidations.append("volume_dried_up_3h")
 
-    # ETH diverging strongly? (HYPE up, BTC down for 2+ hours = warning)
-    corr_15m, corr_1h = get_btc_correlation()
-    if corr_1h is not None:
-        if direction == "LONG" and corr_1h < -1.0:
-            invalidations.append(f"btc_diverging_{corr_1h:+.1f}%")
-        elif direction == "SHORT" and corr_1h > 1.0:
-            invalidations.append(f"btc_diverging_{corr_1h:+.1f}%")
+    # BTC divergence: NOT an invalidation for HYPE.
+    # HYPE is driven by platform growth and often moves independently of BTC.
+    # BTC divergence that would kill a Grizzly/Polar/Kodiak trade is normal for HYPE.
 
     return (len(invalidations) == 0), invalidations
 
