@@ -10,7 +10,7 @@ description: >-
 license: Apache-2.0
 metadata:
   author: jason-goldberg
-  version: "1.1"
+  version: "1.2"
   platform: senpi
   exchange: hyperliquid
 ---

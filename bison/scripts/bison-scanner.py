@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-# Senpi BISON Scanner v1.1
+# Senpi BISON Scanner v1.2
 # Copyright 2026 Senpi (https://senpi.ai)
-# Licensed under Apache-2.0 — attribution required for derivative works
+# Licensed under MIT
 # Source: https://github.com/Senpi-ai/senpi-skills
-"""BISON Scanner v1.1 — Conviction Holder.
+"""BISON Scanner v1.2 — Conviction Holder (Hardened).
 
-Top 10 assets by volume only. Enters when multi-signal thesis converges.
-Holds through pullbacks with wide DSL bands that tighten as profit grows.
-Re-evaluates thesis every scan — exits when the reason you entered dies,
-not when price retraces 1.5%.
+v1.2 changes from DSL audit + live trading data:
+- DSL state template in scanner output (same pattern as Orca v1.1)
+  Agent writes dslState directly — no dsl-profile.json merging.
+- Dead weight cuts added (30/45/60 min by score — generous for conviction holder)
+- Per-asset cooldown: 2 hours after a losing exit (ETH 4x losses, SOL 3x losses in data)
+- XYZ equities banned at scan level
+- Leverage capped 7-10x (was 7-15x)
 
-v1.1: Daily entry cap now only enforced when cumulative day PnL is negative.
-When positive (or zero), the counter resets in batches of baseMax (3) —
-BISON can keep trading as long as it's making money. absoluteMax still
-applies as the hard ceiling per batch to prevent runaway in a single cycle.
+v1.1: Daily entry cap only enforced when cumulative day PnL is negative.
+When positive, counter resets in batches of baseMax (3).
 
 The big-game hunter. Fewer trades, longer holds, bigger moves.
 
@@ -22,10 +23,59 @@ Runs every 5 minutes.
 
 import sys
 import os
+import json
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bison_config as cfg
+
+# ─── Hardcoded Constants ─────────────────────────────────────
+# Learned from 5+ days across 22 agents. Not configurable by the agent.
+MAX_LEVERAGE = 10         # Was 15 — Grizzly lost $148/day at 15x
+MIN_LEVERAGE = 7          # Sub-7x can't overcome fees
+XYZ_BANNED = True         # Net negative across every agent
+
+# Bison-specific DSL — wider tiers than Orca for conviction holds
+BISON_DSL_TIERS = [
+    {"triggerPct": 10, "lockHwPct": 0,  "consecutiveBreachesRequired": 3, "_note": "confirms working, no lock — BISON breathes"},
+    {"triggerPct": 20, "lockHwPct": 25, "consecutiveBreachesRequired": 3, "_note": "light lock, wide room for pullbacks"},
+    {"triggerPct": 30, "lockHwPct": 40, "consecutiveBreachesRequired": 2, "_note": "starting to protect"},
+    {"triggerPct": 50, "lockHwPct": 60, "consecutiveBreachesRequired": 2, "_note": "meaningful lock"},
+    {"triggerPct": 75, "lockHwPct": 75, "consecutiveBreachesRequired": 1, "_note": "tightening"},
+    {"triggerPct": 100,"lockHwPct": 85, "consecutiveBreachesRequired": 1, "_note": "infinite trail at 85%"},
+]
+
+# Conviction tiers: generous timing for conviction holder
+# Dead weight at 30/45/60 min (vs Orca's 10/15/20) — Bison holds longer
+BISON_CONVICTION_TIERS = [
+    {"minScore": 6,  "absoluteFloorRoe": -25, "hardTimeoutMin": 60,  "weakPeakCutMin": 30, "deadWeightCutMin": 30},
+    {"minScore": 8,  "absoluteFloorRoe": -30, "hardTimeoutMin": 90,  "weakPeakCutMin": 45, "deadWeightCutMin": 45},
+    {"minScore": 10, "absoluteFloorRoe": -35, "hardTimeoutMin": 120, "weakPeakCutMin": 60, "deadWeightCutMin": 60},
+]
+
+BISON_STAGNATION_TP = {"enabled": True, "roeMin": 15, "hwStaleMin": 120}
+
+# ─── Per-Asset Cooldown ──────────────────────────────────────
+COOLDOWN_FILE = Path(os.environ.get("OPENCLAW_WORKSPACE", "/data/workspace")) / "skills" / "bison-strategy" / "state" / "asset-cooldowns.json"
+
+def load_cooldowns():
+    try:
+        if COOLDOWN_FILE.exists():
+            with open(COOLDOWN_FILE) as f:
+                return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        pass
+    return {}
+
+def is_asset_cooled_down(coin, cooldown_minutes=120):
+    cooldowns = load_cooldowns()
+    if coin not in cooldowns:
+        return False
+    exit_ts = cooldowns[coin].get("exitTimestamp", 0)
+    elapsed = (time.time() - exit_ts) / 60
+    return elapsed < cooldown_minutes
 
 
 # ─── Technical Helpers ────────────────────────────────────────
@@ -303,6 +353,63 @@ def evaluate_held_position(coin, direction, entry_cfg):
     return (len(invalidations) == 0), invalidations
 
 
+# ─── DSL State Builder ────────────────────────────────────────
+
+def build_dsl_state_template(signal):
+    """Build the EXACT DSL state file for a Bison signal.
+    Agent writes this directly — no merging with dsl-profile.json."""
+    score = signal.get("score", 6)
+
+    tier = BISON_CONVICTION_TIERS[0]
+    for ct in BISON_CONVICTION_TIERS:
+        if score >= ct["minScore"]:
+            tier = ct
+
+    return {
+        "active": True,
+        "asset": signal.get("coin", ""),
+        "direction": signal.get("direction", ""),
+        "score": score,
+        "phase": 1,
+        "highWaterPrice": 0,
+        "highWaterRoe": 0,
+        "currentTierIndex": -1,
+        "consecutiveBreaches": 0,
+        "lockMode": "pct_of_high_water",
+        "phase2TriggerRoe": 10,
+        "phase1": {
+            "enabled": True,
+            "retraceThreshold": 0.03,
+            "consecutiveBreachesRequired": 3,
+            "hardTimeoutMinutes": tier["hardTimeoutMin"],
+            "weakPeakCutMinutes": tier["weakPeakCutMin"],
+            "deadWeightCutMinutes": tier["deadWeightCutMin"],
+            "absoluteFloor": 0.03,
+            "absoluteFloorRoe": tier["absoluteFloorRoe"],
+            "weakPeakCut": {
+                "enabled": True,
+                "intervalInMinutes": tier["weakPeakCutMin"],
+                "minValue": 3.0,
+            },
+        },
+        "phase2": {
+            "enabled": True,
+            "retraceThreshold": 0.015,
+            "consecutiveBreachesRequired": 2,
+        },
+        "tiers": BISON_DSL_TIERS,
+        "stagnationTp": BISON_STAGNATION_TP,
+        "convictionTiers": BISON_CONVICTION_TIERS,
+        "execution": {
+            "phase1SlOrderType": "MARKET",
+            "phase2SlOrderType": "MARKET",
+            "breachCloseOrderType": "MARKET",
+        },
+        "_bison_version": "1.2",
+        "_note": "Generated by bison-scanner.py. Do not modify. Do not merge with dsl-profile.json.",
+    }
+
+
 # ─── Main ─────────────────────────────────────────────────────
 
 def run():
@@ -322,6 +429,7 @@ def run():
     max_positions = config.get("maxPositions", 3)
     active_coins = {p["coin"]: p for p in positions}
     entry_cfg = config.get("entry", {})
+    cooldown_min = config.get("risk", {}).get("cooldownMinutes", 120)
 
     # CHECK 1: Re-evaluate thesis for held positions
     thesis_exits = []
@@ -341,38 +449,27 @@ def run():
         return
 
     # CHECK 2: Dynamic entry cap (v1.1 — batch reload when profitable)
-    # The cap only hard-blocks when cumulative day PnL is negative.
-    # When PnL >= 0, BISON gets another batch of baseMax entries.
-    # absoluteMax still caps each batch to prevent runaway.
     dynamic = entry_cfg.get("dynamicSlots", {})
     if dynamic.get("enabled", True):
         base_max = dynamic.get("baseMax", 3)
         day_pnl = tc.get("realizedPnl", 0)
         entries_used = tc.get("entries", 0)
 
-        # v1.1: when profitable, reload in batches of baseMax
         if day_pnl >= 0 and entries_used >= base_max:
-            # How many full batches have been used?
-            # Allow another batch since we're still profitable
             batches_used = entries_used // base_max
             effective_max = (batches_used + 1) * base_max
-            # Still respect absoluteMax as hard ceiling per day
             hard_max = dynamic.get("absoluteMax", 6)
-            # v1.1: when profitable, absoluteMax doesn't cap — only baseMax batches matter
-            # But unlockThresholds can raise it further based on realized PnL
             for t in dynamic.get("unlockThresholds", []):
                 if day_pnl >= t.get("pnl", 999999):
                     hard_max = max(hard_max, t.get("maxEntries", hard_max))
             max_entries = effective_max
         elif day_pnl < 0:
-            # Negative PnL: enforce original cap strictly
             effective_max = base_max
             for t in dynamic.get("unlockThresholds", []):
                 if day_pnl >= t.get("pnl", 999999):
                     effective_max = t.get("maxEntries", effective_max)
             max_entries = min(effective_max, dynamic.get("absoluteMax", 6))
         else:
-            # First batch (entries < baseMax), just use baseMax
             max_entries = base_max
     else:
         max_entries = config.get("risk", {}).get("maxEntriesPerDay", 4)
@@ -394,10 +491,23 @@ def run():
     signals = []
 
     for asset in candidates:
-        if asset["coin"] in active_coins:
+        coin = asset["coin"]
+
+        # HARDCODED: XYZ ban
+        if coin.lower().startswith("xyz:"):
             continue
-        thesis = build_thesis(asset["coin"], entry_cfg)
+
+        if coin in active_coins:
+            continue
+
+        # v1.2: Per-asset cooldown after losses
+        if is_asset_cooled_down(coin, cooldown_min):
+            continue
+
+        thesis = build_thesis(coin, entry_cfg)
         if thesis and thesis["score"] >= min_score:
+            # Attach DSL state template
+            thesis["dslState"] = build_dsl_state_template(thesis)
             signals.append(thesis)
 
     if not signals:
@@ -417,7 +527,8 @@ def run():
         margin_pct = base_margin_pct
     margin = round(account_value * margin_pct, 2)
 
-    leverage = config.get("leverage", {}).get("default", 10)
+    # HARDCODED: leverage cap
+    leverage = min(config.get("leverage", {}).get("default", 10), MAX_LEVERAGE)
 
     cfg.output({
         "success": True, "signal": best,
@@ -427,6 +538,16 @@ def run():
             "orderType": config.get("execution", {}).get("entryOrderType", "FEE_OPTIMIZED_LIMIT"),
         },
         "scanned": len(candidates), "candidates": len(signals),
+        "constraints": {
+            "minLeverage": MIN_LEVERAGE,
+            "maxLeverage": MAX_LEVERAGE,
+            "maxPositions": max_positions,
+            "xyzBanned": XYZ_BANNED,
+            "stagnationTp": BISON_STAGNATION_TP,
+            "dslTiers": BISON_DSL_TIERS,
+            "convictionTiers": BISON_CONVICTION_TIERS,
+            "_dslNote": "Use signal.dslState as the DSL state file. Do NOT merge with dsl-profile.json.",
+        },
     })
 
 

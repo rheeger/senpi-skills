@@ -7,7 +7,7 @@
   "leverage": {
     "default": 10,
     "min": 7,
-    "max": 15
+    "max": 10
   },
   "entry": {
     "minMom1hPct": 0.5,
@@ -40,9 +40,9 @@
   },
   "dsl": {
     "phase1RetraceRoe": 15,
-    "phase1HardTimeoutMin": 0,
-    "phase1WeakPeakMin": 0,
-    "phase1DeadWeightMin": 0,
+    "phase1HardTimeoutMin": 60,
+    "phase1WeakPeakMin": 30,
+    "phase1DeadWeightMin": 30,
     "floorBase": 0.03,
     "tiers": [
       {
@@ -93,23 +93,23 @@
       {
         "minScore": 6,
         "absoluteFloorRoe": -25,
-        "hardTimeoutMin": 0,
-        "weakPeakCutMin": 0,
-        "deadWeightCutMin": 0
+        "hardTimeoutMin": 60,
+        "weakPeakCutMin": 30,
+        "deadWeightCutMin": 30
       },
       {
         "minScore": 8,
         "absoluteFloorRoe": -30,
-        "hardTimeoutMin": 0,
-        "weakPeakCutMin": 0,
-        "deadWeightCutMin": 0
+        "hardTimeoutMin": 90,
+        "weakPeakCutMin": 45,
+        "deadWeightCutMin": 45
       },
       {
         "minScore": 10,
-        "absoluteFloorRoe": 0,
-        "hardTimeoutMin": 0,
-        "weakPeakCutMin": 0,
-        "deadWeightCutMin": 0
+        "absoluteFloorRoe": -35,
+        "hardTimeoutMin": 120,
+        "weakPeakCutMin": 60,
+        "deadWeightCutMin": 60
       }
     ],
     "_spec": "https://github.com/Senpi-ai/senpi-skills/blob/main/dsl-dynamic-stop-loss/dsl-high-water-spec%201.0.md"
