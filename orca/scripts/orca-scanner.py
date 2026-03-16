@@ -1,26 +1,28 @@
 #!/usr/bin/env python3
-# Senpi ORCA Scanner v1.0
+# Senpi ORCA Scanner v1.1
 # Copyright 2026 Senpi (https://senpi.ai)
 # Licensed under MIT
 # Source: https://github.com/Senpi-ai/senpi-skills
-"""ORCA v1.0 — Dual-Mode Emerging Movers Scanner (Hardened).
+"""ORCA v1.1 — Dual-Mode Emerging Movers Scanner (Hardened).
 
-The definitive version of the Vixen/Fox dual-mode scanner with every lesson
-from 5 days of live trading across 22 agents hardcoded into the scanner itself.
+v1.1 fixes from the DSL audit across all 22 agents:
+- DSL state template now included in scanner output so the agent creates
+  the state file correctly. Every agent that built its own DSL state got
+  it wrong (breaches=1, dead weight=0, missing stagnation TP).
+- Conviction-scaled Phase 1 timing included per-signal based on score.
+- The agent should copy the dslState block directly into the state file.
+  This eliminates the dsl-profile.json / wolf_config.py override bugs.
 
-Built from FOX v1.6 (+34.5% ROI) and hardened with fixes from:
-- Fox day 1-5 data: XYZ equities banned (SNDK was biggest single loss)
-- Mantis/Vixen config drift: stagnation TP, daily loss limit, XYZ ban all enforced in code
-- Mamba/Jackal fee analysis: leverage floor at 7x (sub-5x trades can't overcome fees)
-- PAXG double-entry: 2-hour per-asset cooldown after Phase 1 exits
-- Dire Wolf 25x incident: leverage hard capped at 10x in scanner output
-- Ghost Fox/Cobra churn: constraints block in scanner, agent can't override
+v1.0 hardened gates (unchanged):
+- XYZ equities banned at parse_scan() level
+- Leverage 7-10x in constraints block
+- Max 3 positions, 10% daily loss limit
+- 2-hour per-asset cooldown
+- Stagnation TP mandatory
 
 Two entry modes:
   STALKER: SM accumulating over 3+ scans. Score 6+. Enter before the crowd.
   STRIKER: Violent FIRST_JUMP + volume >= 1.5x. Score 9+. Enter the explosion.
-
-Every protective gate is in the CODE, not in agent instructions.
 
 Uses: leaderboard_get_markets (single API call per scan)
 Runs every 90 seconds.
@@ -454,13 +456,96 @@ def detect_striker_signals(current_scan, history, config):
 
 # ─── Main ─────────────────────────────────────────────────────
 
-# HARDCODED CONSTANTS — learned from 5 days of live trading across 22 agents.
+# HARDCODED CONSTANTS — learned from 5+ days of live trading across 22 agents.
 # These are NOT configurable by the agent. They are in the code.
 MIN_LEVERAGE = 7          # Assets below 7x exchange max are skipped (3x entries can't overcome fees)
 MAX_LEVERAGE = 10         # Never exceed 10x
 MAX_POSITIONS = 3         # Concentration > diversification
 MAX_DAILY_LOSS_PCT = 10   # Fox's setting — Vixen drifted to 25% and bled 2.5x more per bad day
 XYZ_BANNED = True         # SNDK was Fox's biggest single loss; all xyz equities net negative across all agents
+
+# HARDCODED DSL TIERS — the exact config that Orca's winning trades used.
+# Fox had 1 breach (got stopped on every wick). Orca uses 3. This is the fix.
+DSL_TIERS = [
+    {"triggerPct": 7,  "lockHwPct": 40, "consecutiveBreachesRequired": 3},
+    {"triggerPct": 12, "lockHwPct": 55, "consecutiveBreachesRequired": 2},
+    {"triggerPct": 15, "lockHwPct": 75, "consecutiveBreachesRequired": 2},
+    {"triggerPct": 20, "lockHwPct": 85, "consecutiveBreachesRequired": 1},
+]
+
+# HARDCODED CONVICTION TIERS — Phase 1 timing scaled by entry score.
+# dsl-v5.py reads TOP-LEVEL values, not per-tier. So the agent must set
+# the correct top-level values based on score BEFORE creating the state file.
+CONVICTION_TIERS = [
+    {"minScore": 6,  "absoluteFloorRoe": -20, "hardTimeoutMin": 30, "weakPeakCutMin": 15, "deadWeightCutMin": 10},
+    {"minScore": 8,  "absoluteFloorRoe": -25, "hardTimeoutMin": 45, "weakPeakCutMin": 20, "deadWeightCutMin": 15},
+    {"minScore": 10, "absoluteFloorRoe": -30, "hardTimeoutMin": 60, "weakPeakCutMin": 30, "deadWeightCutMin": 20},
+]
+
+STAGNATION_TP = {"enabled": True, "roeMin": 10, "hwStaleMin": 45}
+
+
+def build_dsl_state_template(signal):
+    """Build the EXACT DSL state file contents for a signal.
+    The agent should write this directly as the state file — no merging with
+    dsl-profile.json, no wolf_config.py builder, no dynamic generation.
+    This eliminates every DSL bug found in the audit."""
+
+    score = signal.get("score", 6)
+
+    # Select conviction tier based on score
+    tier = CONVICTION_TIERS[0]  # default to tightest
+    for ct in CONVICTION_TIERS:
+        if score >= ct["minScore"]:
+            tier = ct
+
+    return {
+        "active": True,
+        "asset": signal.get("token", ""),
+        "direction": signal.get("direction", ""),
+        "mode": signal.get("mode", "STALKER"),
+        "score": score,
+        "phase": 1,
+        "highWaterPrice": 0,
+        "highWaterRoe": 0,
+        "currentTierIndex": -1,
+        "consecutiveBreaches": 0,
+        "lockMode": "pct_of_high_water",
+        "phase2TriggerRoe": 7,
+        # CRITICAL: Top-level Phase 1 values that dsl-v5.py actually reads.
+        # These MUST be set correctly — dsl-v5.py ignores the convictionTiers array.
+        "phase1": {
+            "enabled": True,
+            "retraceThreshold": 0.03,
+            "consecutiveBreachesRequired": 3,  # NOT 1 — Fox's #1 bug
+            "hardTimeoutMinutes": tier["hardTimeoutMin"],
+            "weakPeakCutMinutes": tier["weakPeakCutMin"],
+            "deadWeightCutMinutes": tier["deadWeightCutMin"],  # NOT 0 — every agent's #2 bug
+            "absoluteFloor": 0.02,
+            "absoluteFloorRoe": tier["absoluteFloorRoe"],
+            "weakPeakCut": {
+                "enabled": True,
+                "intervalInMinutes": tier["weakPeakCutMin"],
+                "minValue": 3.0,
+            },
+        },
+        "phase2": {
+            "enabled": True,
+            "retraceThreshold": 0.015,
+            "consecutiveBreachesRequired": 2,
+        },
+        "tiers": DSL_TIERS,
+        "stagnationTp": STAGNATION_TP,
+        "convictionTiers": CONVICTION_TIERS,
+        "execution": {
+            "phase1SlOrderType": "MARKET",
+            "phase2SlOrderType": "MARKET",
+            "breachCloseOrderType": "MARKET",
+        },
+        "_orca_version": "1.1",
+        "_note": "Generated by orca-scanner.py. Do not modify. Do not merge with dsl-profile.json.",
+    }
+
 
 def run():
     config = cfg.load_config()
@@ -500,6 +585,10 @@ def run():
     combined = striker_signals + [s for s in stalker_signals if s["token"] not in striker_tokens]
     combined.sort(key=lambda s: s["score"], reverse=True)
 
+    # Build DSL state templates for each signal
+    for signal in combined:
+        signal["dslState"] = build_dsl_state_template(signal)
+
     # Output — include hardcoded constraints so the agent can't override them
     cfg.output({
         "status": "ok",
@@ -520,8 +609,11 @@ def run():
             "maxDailyLossPct": MAX_DAILY_LOSS_PCT,
             "xyzBanned": XYZ_BANNED,
             "assetCooldownMinutes": cooldown_min,
-            "stagnationTp": {"enabled": True, "roeMin": 10, "hwStaleMin": 45},
+            "stagnationTp": STAGNATION_TP,
+            "dslTiers": DSL_TIERS,
+            "convictionTiers": CONVICTION_TIERS,
             "_note": "These constraints are HARDCODED in the scanner. Do not override.",
+            "_dslNote": "Use the dslState block from each signal as the DSL state file. Do NOT merge with dsl-profile.json.",
         },
     })
 

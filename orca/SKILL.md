@@ -1,31 +1,38 @@
 ---
 name: orca-strategy
 description: >-
-  ORCA v1.0 — Hardened dual-mode emerging movers scanner. Every lesson from
-  5 days of live trading across 22 agents baked into the code. XYZ equities
-  banned at scan level. Leverage 7-10x enforced in output. Stagnation TP
-  mandatory. 10% daily loss limit. 2-hour per-asset cooldown. The agent
-  cannot override any of these — they are in the scanner, not instructions.
-  Fox's exact winning config, locked down.
+  ORCA v1.1 — Hardened dual-mode emerging movers scanner. Every lesson from
+  5+ days of live trading across 22 agents baked into the code. v1.1 adds
+  the DSL state template directly in scanner output — eliminating the
+  dsl-profile.json override bugs that broke Fox, Grizzly, Jackal, and every
+  Wolf-based agent. XYZ equities banned at scan level. Leverage 7-10x enforced.
+  Stagnation TP mandatory. 10% daily loss limit. 2-hour per-asset cooldown.
+  Conviction-scaled Phase 1 timing per-signal. The agent cannot override any
+  of these — they are in the scanner, not instructions.
 license: MIT
 metadata:
   author: jason-goldberg
-  version: "1.0"
+  version: "1.1"
   platform: senpi
   exchange: hyperliquid
   based_on: vixen-v1.0
-  config_source: fox-winning-config-day5
+  config_source: fox-winning-config-day5-plus-dsl-audit
 ---
 
-# 🐋 ORCA v1.0 — Hardened Dual-Mode Scanner
+# 🐋 ORCA v1.1 — Hardened Dual-Mode Scanner
 
 Fox's brain. Vixen's architecture. Every lesson from 22 agents locked into the code.
 
-## Why ORCA Exists
+## What v1.1 Fixes (DSL Audit)
 
-Fox is #1 at +23.2%. Vixen and Mantis run the same scanner but drifted to -17.3% and -6.5%. The diff: Fox has XYZ banned, stagnation TP enabled, 10% daily loss limit. The others lost these settings during model switches and self-modifications.
+The audit across all 22 agents revealed that every agent except Orca v1.0 had broken DSL configs. The root causes:
 
-ORCA is the definitive version — Fox's exact winning config with every protective gate hardcoded in the scanner itself. The agent cannot loosen filters, raise leverage, remove stagnation TP, or trade XYZ equities. Those signals never appear in the output.
+1. **`consecutiveBreachesRequired: 1` in Phase 1** — meant a single price wick killed the position. Fox's entire losing streak traced to this. Fix: hardcoded to 3.
+2. **`deadWeightCutMinutes: 0`** — positions that never went positive sat for 30+ minutes bleeding. COPPER sat at 0% ROE for 36 hours on Fox. Fix: hardcoded to 10/15/20 by conviction.
+3. **`stagnationTp` stripped by wolf_config.py builder** — the function that merges configs silently dropped stagnation TP and conviction tiers. Dire Wolf, Jackal, and every Wolf-based agent was affected. Fix: DSL state template is now in the scanner output, bypassing all builders.
+4. **dsl-v5.py reads top-level Phase 1 values, not per-tier** — even when conviction tiers were present, the DSL engine read the top-level `deadWeightCutMinutes: 0` instead. Fix: scanner now sets the correct top-level values per-signal based on score.
+
+**v1.1 solution:** The scanner outputs a complete `dslState` block for each signal. The agent writes this directly as the state file. No merging with dsl-profile.json. No wolf_config.py builder. No dynamic generation. The scanner is the single source of truth.
 
 ## Hardcoded Lessons (in the code, not instructions)
 
@@ -83,6 +90,27 @@ Spec: https://github.com/Senpi-ai/senpi-skills/blob/main/dsl-dynamic-stop-loss/d
 
 If ROE >= 10% and high water hasn't moved for 45 minutes, take profit. Fox has this. Mantis removed it and underperformed. This is not optional.
 
+## Scanner Output — DSL State Template (v1.1)
+
+Each signal in `combined` includes a `dslState` block. **The agent MUST write this block directly as the DSL state file after opening a position.** Do not merge with dsl-profile.json. Do not use wolf_config.py. Do not generate your own DSL config.
+
+The `dslState` includes:
+- `phase1.consecutiveBreachesRequired: 3` (NOT 1 — Fox's biggest bug)
+- `phase1.deadWeightCutMinutes` set per-score (10/15/20 — NOT 0)
+- `phase1.hardTimeoutMinutes` set per-score (30/45/60)
+- `phase1.weakPeakCutMinutes` set per-score (15/20/30)
+- `stagnationTp: {"enabled": true, "roeMin": 10, "hwStaleMin": 45}`
+- Full tier table with correct per-tier breaches (3/2/2/1)
+
+**Entry flow:**
+1. Scanner outputs signal with `dslState` block
+2. Agent calls `strategy_create_position` with coin, direction, leverage, margin
+3. Agent writes `state/{TOKEN}.json` with the exact contents of `signal.dslState`, plus `entryPrice`, `leverage`, and `createdAt`
+4. Agent sends ONE notification: position opened
+5. DSL cron (3 min) picks up the state file and manages the position
+
+**If step 3 is skipped, the position is NAKED — no stop loss protection.**
+
 ## Scanner Output Constraints
 
 The scanner includes a `constraints` block in every output that the agent MUST respect:
@@ -96,7 +124,13 @@ The scanner includes a `constraints` block in every output that the agent MUST r
     "maxDailyLossPct": 10,
     "xyzBanned": true,
     "assetCooldownMinutes": 120,
-    "stagnationTp": {"enabled": true, "roeMin": 10, "hwStaleMin": 45}
+    "stagnationTp": {"enabled": true, "roeMin": 10, "hwStaleMin": 45},
+    "dslTiers": [
+      {"triggerPct": 7,  "lockHwPct": 40, "consecutiveBreachesRequired": 3},
+      {"triggerPct": 12, "lockHwPct": 55, "consecutiveBreachesRequired": 2},
+      {"triggerPct": 15, "lockHwPct": 75, "consecutiveBreachesRequired": 2},
+      {"triggerPct": 20, "lockHwPct": 85, "consecutiveBreachesRequired": 1}
+    ]
   }
 }
 ```
