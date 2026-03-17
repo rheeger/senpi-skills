@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-# Senpi GRIZZLY Scanner v2.0
+# Senpi GRIZZLY Scanner v2.1
 # Copyright 2026 Senpi (https://senpi.ai)
 # Licensed under MIT
 # Source: https://github.com/Senpi-ai/senpi-skills
-"""GRIZZLY v2.0 — BTC Alpha Hunter with Position Lifecycle.
+"""GRIZZLY v2.1 — BTC Alpha Hunter with Position Lifecycle (Hardened).
+
+v2.1 fixes from DSL audit:
+- SM field names: token/direction/pct_of_top_traders_gain/trader_count
+- Funding/OI reads from asset_context
+- DSL state template in scanner output (same pattern as Orca v1.1)
+- Leverage capped at 10x (was 15-20x — caused $148/day losses)
+- Markets response double-unwrap for nested data structure
 
 Single-asset focus. BTC only. Every signal source available (SM, funding, OI,
 4-timeframe trend, volume, ETH correlation). 15-20x leverage, maximum conviction.
@@ -123,18 +130,45 @@ def get_btc_sm_direction():
 
     markets = data.get("data", data)
     if isinstance(markets, dict):
-        markets = markets.get("markets", markets.get("leaderboard", []))
+        markets = markets.get("markets", markets.get("leaderboard", markets))
+    if isinstance(markets, dict):
+        markets = markets.get("markets", [])
+
+    # Aggregate long vs short entries for BTC
+    btc_long_pct = 0
+    btc_short_pct = 0
+    btc_traders = 0
+    found = False
 
     for m in markets:
-        if m.get("coin", m.get("asset", "")) == "BTC":
-            long_pct = float(m.get("longPct", m.get("pctOfGainsLong", 50)))
-            trader_count = int(m.get("traderCount", m.get("numTraders", 0)))
-            if long_pct > 58:
-                return "LONG", long_pct, trader_count
-            elif long_pct < 42:
-                return "SHORT", 100 - long_pct, trader_count
-            return "NEUTRAL", 50, trader_count
-    return None, 0, 0
+        if not isinstance(m, dict):
+            continue
+        token = m.get("token", m.get("coin", m.get("asset", "")))
+        if token != "BTC":
+            continue
+        found = True
+        direction = m.get("direction", "").lower()
+        pct = float(m.get("pct_of_top_traders_gain", m.get("longPct", 0)))
+        traders = int(m.get("trader_count", m.get("traderCount", 0)))
+        if direction == "long":
+            btc_long_pct = pct
+            btc_traders += traders
+        elif direction == "short":
+            btc_short_pct = pct
+            btc_traders += traders
+
+    if not found:
+        return None, 0, 0
+
+    total = btc_long_pct + btc_short_pct
+    if total == 0:
+        return "NEUTRAL", 50, btc_traders
+    long_ratio = (btc_long_pct / total) * 100 if total > 0 else 50
+    if long_ratio > 58:
+        return "LONG", long_ratio, btc_traders
+    elif long_ratio < 42:
+        return "SHORT", 100 - long_ratio, btc_traders
+    return "NEUTRAL", 50, btc_traders
 
 
 # ─── Thesis Builder (BTC Only) ───────────────────────────────
@@ -150,8 +184,9 @@ def build_btc_thesis(entry_cfg):
     candles_15m = btc_data.get("candles", {}).get("15m", [])
     candles_1h = btc_data.get("candles", {}).get("1h", [])
     candles_4h = btc_data.get("candles", {}).get("4h", [])
-    funding = float(btc_data.get("funding", 0))
-    oi = float(btc_data.get("openInterest", 0))
+    asset_ctx = btc_data.get("asset_context", {})
+    funding = float(asset_ctx.get("funding", btc_data.get("funding", 0)))
+    oi = float(asset_ctx.get("openInterest", btc_data.get("openInterest", 0)))
 
     if len(candles_5m) < 12 or len(candles_15m) < 8 or len(candles_1h) < 8 or len(candles_4h) < 6:
         return None
@@ -305,7 +340,8 @@ def evaluate_btc_position(direction, entry_cfg):
 
     candles_1h = btc_data.get("candles", {}).get("1h", [])
     candles_4h = btc_data.get("candles", {}).get("4h", [])
-    funding = float(btc_data.get("funding", 0))
+    asset_ctx = btc_data.get("asset_context", {})
+    funding = float(asset_ctx.get("funding", btc_data.get("funding", 0)))
 
     if len(candles_4h) < 6:
         return True, ["insufficient_data_hold"]
@@ -374,7 +410,8 @@ def evaluate_reload(exit_state, entry_cfg):
     candles_5m = btc_data.get("candles", {}).get("5m", [])
     candles_1h = btc_data.get("candles", {}).get("1h", [])
     candles_4h = btc_data.get("candles", {}).get("4h", [])
-    funding = float(btc_data.get("funding", 0))
+    asset_ctx = btc_data.get("asset_context", {})
+    funding = float(asset_ctx.get("funding", btc_data.get("funding", 0)))
 
     kill_reasons = []
     reload_checks = []
@@ -485,6 +522,70 @@ def evaluate_reload(exit_state, entry_cfg):
         return False, reload_checks
 
 
+# ─── Hardcoded Constants & DSL State Builder ─────────────────
+
+# Learned from 5+ days across 22 agents. Not configurable by agent.
+MAX_LEVERAGE = 10         # Was 15-20x — Grizzly lost $148/day at 15x with broken DSL
+MIN_LEVERAGE = 7          # Sub-7x can't overcome fees
+
+# Grizzly-specific DSL — BTC conviction holds
+GRIZZLY_DSL_TIERS = [
+    {"triggerPct": 7,  "lockHwPct": 40, "consecutiveBreachesRequired": 3},
+    {"triggerPct": 12, "lockHwPct": 55, "consecutiveBreachesRequired": 2},
+    {"triggerPct": 15, "lockHwPct": 75, "consecutiveBreachesRequired": 2},
+    {"triggerPct": 20, "lockHwPct": 85, "consecutiveBreachesRequired": 1},
+]
+
+# Conviction tiers for BTC — wider than Orca (BTC moves slower)
+GRIZZLY_CONVICTION_TIERS = [
+    {"minScore": 8,  "absoluteFloorRoe": -25, "hardTimeoutMin": 45, "weakPeakCutMin": 20, "deadWeightCutMin": 15},
+    {"minScore": 10, "absoluteFloorRoe": -30, "hardTimeoutMin": 60, "weakPeakCutMin": 30, "deadWeightCutMin": 20},
+    {"minScore": 12, "absoluteFloorRoe": -35, "hardTimeoutMin": 90, "weakPeakCutMin": 45, "deadWeightCutMin": 30},
+]
+
+GRIZZLY_STAGNATION_TP = {"enabled": True, "roeMin": 10, "hwStaleMin": 45}
+
+
+def build_dsl_state_template(direction, score):
+    """Build exact DSL state file for a Grizzly BTC position.
+    Agent writes this directly — no dsl-profile.json merging."""
+    tier = GRIZZLY_CONVICTION_TIERS[0]
+    for ct in GRIZZLY_CONVICTION_TIERS:
+        if score >= ct["minScore"]:
+            tier = ct
+
+    return {
+        "active": True,
+        "asset": "BTC",
+        "direction": direction,
+        "score": score,
+        "phase": 1,
+        "highWaterPrice": 0,
+        "highWaterRoe": 0,
+        "currentTierIndex": -1,
+        "consecutiveBreaches": 0,
+        "lockMode": "pct_of_high_water",
+        "phase2TriggerRoe": 7,
+        "phase1": {
+            "enabled": True,
+            "retraceThreshold": 0.03,
+            "consecutiveBreachesRequired": 3,  # NOT 1
+            "phase1MaxMinutes": tier["hardTimeoutMin"],
+            "weakPeakCutMinutes": tier["weakPeakCutMin"],
+            "deadWeightCutMin": tier["deadWeightCutMin"],  # NOT 0
+            "absoluteFloorRoe": tier["absoluteFloorRoe"],
+            "weakPeakCut": {"enabled": True, "intervalInMinutes": tier["weakPeakCutMin"], "minValue": 3.0},
+        },
+        "phase2": {"enabled": True, "retraceThreshold": 0.015, "consecutiveBreachesRequired": 2},
+        "tiers": GRIZZLY_DSL_TIERS,
+        "stagnationTp": GRIZZLY_STAGNATION_TP,
+        "convictionTiers": GRIZZLY_CONVICTION_TIERS,
+        "execution": {"phase1SlOrderType": "MARKET", "phase2SlOrderType": "MARKET", "breachCloseOrderType": "MARKET"},
+        "_grizzly_version": "2.1",
+        "_note": "Generated by grizzly-scanner.py. Do not modify. Do not merge with dsl-profile.json.",
+    }
+
+
 # ─── Main ─────────────────────────────────────────────────────
 
 def run():
@@ -572,7 +673,7 @@ def run():
                 # RELOAD: re-enter same direction
                 direction = exit_state["exitDirection"]
                 lev_cfg = config.get("leverage", {})
-                leverage = lev_cfg.get("default", 15)
+                leverage = min(lev_cfg.get("default", 15), MAX_LEVERAGE)
                 base_margin_pct = entry_cfg.get("marginPctBase", 0.30)
                 margin = round(account_value * base_margin_pct, 2)
 
@@ -591,6 +692,7 @@ def run():
                         "margin": margin,
                         "orderType": config.get("execution", {}).get("entryOrderType", "FEE_OPTIMIZED_LIMIT"),
                     },
+                    "dslState": build_dsl_state_template(direction, 10),
                     "reasons": reasons,
                     "note": f"STALKING → RELOAD: fresh impulse confirmed, re-entering BTC {direction}",
                 })
@@ -642,16 +744,16 @@ def run():
         cfg.output({"success": True, "heartbeat": "NO_REPLY", "note": note})
         return
 
-    # Conviction-scaled leverage
+    # Conviction-scaled leverage (CAPPED at MAX_LEVERAGE)
     lev_cfg = config.get("leverage", {})
     if thesis["score"] >= 14:
-        leverage = lev_cfg.get("max", 20)
+        leverage = min(lev_cfg.get("max", 20), MAX_LEVERAGE)
     elif thesis["score"] >= 12:
-        leverage = lev_cfg.get("high", 18)
+        leverage = min(lev_cfg.get("high", 18), MAX_LEVERAGE)
     elif thesis["score"] >= 10:
-        leverage = lev_cfg.get("default", 15)
+        leverage = min(lev_cfg.get("default", 15), MAX_LEVERAGE)
     else:
-        leverage = lev_cfg.get("min", 12)
+        leverage = min(lev_cfg.get("min", 12), MAX_LEVERAGE)
 
     # Conviction-scaled margin
     base_margin_pct = entry_cfg.get("marginPctBase", 0.30)
@@ -677,6 +779,14 @@ def run():
             "leverage": leverage,
             "margin": margin,
             "orderType": config.get("execution", {}).get("entryOrderType", "FEE_OPTIMIZED_LIMIT"),
+        },
+        "dslState": build_dsl_state_template(thesis["direction"], thesis["score"]),
+        "constraints": {
+            "minLeverage": MIN_LEVERAGE,
+            "maxLeverage": MAX_LEVERAGE,
+            "stagnationTp": GRIZZLY_STAGNATION_TP,
+            "dslTiers": GRIZZLY_DSL_TIERS,
+            "_dslNote": "Use dslState as the DSL state file. Do NOT merge with dsl-profile.json.",
         },
     })
 
