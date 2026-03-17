@@ -1,7 +1,7 @@
 ---
 name: orca-strategy
 description: >-
-  ORCA v1.1 — Hardened dual-mode emerging movers scanner. Every lesson from
+  ORCA v1.1.1 — Hardened dual-mode emerging movers scanner. Every lesson from
   5+ days of live trading across 22 agents baked into the code. v1.1 adds
   the DSL state template directly in scanner output — eliminating the
   dsl-profile.json override bugs that broke Fox, Grizzly, Jackal, and every
@@ -12,14 +12,14 @@ description: >-
 license: MIT
 metadata:
   author: jason-goldberg
-  version: "1.1"
+  version: "1.1.1"
   platform: senpi
   exchange: hyperliquid
   based_on: vixen-v1.0
   config_source: fox-winning-config-day5-plus-dsl-audit
 ---
 
-# 🐋 ORCA v1.1 — Hardened Dual-Mode Scanner
+# 🐋 ORCA v1.1.1 — Hardened Dual-Mode Scanner
 
 Fox's brain. Vixen's architecture. Every lesson from 22 agents locked into the code.
 
