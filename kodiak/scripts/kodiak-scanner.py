@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Senpi KODIAK Scanner v2.0
+# Senpi KODIAK Scanner v1.1.1
 # Copyright 2026 Senpi (https://senpi.ai)
 # Licensed under MIT
 # Source: https://github.com/Senpi-ai/senpi-skills
@@ -544,7 +544,7 @@ def build_dsl_state_template(direction, score):
             tier = ct
     return {
         "active": True, "asset": "SOL", "direction": direction, "score": score,
-        "phase": 1, "highWaterPrice": 0, "highWaterRoe": 0,
+        "phase": 1, "highWaterPrice": None, "highWaterRoe": None,
         "currentTierIndex": -1, "consecutiveBreaches": 0,
         "lockMode": "pct_of_high_water", "phase2TriggerRoe": 7,
         "phase1": {
@@ -558,7 +558,7 @@ def build_dsl_state_template(direction, score):
         "tiers": KODIAK_DSL_TIERS,
         "stagnationTp": KODIAK_STAGNATION_TP,
         "execution": {"phase1SlOrderType": "MARKET", "phase2SlOrderType": "MARKET", "breachCloseOrderType": "MARKET"},
-        "_kodiak_version": "1.1",
+        "_kodiak_version": "1.1.1",
     }
 
 
