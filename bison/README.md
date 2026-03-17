@@ -153,3 +153,11 @@ All crons isolated. `NO_REPLY` for idle cycles.
 
 Apache-2.0 — Built by Senpi (https://senpi.ai). Attribution required for derivative works.
 Source: https://github.com/Senpi-ai/senpi-skills
+
+## Changelog
+
+### v1.2.1
+- Fixed DSL field names: `phase1MaxMinutes` (was `hardTimeoutMinutes`), `deadWeightCutMin` (was `deadWeightCutMinutes`)
+- `highWaterPrice` initialized as `null` (was `0`) — lets dsl-v5.py set from actual entry price on first tick
+- Removed static `absoluteFloor` price values — dsl-v5.py now calculates dynamically from `absoluteFloorRoe`
+- Requires dsl-v5.py with Patch 1 (dynamic absoluteFloorRoe calculator) and Patch 2 (highWaterPrice null handling)
