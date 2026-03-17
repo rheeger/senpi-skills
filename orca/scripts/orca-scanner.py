@@ -518,10 +518,9 @@ def build_dsl_state_template(signal):
             "enabled": True,
             "retraceThreshold": 0.03,
             "consecutiveBreachesRequired": 3,  # NOT 1 — Fox's #1 bug
-            "hardTimeoutMinutes": tier["hardTimeoutMin"],
+            "phase1MaxMinutes": tier["hardTimeoutMin"],
             "weakPeakCutMinutes": tier["weakPeakCutMin"],
-            "deadWeightCutMinutes": tier["deadWeightCutMin"],  # NOT 0 — every agent's #2 bug
-            "absoluteFloor": 0.02,
+            "deadWeightCutMin": tier["deadWeightCutMin"],  # NOT 0 — every agent's #2 bug
             "absoluteFloorRoe": tier["absoluteFloorRoe"],
             "weakPeakCut": {
                 "enabled": True,
