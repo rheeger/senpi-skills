@@ -37,8 +37,6 @@ Before starting the tutorial, verify:
 
 Ensure state file exists; if missing, create it and redirect. **When redirecting, tell the user only:** "You need to complete setup first. Say **'set up Senpi'** or **'connect to Senpi'** to get started." Do not mention state file, FRESH, or any internal state.
 
----
-
 ```bash
 # Ensure state file exists (per state lifecycle); if missing, create and redirect
 if [ ! -f ~/.config/senpi/state.json ]; then
