@@ -167,26 +167,35 @@ This covers all known cases: slugs that match directly (e.g. `fox`, `viper`, `co
 
 ### If user says "Set me up" or "skip tutorial"
 
-Fetch the top 2 strategies by ROE and ask the user to choose, then deploy the chosen one — go through the full setup end to end without stopping:
+Fetch leaderboard strategies by ROE, handle 2/1/0 results correctly, and deploy end to end without stopping:
 
-1. Fetch the leaderboard sorted by ROE to identify the top 2 strategies:
+1. Fetch the leaderboard sorted by ROE (limit 2):
    ```bash
    curl -s -X POST https://ypofdvbavcdgseguddey.supabase.co/functions/v1/mcp-server \
      -H "Content-Type: application/json" \
      -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_leaderboard","arguments":{"sort_by":"roe","limit":2}}}'
    ```
-   Extract both strategies' `slug` and `name`. Label them `TOP1` (rank 1) and `TOP2` (rank 2).
+   Parse results with these branches:
+   - **2 results:** label them `TOP1` (rank 1) and `TOP2` (rank 2).
+   - **1 result:** label it `TOP1` only.
+   - **0 results or fetch failure:** set `CHOSEN_SKILL=fox` and continue (do not block setup).
 
-2. If the user has not already indicated which strategy they want, present a choice:
-   ```
-   Which strategy would you like to deploy?
+2. If `CHOSEN_SKILL` is not already set:
+   - If the user has already indicated a strategy, map their choice to the corresponding slug and set `CHOSEN_SKILL`.
+   - If there are **2 results** and the user has not indicated a strategy, present:
+     ```
+     Which strategy would you like to deploy?
 
-   1️⃣ {TOP1_NAME} (+{TOP1_ROE}% ROE)
-   2️⃣ {TOP2_NAME} (+{TOP2_ROE}% ROE)
+     1️⃣ {TOP1_NAME} (+{TOP1_ROE}% ROE)
+     2️⃣ {TOP2_NAME} (+{TOP2_ROE}% ROE)
 
-   Reply with 1, 2, or the strategy name.
-   ```
-   Wait for the user's response, then set `CHOSEN_SKILL` to the slug of their selection.
+     Reply with 1, 2, or the strategy name.
+     ```
+     Wait for the user's response, then set `CHOSEN_SKILL` to the slug of their selection.
+   - If there is **1 result** and the user has not indicated a strategy, set `CHOSEN_SKILL` to `TOP1`'s slug and inform them:
+     ```
+     I found one top strategy right now: {TOP1_NAME} (+{TOP1_ROE}% ROE). I'll deploy it now.
+     ```
 
 3. Install using the slug resolution convention above:
    ```bash
@@ -196,7 +205,7 @@ Fetch the top 2 strategies by ROE and ask the user to choose, then deploy the ch
 4. Read the installed SKILL.md and run the full bootstrap — create the strategy wallet, fund it, run setup, create all crons. Do not stop to ask for permission between steps. If a step requires user input (e.g. budget amount), ask once and proceed.
 5. Confirm when live: "{name} is deployed and scanning. You'll get Telegram alerts when positions open or close. It runs 24/7 — you don't need to do anything.\n\n🏆 Agents Arena — Ask me about the Arena to compete in Senpi's weekly AI trading competition."
 
-**If the leaderboard fetch fails**, default to installing `fox-strategy` (historically the top performer) and proceed. Do not block setup on a failed leaderboard call.
+**If the leaderboard fetch fails or returns 0 rows**, default to installing `fox-strategy` (historically the top performer) and proceed. Do not block setup on leaderboard issues.
 
 ### Budget-Based Recommendations
 
