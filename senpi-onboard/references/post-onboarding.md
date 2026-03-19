@@ -32,13 +32,13 @@ Send ONLY this message. Do NOT render the strategy catalog here — wait for the
 
 **Do not include balance or funding status here.** Balance is fetched in Step 2.5 (after this message); Step 2.5 will surface either a balance summary (if funded) or the funding reminder (if &lt; $100).
 
-**Before rendering this message**, fetch the top strategy so the "Set me up" line can name it. Run both calls in parallel:
+**Before rendering this message**, fetch the top 2 strategies so the "Set me up" line can name them. Run both calls in parallel:
 
 ```bash
-# Leaderboard — top 1 by ROE
+# Leaderboard — top 2 by ROE
 curl -s -X POST https://ypofdvbavcdgseguddey.supabase.co/functions/v1/mcp-server \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_leaderboard","arguments":{"sort_by":"roe","limit":1}}}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_leaderboard","arguments":{"sort_by":"roe","limit":2}}}'
 
 # Strategy metadata
 curl -s -X POST https://ypofdvbavcdgseguddey.supabase.co/functions/v1/mcp-server \
@@ -46,9 +46,14 @@ curl -s -X POST https://ypofdvbavcdgseguddey.supabase.co/functions/v1/mcp-server
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_strategies","arguments":{}}}'
 ```
 
-Join on `slug` to get the top strategy's `name`, `emoji`, `roe`, and `slug`. If either fetch fails, omit the name/ROE and fall back to the generic wording.
+Join on `slug` to get the top strategies' `name`, `emoji`, `roe`, and `slug`.
 
-Render the template substituting `{TOP_NAME}` and `{TOP_ROE}`:
+Handle leaderboard result count explicitly:
+- **2 results:** label them `TOP1` (rank 1) and `TOP2` (rank 2), then render the 2-option template.
+- **1 result:** label it `TOP1` and render the 1-option template (do not reference `TOP2` placeholders).
+- **0 results or either fetch fails:** omit names/ROE and use the generic fallback wording.
+
+Render the 2-option template substituting `{TOP1_NAME}`, `{TOP1_ROE}`, `{TOP2_NAME}`, and `{TOP2_ROE}`:
 
 ```
 Welcome to Senpi! You're set up on Hyperliquid.
@@ -59,14 +64,24 @@ To get started:
 
 🟢 "I'm new" — I'll walk you through your first trade.
 🔵 "Show me the strategies" — Full catalog of AI trading strategies I can deploy.
-🟡 "Set me up" — I'll deploy {TOP_NAME} (+{TOP_ROE}% ROE), our current top performer, and get you trading in under a minute.
+🟡 "Set me up" — Deploy one of our top 2 performers and start trading in under a minute:
+   1️⃣ {TOP1_NAME} (+{TOP1_ROE}% ROE)
+   2️⃣ {TOP2_NAME} (+{TOP2_ROE}% ROE)
 
 All strategies are open source and tracked live at strategies.senpi.ai
 
 🏆 Agents Arena — Ask me about the Arena to learn about Senpi's weekly AI trading competition.
 ```
 
-Fallback if leaderboard unavailable:
+Render this 1-option template when only one leaderboard result is available:
+```
+🟡 "Set me up" — Deploy our current top performer and start trading in under a minute:
+   1️⃣ {TOP1_NAME} (+{TOP1_ROE}% ROE)
+
+🏆 Agents Arena — Ask me about the Arena to learn about Senpi's weekly AI trading competition.
+```
+
+Fallback if leaderboard unavailable or empty:
 ```
 🟡 "Set me up" — I'll deploy our current top-performing strategy and get you trading in under a minute.
 
@@ -151,25 +166,45 @@ This covers all known cases: slugs that match directly (e.g. `fox`, `viper`, `co
 
 ### If user says "Set me up" or "skip tutorial"
 
-Fetch the leaderboard to identify the current top-performing strategy, then deploy it immediately — go through the full setup end to end without stopping:
+Fetch leaderboard strategies by ROE, handle 2/1/0 results correctly, and deploy end to end without stopping:
 
-1. Fetch the leaderboard sorted by ROE to identify the #1 strategy:
+1. Fetch the leaderboard sorted by ROE (limit 2):
    ```bash
    curl -s -X POST https://ypofdvbavcdgseguddey.supabase.co/functions/v1/mcp-server \
      -H "Content-Type: application/json" \
-     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_leaderboard","arguments":{"sort_by":"roe","limit":1}}}'
+     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_leaderboard","arguments":{"sort_by":"roe","limit":2}}}'
    ```
-   Extract the top strategy's `slug` and `name`. Call the slug `TOP_SKILL`.
+   Parse results with these branches:
+   - **2 results:** label them `TOP1` (rank 1) and `TOP2` (rank 2).
+   - **1 result:** label it `TOP1` only.
+   - **0 results or fetch failure:** set `CHOSEN_SKILL=fox` and continue (do not block setup).
 
-2. Install using the slug resolution convention above:
+2. If `CHOSEN_SKILL` is not already set:
+   - If the user has already indicated a strategy, map their choice to the corresponding slug and set `CHOSEN_SKILL`.
+   - If there are **2 results** and the user has not indicated a strategy, present:
+     ```
+     Which strategy would you like to deploy?
+
+     1️⃣ {TOP1_NAME} (+{TOP1_ROE}% ROE)
+     2️⃣ {TOP2_NAME} (+{TOP2_ROE}% ROE)
+
+     Reply with 1, 2, or the strategy name.
+     ```
+     Wait for the user's response, then set `CHOSEN_SKILL` to the slug of their selection.
+   - If there is **1 result** and the user has not indicated a strategy, set `CHOSEN_SKILL` to `TOP1`'s slug and inform them:
+     ```
+     I found one top strategy right now: {TOP1_NAME} (+{TOP1_ROE}% ROE). I'll deploy it now.
+     ```
+
+3. Install using the slug resolution convention above:
    ```bash
-   npx skills add https://github.com/Senpi-ai/senpi-skills --skill "${TOP_SKILL}" -g -y 2>/dev/null || \
-   npx skills add https://github.com/Senpi-ai/senpi-skills --skill "${TOP_SKILL}-strategy" -g -y
+   npx skills add https://github.com/Senpi-ai/senpi-skills --skill "${CHOSEN_SKILL}" -g -y 2>/dev/null || \
+   npx skills add https://github.com/Senpi-ai/senpi-skills --skill "${CHOSEN_SKILL}-strategy" -g -y
    ```
-3. Read the installed SKILL.md and run the full bootstrap — create the strategy wallet, fund it, run setup, create all crons. Do not stop to ask for permission between steps. If a step requires user input (e.g. budget amount), ask once and proceed.
-4. Confirm when live: "{name} is deployed and scanning. You'll get Telegram alerts when positions open or close. It runs 24/7 — you don't need to do anything.\n\n🏆 Agents Arena — Ask me about the Arena to compete in Senpi's weekly AI trading competition."
+4. Read the installed SKILL.md and run the full bootstrap — create the strategy wallet, fund it, run setup, create all crons. Do not stop to ask for permission between steps. If a step requires user input (e.g. budget amount), ask once and proceed.
+5. Confirm when live: "{name} is deployed and scanning. You'll get Telegram alerts when positions open or close. It runs 24/7 — you don't need to do anything.\n\n🏆 Agents Arena — Ask me about the Arena to compete in Senpi's weekly AI trading competition."
 
-**If the leaderboard fetch fails**, default to installing `fox-strategy` (historically the top performer) and proceed. Do not block setup on a failed leaderboard call.
+**If the leaderboard fetch fails or returns 0 rows**, default to installing `fox-strategy` (historically the top performer) and proceed. Do not block setup on leaderboard issues.
 
 ### Budget-Based Recommendations
 
@@ -192,7 +227,7 @@ Always lead with the current #1 by ROE from the leaderboard as the primary recom
 
 **DO NOT explain crons, mcporter, DSL internals, or implementation details** unless the user asks. They deployed a trading agent — show them trading strategies, not plumbing.
 
-**DO lead with the current #1 strategy by ROE** from `get_leaderboard` as the default recommendation. Always fetch fresh leaderboard data rather than assuming a fixed strategy is on top.
+**DO lead with the current top 2 strategies by ROE** from `get_leaderboard` as the default recommendation. Present both so the user makes an active choice. Always fetch fresh leaderboard data rather than assuming a fixed strategy is on top.
 
 ---
 
