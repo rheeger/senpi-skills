@@ -9,7 +9,7 @@ Senpi Skills is the open-source repository for autonomous trading strategies on 
 
 ---
 
-## What We Learned From 30 Agents and $26K
+## What We Learned From 30 Agents and $30K
 
 Eight days. Thirty agents. $5.5M in volume. 6,764 trades. The findings that shaped every skill in this repo:
 
