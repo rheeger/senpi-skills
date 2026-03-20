@@ -1,66 +1,39 @@
-# HYDRA v1.0
+# 🐉 HYDRA v1.0 — Multi-Source Squeeze Scanner
 
-**Multi-Source Squeeze Scanner for Hyperliquid**
+Part of the [Senpi Trading Skills](https://github.com/Senpi-ai/senpi-skills).
 
-HYDRA detects crowded positions across the crypto market using 6 independent signal sources, enters trades with conviction-based sizing, and manages them with the Senpi DSL v1.1.1 trailing stop system with exchange-synced stop-losses.
+## What HYDRA Does
 
-Inspired by the community's Liquidity Hunter v3.0 (net profitable over 48 trades, TRUMP +35.8% best trade). HYDRA keeps the signal architecture and adds Senpi infrastructure: exchange-level SL sync, atomic DSL state generation, 10x leverage cap, and the standard skills zoo patterns.
+HYDRA detects crowded positions across crypto perpetuals using 6 independent signal sources, enters trades with conviction-based sizing, and manages them with DSL v1.1.1 trailing stops. Includes an independent monitor watchdog for account health and signal reversal detection.
 
-## Quick Start
-
-Scanner cron (systemEvent):
-```
-python3 /data/workspace/skills/hydra/scripts/hydra-scanner.py
-```
-
-DSL cron (agentTurn):
-```
-python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-dir /data/workspace/skills/hydra/state
-```
-
-Monitor cron (systemEvent):
-```
-python3 /data/workspace/skills/hydra/scripts/hydra-monitor.py
-```
-
-## Directory Structure
-
-```
-hydra-v1.0/
-├── README.md
-├── SKILL.md                     # Full spec — the agent reads this
-├── config/
-│   └── hydra-config.json        # All configurable parameters
-└── scripts/
-    ├── hydra-scanner.py         # 6-source scoring + signal output
-    ├── hydra-monitor.py         # Independent watchdog (3rd cron)
-    └── hydra_config.py          # Standalone config helper
-```
-
-## Signal Sources (6)
+## Signal Sources
 
 | # | Source | Weight | Role |
 |---|--------|--------|------|
-| 1 | FDD — Funding Divergence | 30/110 | Primary gate. No trade without FDD. |
-| 2 | LCD — Liquidation Cascade | 25/110 | Nearby liquidation clusters |
-| 3 | OIS — Open Interest Surge | 20/110 | New leverage entering/exiting |
-| 4 | MED — Momentum Exhaustion | -10 to +5 | Dual role: confirmation OR penalty |
-| 5 | EM — Emerging Movers | -8 to +15 | SM consensus from leaderboard |
-| 6 | OPP — Opportunity Scanner | -999 to +10 | Final gate: hourly trend alignment |
+| 1 | FDD — Funding Divergence | 0-30 | Primary gate |
+| 2 | LCD — Liquidation Cascade | 0-25 | Liquidation clusters |
+| 3 | OIS — Open Interest Surge | 0-20 | Leverage flow |
+| 4 | MED — Momentum Exhaustion | -10 to +5 | Confirmation/penalty |
+| 5 | EM — Emerging Movers | -8 to +15 | SM consensus |
+| 6 | OPP — Opportunity Scanner | -999 to +10 | Trend alignment gate |
 
-## Key Differences from Liquidity Hunter
+## Three Crons
 
-| Dimension | HYDRA | Liquidity Hunter |
-|-----------|-------|-----------------|
-| Exchange SL | Synced via DSL engine | None (software only) |
-| Leverage cap | 10x | 50-75x |
-| DSL format | v1.1.1 (standard zoo) | Custom format |
-| DSL state | Scanner generates atomically | Created after position open |
-| Config helper | Self-contained | wolf_config dependency |
-| XYZ equities | Banned | Not filtered |
-| Cooldown | 120 min per-asset | 120 min per-asset |
+```
+python3 /data/workspace/skills/hydra/scripts/hydra-scanner.py     # 5 min, main
+python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-dir /data/workspace/skills/hydra/state  # 3 min, isolated
+python3 /data/workspace/skills/hydra/scripts/hydra-monitor.py     # 5 min, isolated
+```
+
+## v1.0.1 Fixes
+
+- MCP calls use mcporter CLI subprocess (was REST API — wouldn't work on agents)
+- Clearinghouse parsing unwraps main/xyz nesting correctly (positions were invisible)
+- Asset data fetched once per candidate, passed to all 6 sources (was 5 redundant calls)
+- Leaderboard data cached across discover_candidates, market_regime, source_em, and sizing
+- SKILL.md hardened with 8 critical agent rules
+- Stale placeholder directory removed
 
 ## License
 
 MIT — Copyright 2026 Senpi (https://senpi.ai)
-Source: https://github.com/Senpi-ai/senpi-skills

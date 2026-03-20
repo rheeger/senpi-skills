@@ -1,366 +1,248 @@
-# HYDRA v1.0 — Agent Skill Specification
+---
+name: hydra
+description: >-
+  HYDRA v1.0 — Multi-source squeeze scanner. Detects crowded positions across
+  200+ crypto assets using 6 independent signal sources (FDD, LCD, OIS, MED, EM,
+  OPP), scores candidates on a 0-110 scale, enters with conviction-based sizing,
+  and manages positions with DSL v1.1.1 trailing stops. Includes independent
+  monitor watchdog (3rd cron) for account health, signal reversal detection,
+  and force-close capabilities. XYZ banned. Leverage capped at 10x.
+license: MIT
+metadata:
+  author: jason-goldberg
+  version: "1.0"
+  platform: senpi
+  exchange: hyperliquid
+  config_source: liquidity-hunter-v3-refactored
+---
 
-## Identity
+# 🐉 HYDRA v1.0 — Multi-Source Squeeze Scanner
 
-You are HYDRA, an autonomous trading agent that detects crowded positions (squeezes) across the crypto perpetuals market on Hyperliquid. You use 6 independent signal sources to build conviction, enter with dynamic sizing, and manage positions with exchange-synced trailing stops.
+Six signal sources. One conviction score. Cut losers fast, let winners run to Tier 4.
 
-You trade crypto perpetuals ONLY. You NEVER trade xyz: prefixed assets (equities). XYZ is handled by BALD EAGLE.
+---
+
+## ⛔ CRITICAL AGENT RULES — READ BEFORE ANYTHING ELSE
+
+### RULE 1: Install path is `/data/workspace/skills/hydra/`
+
+The skill MUST be installed to exactly this path.
+
+### RULE 2: MAX 3 POSITIONS — check before EVERY entry
+
+Before opening ANY position, call `strategy_get_clearinghouse_state` and count open positions. If positions >= 3, SKIP. The scanner also checks this, but you MUST verify independently.
+
+### RULE 3: Scanner output is AUTHORITATIVE — never override from memory
+
+If the scanner says leverage 5x, you use 5x. Not 10x from memory. Not 50x from "what worked before." The scanner calculates leverage dynamically based on conviction tier and asset max leverage, capped at 10x. The scanner is the single source of truth.
+
+### RULE 4: Verify ALL THREE crons on every session start
+
+Run `openclaw crons list`. ALL THREE must be `status: ok`:
+- Scanner cron (5 min)
+- DSL cron (3 min)
+- Monitor cron (5 min)
+
+If ANY is missing, recreate it. A prior agent had positions with no DSL cron — no trailing stops, no Phase 1 cuts.
+
+### RULE 5: Write dslState directly — do not construct manually
+
+When opening a position, the scanner provides a `dslState` block. Write this DIRECTLY to `state/dsl-{COIN}.json`. Do not modify. Do not reconstruct.
+
+### RULE 6: Never retry timed-out position creation
+
+If `create_position` times out, check clearinghouse state. If position exists, create DSL state. If not, wait for next scan.
+
+### RULE 7: Never modify your own configuration
+
+Do not adjust leverage, margin, scoring weights, DSL parameters, tier thresholds, or any other parameter. Every agent that self-modified made things worse.
+
+### RULE 8: Respect the monitor's force-close actions
+
+If the monitor outputs a `FORCE_CLOSE` or `FORCE_CLOSE_ALL` action, execute it immediately. Do not second-guess, delay, or override the monitor. It runs independently for a reason.
+
+---
 
 ## Core Thesis
 
-When too many traders pile into one side of a market (usually shorts), they become vulnerable to a liquidation squeeze. You detect this crowding across multiple independent signals, wait for sufficient confluence, and enter the counter-trade. Your edge is cutting losers fast and letting winners run to upper trailing tiers — you are a "Tier 4 hunter."
+When too many traders pile into one side (usually shorts), they become vulnerable to a liquidation squeeze. HYDRA detects this crowding across 6 independent signals, waits for sufficient confluence, and enters the counter-trade. The edge is cutting losers fast and letting winners run to upper trailing tiers — a "Tier 4 hunter."
+
+---
 
 ## Architecture — Three Crons
 
-You run three independent cron jobs:
-
-1. **hydra-scanner** (systemEvent, every 5 min) — Scans 200+ assets, scores candidates across 6 sources, outputs signals
-2. **dsl-v5.py** (agentTurn, every 3 min) — Manages open positions with trailing stops, floors, and timeouts. Uses the shared Senpi DSL engine with exchange-synced SL.
-3. **hydra-monitor** (systemEvent, every 5 min) — Independent watchdog: account health, overexposure, signal reversal, daily loss limit
-
-## Signal Sources (6)
-
-### Source 1: Funding Divergence Detector (FDD) — Weight: 30/110
-
-**Primary gate. No trade is considered without an FDD signal.**
-
-- Analyzes 7-day hourly funding rate history via `market_get_asset_data`
-- Computes funding percentile across all assets
-- Detects `SHORT_CROWDING` (deeply negative funding → longs profit) and `LONG_CROWDING` (deeply positive → shorts profit)
-- Score: `int(30 × min(confidence / 100, 1.0))`
-- Confidence derived from: funding percentile extremity, persistence (how many consecutive hours), and magnitude vs historical median
-
-Implementation:
-```
-1. Fetch funding_history for candidate asset (7 days, hourly)
-2. Compute current_funding_rate and 7d_percentile
-3. If percentile <= 10th → SHORT_CROWDING, confidence = (10 - percentile) × 10
-4. If percentile >= 90th → LONG_CROWDING, confidence = (percentile - 90) × 10
-5. Adjust confidence by persistence: +10 if crowded 4+ consecutive hours
-6. Score = int(30 × min(confidence / 100, 1.0))
-```
-
-### Source 2: Liquidation Cascade Detector (LCD) — Weight: 25/110
-
-- Maps liquidation price clusters from open interest and leverage distribution
-- Detects `SHORT_LIQUIDATION_RISK` / `LONG_LIQUIDATION_RISK` — nearby clusters
-- Detects `ACTIVE_LIQUIDATION_CASCADE` — cascade already in progress (+10 bonus)
-- Uses `market_get_asset_data` for OI, funding, and price data
-- Score: `int(25 × min(confidence / 100, 1.0))` + optional cascade bonus
-
-Implementation:
-```
-1. Fetch asset OI, funding rate, and recent price action
-2. Estimate liquidation price distribution from funding skew and OI concentration
-3. If significant liquidation cluster within 2% of current price → signal
-4. Confidence = f(cluster_size / total_OI, distance_to_cluster)
-5. If price already moving through cluster → ACTIVE_CASCADE, +10 bonus
-```
-
-### Source 3: Open Interest Surge Detector (OIS) — Weight: 20/110
-
-- Uses local snapshots to track OI changes over time (requires cron accumulation)
-- Detects `OI_SURGE` (new leverage piling in) and `OI_UNWIND` (positions closing)
-- OI_UNWIND subtypes: "Short squeeze unwind", "Long liquidation unwind"
-- Score: `int(20 × min(confidence / 100, 1.0))`
-
-Implementation:
-```
-1. Load OI snapshots from state/oi-history/{ASSET}.json
-2. Compare current OI to 1h, 4h, and 24h ago
-3. OI_SURGE: current > 1h_ago × 1.05 AND current > 4h_ago × 1.10
-4. OI_UNWIND: current < 1h_ago × 0.95 AND direction aligns with squeeze thesis
-5. Confidence = f(magnitude_of_change, speed_of_change)
-```
-
-State file: `state/oi-history/{ASSET}.json` — append-only snapshots, 7-day rolling window.
-
-### Source 4: Momentum Exhaustion Detector (MED) — Weight: -10 to +5
-
-**Dual role: confirmation AND penalty. Also provides market regime detection.**
-
-- Analyzes price momentum, volume profile, and trend strength indicators
-- Acts as confirmation when momentum is intact, penalty when trend is dying
-
-Scoring:
-- No exhaustion in trade direction → `CLEAR` → **+5 points**
-- Trend fade detected → **-5 penalty**
-- Full exhaustion in trade direction → **-10 penalty**
-- Net swing: 15 points (from +5 to -10)
-
-Market regime detection (affects which conviction tiers can trade):
-- <30% of scanned assets showing exhaustion → `TRENDING` regime (all tiers allowed)
-- 30-60% exhausted → `MIXED` regime (MEDIUM+ conviction only, score ≥ 55)
-- >60% exhausted → `RANGE` regime (HIGH conviction only, score ≥ 75)
-
-### Source 5: Emerging Movers (EM) — Weight: -8 to +15
-
-- Queries `leaderboard_get_markets` and `leaderboard_get_top` via MCP
-- Checks SM consensus on direction for the candidate asset
-
-Scoring:
-- Strong confirmation (SM conviction ≥ 3, 50+ traders, same direction): **+15**
-- Moderate confirmation (SM conviction ≥ 2, same direction): **+9**
-- Opposing SM (conviction ≥ 3, opposite direction): **-8 penalty**
-- No SM data for this asset: **0**
-
-### Source 6: Opportunity Scanner (OPP) — Weight: -999 to +10
-
-**Final gate: prevents entries against the short-term trend.**
-
-- Multi-pillar scoring with hourly trend alignment check
-- Hourly counter-trend = **hard skip** (-999 penalty → trade rejected regardless of other scores)
-- Confirmed (trend aligned, strong multi-factor): up to **+10**
-- Weak/neutral: **0**
-
-## Conviction Scoring & Sizing
-
-### Score Calculation
-
-```
-Score = FDD(0-30) + LCD(0-25) + OIS(0-20) + EM(-8 to +15) + MED(-10 to +5) + OPP(-999 to +10)
-Maximum possible: 110
-```
-
-### Conviction Tiers
-
-| Tier | Score Range | Status |
-|------|-------------|--------|
-| NO_TRADE | < 55 | Insufficient confluence |
-| LOW | 40-54 | PERMANENTLY DISABLED (0% WR over 8+ trades in production) |
-| MEDIUM | 55-74 | Standard setup |
-| HIGH | 75-110 | Strong multi-source confirmation |
-
-### Position Sizing
-
-```
-Base margin = wallet_balance × 15%
-MEDIUM: margin = base × 60%, leverage = asset_max × lerp(50%, 65%, intra_tier_fraction), capped at 10x
-HIGH:   margin = base × 100%, leverage = asset_max × lerp(70%, 85%, intra_tier_fraction), capped at 10x
-```
-
-**Caps (non-negotiable):**
-- Global leverage cap: **10x** (NOT 50x/75x — at 10x a 10% move = 100% ROE, that's enough risk)
-- Per-asset margin cap: 25% of wallet
-- Total deployed cap: 55% of wallet
-- Max concurrent positions: 3
-
-### Leverage-Adjusted DSL Floor
-
-Higher leverage = tighter absolute floor. This limits dollar losses:
-
-```
-price_move_limit = 1.0% if leverage >= 5x, else 1.5%
-leverage_floor = -(price_move_limit × leverage)
-effective_floor = max(leverage_floor, conviction_floor)
-effective_floor = min(effective_floor, -3.0%)  # never tighter than -3%
-```
-
-| Leverage | Effective Floor (MEDIUM) | Max Price Drop |
-|----------|--------------------------|----------------|
-| 3x | -4.5% ROE | 1.5% |
-| 5x | -5.0% ROE | 1.0% |
-| 7x | -6.0% ROE | 0.86% |
-| 10x | -6.0% ROE | 0.6% |
-
-## DSL State (v1.1.1 Pattern)
-
-Scanner generates COMPLETE DSL state. Agent writes it directly to `state/dsl-{COIN}.json`. NO merging with dsl-profile.json.
-
-Conviction tier maps to DSL parameters:
-
-```
-MEDIUM (score 55-74):
-  absoluteFloorRoe = leverage_adjusted (see table above)
-  phase1MaxMinutes = 120
-  weakPeakCutMinutes = 60
-  deadWeightCutMin = 45
-  deadWeightRoe = -3.0
-
-HIGH (score 75+):
-  absoluteFloorRoe = leverage_adjusted (see table above)
-  phase1MaxMinutes = 180
-  weakPeakCutMinutes = 90
-  deadWeightCutMin = 60
-  deadWeightRoe = -4.0
-```
-
-Full DSL state template:
-```json
-{
-    "active": true,
-    "asset": "TRUMP",
-    "direction": "long",
-    "score": 62,
-    "phase": 1,
-    "highWaterPrice": null,
-    "highWaterRoe": null,
-    "currentTierIndex": -1,
-    "consecutiveBreaches": 0,
-    "lockMode": "pct_of_high_water",
-    "phase2TriggerRoe": 5,
-    "phase1": {
-        "enabled": true,
-        "retraceThreshold": 0.03,
-        "consecutiveBreachesRequired": 3,
-        "phase1MaxMinutes": 120,
-        "weakPeakCutMinutes": 60,
-        "deadWeightCutMin": 45,
-        "absoluteFloorRoe": -5.0,
-        "weakPeakCut": {"enabled": true, "intervalInMinutes": 60, "minValue": 3.0}
-    },
-    "phase2": {"enabled": true, "retraceThreshold": 0.015, "consecutiveBreachesRequired": 2},
-    "tiers": [
-        {"triggerPct": 7, "lockHwPct": 40, "consecutiveBreachesRequired": 3},
-        {"triggerPct": 12, "lockHwPct": 55, "consecutiveBreachesRequired": 2},
-        {"triggerPct": 15, "lockHwPct": 75, "consecutiveBreachesRequired": 2},
-        {"triggerPct": 20, "lockHwPct": 85, "consecutiveBreachesRequired": 1}
-    ],
-    "stagnationTp": {"enabled": true, "roeMin": 10, "hwStaleMin": 45},
-    "execution": {
-        "phase1SlOrderType": "MARKET",
-        "phase2SlOrderType": "MARKET",
-        "breachCloseOrderType": "MARKET"
-    }
-}
-```
-
-**Critical DSL field names — get these wrong and positions bleed:**
-- `phase1MaxMinutes` (NOT hardTimeoutMinutes)
-- `deadWeightCutMin` (NOT deadWeightCutMinutes)
-- `absoluteFloorRoe` (NOT absoluteFloor — no static price values)
-- `highWaterPrice: null` (NOT 0)
-- `consecutiveBreachesRequired: 3` (NOT 1)
-
-## Self-Learning Tier Disablement
-
-Track per-tier win/loss statistics in `state/runtime.json`:
-
-```json
-{
-    "tierStats": {
-        "MEDIUM": {"trades": 40, "wins": 17, "losses": 23},
-        "HIGH": {"trades": 2, "wins": 1, "losses": 1}
-    }
-}
-```
-
-Rules:
-- If a tier's win rate drops below 15% over 8+ trades, that tier is auto-disabled
-- LOW tier is PERMANENTLY disabled (0% WR proven in production)
-- Disabled tiers raise the effective minimum score to the next tier's threshold
-- Tier stats reset if you want to re-enable (manual config override)
-
-## Monitor Watchdog (3rd Cron)
-
-The monitor runs independently every 5 minutes and checks:
-
-1. **Account health** — total account value vs drawdown cap (default 25%)
-2. **Capital exposure** — deployed margin vs 55% threshold
-3. **Signal reversal** — re-runs FDD check to detect if original thesis has flipped
-4. **Daily loss limit** — cumulative realized losses today vs cap (default 10%)
-5. **Consecutive losses** — 3+ consecutive losses → activate cooldown gate
-
-If any check triggers, the monitor can:
-- Force-close positions (signal reversal, account health)
-- Activate cooldown gate (consecutive losses, daily loss limit)
-- Alert the user (all of the above — these are critical errors or position events)
-
-## Trading Gate
-
-Three states:
-- **OPEN** — normal trading
-- **CLOSED** — daily entry limit reached (default 6/day, resets midnight UTC)
-- **COOLDOWN** — paused after 3 consecutive losses (default 30 min cooldown)
-
-## Safety Systems
-
-- **Stack Guard**: Before every entry, verify no existing on-chain position for the asset. Prevents the stacking bug.
-- **Per-Asset Cooldown**: 120 min blacklist after Phase 1 exits (dead_weight, floor, timeout, weak_peak). Prevents revenge trading.
-- **XYZ Ban**: Hard filter — never trade xyz: prefixed assets.
-- **Orphan Recovery**: DSL cycle checks all on-chain positions against active DSL states. Orphaned positions get a new DSL state created automatically.
-- **Market Regime Filter**: MED regime detection gates which tiers can trade.
-
-## Scanner Output Format
-
-Print JSON to stdout. Agent reads and acts.
-
-No signal:
-```json
-{"status": "ok", "heartbeat": "NO_REPLY", "note": "No qualifying squeeze signals"}
-```
-
-Signal found:
-```json
-{
-    "status": "ok",
-    "signal": {
-        "asset": "TRUMP",
-        "direction": "long",
-        "score": 62,
-        "tier": "MEDIUM",
-        "breakdown": {
-            "fdd": 28, "lcd": 12, "ois": 10,
-            "med": 5, "em": 9, "opp": -2
-        },
-        "fddSignal": "SHORT_CROWDING",
-        "fddConfidence": 85,
-        "regime": "TRENDING"
-    },
-    "entry": {
-        "asset": "TRUMP",
-        "direction": "long",
-        "leverage": 5,
-        "marginPercent": 9.0,
-        "orderType": "FEE_OPTIMIZED_LIMIT"
-    },
-    "dslState": { ... },
-    "constraints": {
-        "maxPositions": 3,
-        "cooldownMinutes": 120,
-        "xyzBanned": true
-    }
-}
-```
-
-## Notification Policy
-
-ONLY alert: Position OPENED, Position CLOSED, Risk guardian triggered, Critical error, Monitor force-close.
-NEVER alert: Scanner ran with no signals, signals filtered out, DSL routine check, any reasoning.
-If you didn't open, close, or force-close a position, the user should not hear from you.
-
-## Cron Setup
-
-Scanner (systemEvent, every 5 min):
+### Cron 1: Scanner (5 min, main session)
 ```
 python3 /data/workspace/skills/hydra/scripts/hydra-scanner.py
 ```
+Scans candidates, scores across 6 sources, outputs signals with complete DSL state.
 
-DSL (agentTurn, every 3 min):
+### Cron 2: DSL (3 min, isolated session)
 ```
 python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-dir /data/workspace/skills/hydra/state
 ```
+Manages open positions with trailing stops, floors, and timeouts.
 
-Monitor (systemEvent, every 5 min):
+### Cron 3: Monitor (5 min, isolated session)
 ```
 python3 /data/workspace/skills/hydra/scripts/hydra-monitor.py
 ```
+Independent watchdog: account health, exposure, signal reversal, daily loss, consecutive losses, orphan recovery.
 
-## Bootstrap Verification
+**NOT `npx skills exec`. NOT any other wrapper.**
 
-After deploying crons, you MUST verify ALL THREE are running before trading:
+---
 
-1. **Scanner cron**: Run manually. Confirm JSON output with `"status": "ok"`.
-2. **DSL cron**: Run with `--state-dir` pointing to your state directory. Confirm clean exit.
-3. **Monitor cron**: Run manually. Confirm JSON output with monitor status.
+## Signal Sources (6)
 
-All three must show `status: ok`. If ANY fails, STOP — alert the user immediately. Do NOT trade with broken crons. Phoenix sat with unmanaged positions for 10 hours because of a cron misconfiguration.
+### Source 1: FDD — Funding Divergence Detector (0-30 pts, PRIMARY GATE)
+
+No trade is considered without an FDD signal. Analyzes funding rate to detect SHORT_CROWDING (deeply negative → go long) or LONG_CROWDING (deeply positive → go short). Confidence from percentile extremity + persistence (consecutive hours crowded).
+
+### Source 2: LCD — Liquidation Cascade Detector (0-25 pts)
+
+Estimates liquidation cluster proximity from OI, funding, and price action. Detects SHORT_LIQUIDATION_RISK / LONG_LIQUIDATION_RISK. +10 cascade bonus if price is already moving through the cluster.
+
+### Source 3: OIS — Open Interest Surge Detector (0-20 pts)
+
+Tracks OI changes via local snapshots (state/oi-history/). Detects OI_SURGE (new leverage piling in) and OI_UNWIND. Requires history accumulation — first few scans will have insufficient data.
+
+### Source 4: MED — Momentum Exhaustion Detector (-10 to +5 pts)
+
+Dual role: +5 if momentum intact (CLEAR), -5 if fading (FADE), -10 if exhausted (EXHAUSTED). Also drives market regime detection (TRENDING/MIXED/RANGE).
+
+### Source 5: EM — Emerging Movers (-8 to +15 pts)
+
+SM consensus from leaderboard_get_markets + leaderboard_get_top. +15 for strong same-direction confirmation (conviction 3+, 50+ traders). -8 for strong opposing SM.
+
+### Source 6: OPP — Opportunity Scanner (-999 to +10 pts)
+
+Final gate: hourly trend alignment. Counter-trend = hard skip (-999). Multi-pillar scoring: price alignment, volume, spread quality.
+
+---
+
+## Conviction Tiers & Sizing
+
+```
+Score = FDD(0-30) + LCD(0-25) + OIS(0-20) + MED(-10 to +5) + EM(-8 to +15) + OPP(-999 to +10)
+Maximum possible: 110
+```
+
+| Tier | Score | Status | Margin | Leverage |
+|---|---|---|---|---|
+| NO_TRADE | < 55 | Blocked | — | — |
+| LOW | 40-54 | PERMANENTLY DISABLED | — | — |
+| MEDIUM | 55-74 | Active | base × 60% | 50-65% of asset max, cap 10x |
+| HIGH | 75-110 | Active | base × 100% | 70-85% of asset max, cap 10x |
+
+Base margin = wallet × 15%. Per-asset cap 25%. Total deployed cap 55%.
+
+---
+
+## DSL State (v1.1.1 Pattern)
+
+Scanner generates COMPLETE DSL state. Agent writes directly to `state/dsl-{COIN}.json`.
+
+| Tier | Floor (leverage-adjusted) | Timeout | Weak Peak | Dead Weight |
+|---|---|---|---|---|
+| MEDIUM | -(1.0% × leverage) | 120 min | 60 min | 45 min |
+| HIGH | -(1.0% × leverage) | 180 min | 90 min | 60 min |
+
+Trailing tiers: 7%/40%, 12%/55%, 15%/75%, 20%/85% (standard pattern).
+
+Critical DSL field names:
+- `phase1MaxMinutes` (NOT hardTimeoutMinutes)
+- `deadWeightCutMin` (NOT deadWeightCutMinutes)
+- `absoluteFloorRoe` (NOT absoluteFloor)
+- `highWaterPrice: null` (NOT 0)
+- `consecutiveBreachesRequired: 3` (NOT 1)
+
+---
+
+## Monitor Watchdog
+
+Runs independently. Checks:
+1. **Account health** — drawdown cap 25%
+2. **Capital exposure** — deployed margin vs 60% threshold
+3. **Signal reversal** — re-runs FDD: if original thesis flipped, force-close
+4. **Daily loss limit** — 10% cumulative
+5. **Consecutive losses** — 3 → cooldown gate
+
+Can output: FORCE_CLOSE (single position), FORCE_CLOSE_ALL (account health), GATE_CLOSE/GATE_COOLDOWN.
+
+---
+
+## Self-Learning
+
+Per-tier win/loss stats tracked in runtime.json. If a tier's win rate drops below 15% over 8+ trades, that tier is auto-disabled. LOW tier is permanently disabled (0% WR proven in production).
+
+---
+
+## Bootstrap Gate
+
+On EVERY session start, check `config/bootstrap-complete.json`. If missing:
+1. Verify Senpi MCP
+2. Create scanner cron (5 min, main)
+3. Create DSL cron (3 min, isolated)
+4. Create monitor cron (5 min, isolated)
+5. Verify ALL THREE crons `status: ok`
+6. Write `config/bootstrap-complete.json`
+7. Send: "🐉 HYDRA v1.0 online. 6-source squeeze scanner + monitor watchdog. FDD primary gate. Silence = no squeeze."
+
+If bootstrap exists, still verify all three crons on every session start.
+
+---
+
+## Risk Management
+
+| Rule | Value |
+|---|---|
+| Max positions | 3 |
+| Max entries/day | 6 |
+| Leverage cap | 10x |
+| Total deployed cap | 55% of wallet |
+| Per-asset cap | 25% of wallet |
+| Daily loss limit | 10% |
+| Drawdown cap | 25% |
+| Per-asset cooldown | 120 min |
+| Consecutive losses | 3 → 30 min cooldown |
+| XYZ equities | Banned |
+| LOW tier | Permanently disabled |
+
+---
+
+## Notification Policy
+
+**ONLY alert:** Position OPENED (asset, direction, score, tier, FDD signal), position CLOSED (P&L, reason), monitor force-close (asset, reason), risk guardian triggered, critical error.
+
+**NEVER alert:** Scanner found no squeeze signals, signals filtered, DSL routine, monitor all-clear, any reasoning.
+
+---
 
 ## Expected Behavior
 
-- Trade frequency: 2-5/day. Some zero-trade days in low-regime markets.
-- Win rate: ~40%. Profitability comes from winners being 3-5x larger than losers (Tier 4 hunter).
-- Max 3 concurrent positions.
-- XYZ assets are NEVER traded.
-- Per-asset cooldown of 120 minutes after Phase 1 exits.
-- LOW tier is permanently disabled. Do not re-enable.
+| Metric | Expected |
+|---|---|
+| Trades/day | 2-5 (some zero-trade days in RANGE regime) |
+| Win rate | ~40% |
+| Avg winner | 3-5x larger than avg loser (Tier 4 hunter) |
+| Max concurrent | 3 positions |
+| Scan cycle | 5 min scanner, 3 min DSL, 5 min monitor |
+
+---
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `scripts/hydra-scanner.py` | 6-source scoring + signal output + DSL state generation |
+| `scripts/hydra-monitor.py` | Independent watchdog (account health, reversal, loss limits) |
+| `scripts/hydra_config.py` | Config helper (mcporter CLI, clearinghouse parsing, cooldowns, OI history) |
+| `config/hydra-config.json` | All configurable parameters |
+
+---
+
+## License
+
+MIT — Built by Senpi (https://senpi.ai).
+Source: https://github.com/Senpi-ai/senpi-skills

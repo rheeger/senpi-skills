@@ -67,7 +67,7 @@ def is_xyz(asset: str) -> bool:
 # Source 1: Funding Divergence Detector (FDD) — 0-30 pts
 # ═══════════════════════════════════════════════════════════════════════════
 
-def source_fdd(asset: str, config: dict) -> dict:
+def source_fdd(asset: str, config: dict, asset_data: dict = None) -> dict:
     """
     Analyze 7-day hourly funding rate history.
     Detect SHORT_CROWDING (deeply negative → longs profit)
@@ -77,7 +77,9 @@ def source_fdd(asset: str, config: dict) -> dict:
     max_score = fdd_cfg.get("maxScore", 30)
     min_confidence = config.get("scanner", {}).get("minFddConfidence", 40)
 
-    data = mcporter_call("market_get_asset_data", {"asset": asset})
+    data = asset_data
+    if not data or not isinstance(data, dict):
+        data = mcporter_call("market_get_asset_data", {"asset": asset})
     if not data or not isinstance(data, dict):
         return {"score": 0, "signal": None, "confidence": 0}
 
@@ -136,18 +138,18 @@ def source_fdd(asset: str, config: dict) -> dict:
 # Source 2: Liquidation Cascade Detector (LCD) — 0-25 pts
 # ═══════════════════════════════════════════════════════════════════════════
 
-def source_lcd(asset: str, direction: str, config: dict) -> dict:
+def source_lcd(asset: str, direction: str, config: dict, asset_data: dict = None) -> dict:
     """
     Estimate liquidation cluster proximity.
-    Detect SHORT_LIQUIDATION_RISK / LONG_LIQUIDATION_RISK.
-    Bonus for ACTIVE_CASCADE.
     """
     lcd_cfg = config.get("scanner", {}).get("sources", {}).get("lcd", {})
     max_score = lcd_cfg.get("maxScore", 25)
     cascade_bonus = lcd_cfg.get("cascadeBonus", 10)
     cluster_dist = lcd_cfg.get("clusterDistancePct", 2.0)
 
-    data = mcporter_call("market_get_asset_data", {"asset": asset})
+    data = asset_data
+    if not data or not isinstance(data, dict):
+        data = mcporter_call("market_get_asset_data", {"asset": asset})
     if not data or not isinstance(data, dict):
         return {"score": 0, "signal": None, "confidence": 0}
 
@@ -200,18 +202,19 @@ def source_lcd(asset: str, direction: str, config: dict) -> dict:
 # Source 3: Open Interest Surge Detector (OIS) — 0-20 pts
 # ═══════════════════════════════════════════════════════════════════════════
 
-def source_ois(asset: str, direction: str, config: dict) -> dict:
+def source_ois(asset: str, direction: str, config: dict, asset_data: dict = None) -> dict:
     """
     Track OI changes via local snapshots.
-    Detect OI_SURGE or OI_UNWIND.
     """
     ois_cfg = config.get("scanner", {}).get("sources", {}).get("ois", {})
     max_score = ois_cfg.get("maxScore", 20)
     surge_1h = ois_cfg.get("surgeThreshold1h", 1.05)
     surge_4h = ois_cfg.get("surgeThreshold4h", 1.10)
 
-    # Get current OI
-    data = mcporter_call("market_get_asset_data", {"asset": asset})
+    # Get current OI from cached data
+    data = asset_data
+    if not data or not isinstance(data, dict):
+        data = mcporter_call("market_get_asset_data", {"asset": asset})
     if not data or not isinstance(data, dict):
         return {"score": 0, "signal": None, "confidence": 0}
 
@@ -267,18 +270,19 @@ def source_ois(asset: str, direction: str, config: dict) -> dict:
 # Source 4: Momentum Exhaustion Detector (MED) — -10 to +5 pts
 # ═══════════════════════════════════════════════════════════════════════════
 
-def source_med(asset: str, direction: str, config: dict) -> dict:
+def source_med(asset: str, direction: str, config: dict, asset_data: dict = None) -> dict:
     """
     Detect trend exhaustion.
-    CLEAR = +5 (momentum intact), FADE = -5, EXHAUSTED = -10.
-    Also outputs market regime (TRENDING/MIXED/RANGE).
+    CLEAR = +5, FADE = -5, EXHAUSTED = -10.
     """
     med_cfg = config.get("scanner", {}).get("sources", {}).get("med", {})
     clear_bonus = med_cfg.get("clearBonus", 5)
     fade_penalty = med_cfg.get("fadePenalty", -5)
     exhaustion_penalty = med_cfg.get("exhaustionPenalty", -10)
 
-    data = mcporter_call("market_get_asset_data", {"asset": asset})
+    data = asset_data
+    if not data or not isinstance(data, dict):
+        data = mcporter_call("market_get_asset_data", {"asset": asset})
     if not data or not isinstance(data, dict):
         return {"score": 0, "signal": "UNKNOWN", "regime": "UNKNOWN"}
 
@@ -324,18 +328,19 @@ def source_med(asset: str, direction: str, config: dict) -> dict:
     return {"score": score, "signal": signal}
 
 
-def detect_market_regime(config: dict) -> str:
+def detect_market_regime(config: dict, markets_cache: list = None) -> str:
     """
     Scan multiple assets to determine market-wide regime.
     Returns: TRENDING, MIXED, or RANGE.
+    v1.0.1: Uses cached leaderboard data when available.
     """
-    # Get broad market data from leaderboard
-    raw = mcporter_call("leaderboard_get_markets")
-    markets = []
-    if isinstance(raw, dict):
-        markets = raw.get("markets", raw.get("data", []))
-    elif isinstance(raw, list):
-        markets = raw
+    markets = markets_cache or []
+    if not markets:
+        raw = mcporter_call("leaderboard_get_markets")
+        if isinstance(raw, dict):
+            markets = raw.get("markets", raw.get("data", []))
+        elif isinstance(raw, list):
+            markets = raw
 
     if not markets:
         return "UNKNOWN"
@@ -371,9 +376,10 @@ def detect_market_regime(config: dict) -> str:
 # Source 5: Emerging Movers (EM) — -8 to +15 pts
 # ═══════════════════════════════════════════════════════════════════════════
 
-def source_em(asset: str, direction: str, config: dict) -> dict:
+def source_em(asset: str, direction: str, config: dict, markets_cache: list = None) -> dict:
     """
     Check SM consensus from leaderboard_get_markets and leaderboard_get_top.
+    v1.0.1: Uses cached leaderboard data when available.
     """
     em_cfg = config.get("scanner", {}).get("sources", {}).get("em", {})
     max_score = em_cfg.get("maxScore", 15)
@@ -382,13 +388,14 @@ def source_em(asset: str, direction: str, config: dict) -> dict:
     strong_conv = em_cfg.get("strongConviction", 3)
     strong_traders = em_cfg.get("strongTraderCount", 50)
 
-    # leaderboard_get_markets
-    raw_markets = mcporter_call("leaderboard_get_markets")
-    markets = []
-    if isinstance(raw_markets, dict):
-        markets = raw_markets.get("markets", raw_markets.get("data", []))
-    elif isinstance(raw_markets, list):
-        markets = raw_markets
+    # Use cached leaderboard data
+    markets = markets_cache or []
+    if not markets:
+        raw_markets = mcporter_call("leaderboard_get_markets")
+        if isinstance(raw_markets, dict):
+            markets = raw_markets.get("markets", raw_markets.get("data", []))
+        elif isinstance(raw_markets, list):
+            markets = raw_markets
 
     sm_direction = None
     sm_conviction = 0
@@ -467,7 +474,7 @@ def source_em(asset: str, direction: str, config: dict) -> dict:
 # Source 6: Opportunity Scanner (OPP) — -999 to +10 pts
 # ═══════════════════════════════════════════════════════════════════════════
 
-def source_opp(asset: str, direction: str, config: dict) -> dict:
+def source_opp(asset: str, direction: str, config: dict, asset_data: dict = None) -> dict:
     """
     Multi-pillar scoring with hourly trend alignment.
     Counter-trend = hard skip (-999).
@@ -476,7 +483,9 @@ def source_opp(asset: str, direction: str, config: dict) -> dict:
     max_score = opp_cfg.get("maxScore", 10)
     counter_penalty = opp_cfg.get("counterTrendPenalty", -999)
 
-    data = mcporter_call("market_get_asset_data", {"asset": asset})
+    data = asset_data
+    if not data or not isinstance(data, dict):
+        data = mcporter_call("market_get_asset_data", {"asset": asset})
     if not data or not isinstance(data, dict):
         return {"score": 0, "signal": None}
 
@@ -530,10 +539,11 @@ def source_opp(asset: str, direction: str, config: dict) -> dict:
 # Candidate Discovery
 # ═══════════════════════════════════════════════════════════════════════════
 
-def discover_candidates(config: dict) -> list:
+def discover_candidates(config: dict) -> tuple:
     """
     Get candidate assets from leaderboard_get_markets.
-    Filter out xyz: assets. Returns list of asset names.
+    Filter out xyz: assets. Returns (list of asset names, raw markets list).
+    v1.0.1: Returns raw markets for caching — avoids redundant API calls.
     """
     raw = mcporter_call("leaderboard_get_markets")
     markets = []
@@ -556,7 +566,7 @@ def discover_candidates(config: dict) -> list:
         seen.add(token)
         candidates.append(token)
 
-    return candidates
+    return candidates, markets
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -580,7 +590,7 @@ def resolve_tier(score: int, config: dict) -> str | None:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def calculate_sizing(score: int, tier: str, asset: str, wallet_balance: float,
-                     config: dict) -> dict:
+                     config: dict, markets_cache: list = None) -> dict:
     """Calculate margin and leverage for a position."""
     sizing_cfg = config.get("sizing", {})
     tier_sizing = sizing_cfg.get("tiers", {}).get(tier, {})
@@ -608,7 +618,7 @@ def calculate_sizing(score: int, tier: str, asset: str, wallet_balance: float,
     intra_fraction = max(0, min(1, intra_fraction))
 
     # Get asset max leverage
-    asset_max_lev = get_asset_max_leverage(asset)
+    asset_max_lev = get_asset_max_leverage(asset, markets_cache=markets_cache)
     lev_pct = lev_range_low + (lev_range_high - lev_range_low) * intra_fraction
     leverage = asset_max_lev * lev_pct
 
@@ -624,14 +634,15 @@ def calculate_sizing(score: int, tier: str, asset: str, wallet_balance: float,
     }
 
 
-def get_asset_max_leverage(asset: str) -> float:
-    """Get max leverage for an asset from exchange. Cached in leaderboard data."""
-    raw = mcporter_call("leaderboard_get_markets")
-    markets = []
-    if isinstance(raw, dict):
-        markets = raw.get("markets", raw.get("data", []))
-    elif isinstance(raw, list):
-        markets = raw
+def get_asset_max_leverage(asset: str, markets_cache: list = None) -> float:
+    """Get max leverage for an asset. v1.0.1: Uses cached leaderboard data."""
+    markets = markets_cache or []
+    if not markets:
+        raw = mcporter_call("leaderboard_get_markets")
+        if isinstance(raw, dict):
+            markets = raw.get("markets", raw.get("data", []))
+        elif isinstance(raw, list):
+            markets = raw
 
     for m in markets:
         if not isinstance(m, dict):
@@ -784,17 +795,17 @@ def run():
         output(no_reply("Deployment cap reached"))
         return
 
-    # ── Market regime ────────────────────────────────────────────────────
-    regime = detect_market_regime(config)
-    log(f"Market regime: {regime}")
-
-    # ── Discover candidates ──────────────────────────────────────────────
-    candidates = discover_candidates(config)
+    # ── Discover candidates (v1.0.1: returns cached markets for reuse) ────
+    candidates, _markets_cache = discover_candidates(config)
     log(f"Discovered {len(candidates)} non-xyz candidates.")
 
     if not candidates:
         output(no_reply("No candidates from leaderboard"))
         return
+
+    # ── Market regime (v1.0.1: uses cached markets) ──────────────────────
+    regime = detect_market_regime(config, markets_cache=_markets_cache)
+    log(f"Market regime: {regime}")
 
     # ── Score each candidate ─────────────────────────────────────────────
     best_signal = None
@@ -811,8 +822,13 @@ def run():
         if is_xyz(asset):
             continue
 
+        # v1.0.1: Fetch asset data ONCE per candidate, pass to all sources
+        asset_data = mcporter_call("market_get_asset_data", {"asset": asset})
+        if not asset_data or not isinstance(asset_data, dict):
+            continue
+
         # Source 1: FDD (primary gate)
-        fdd = source_fdd(asset, config)
+        fdd = source_fdd(asset, config, asset_data=asset_data)
         if not fdd.get("signal") or fdd["score"] == 0:
             continue  # No FDD signal = no trade
 
@@ -823,19 +839,19 @@ def run():
         log(f"  {asset}: FDD={fdd['score']} ({fdd['signal']}, conf={fdd.get('confidence', 0)})")
 
         # Source 2: LCD
-        lcd = source_lcd(asset, direction, config)
+        lcd = source_lcd(asset, direction, config, asset_data=asset_data)
 
         # Source 3: OIS
-        ois = source_ois(asset, direction, config)
+        ois = source_ois(asset, direction, config, asset_data=asset_data)
 
         # Source 4: MED
-        med = source_med(asset, direction, config)
+        med = source_med(asset, direction, config, asset_data=asset_data)
 
-        # Source 5: EM
-        em = source_em(asset, direction, config)
+        # Source 5: EM (uses cached leaderboard, not asset_data)
+        em = source_em(asset, direction, config, markets_cache=_markets_cache)
 
         # Source 6: OPP
-        opp = source_opp(asset, direction, config)
+        opp = source_opp(asset, direction, config, asset_data=asset_data)
 
         # Total score
         total = fdd["score"] + lcd["score"] + ois["score"] + med["score"] + em["score"] + opp["score"]
@@ -904,7 +920,7 @@ def run():
         output(no_reply(f"Stack guard: {asset} already positioned"))
         return
 
-    sizing = calculate_sizing(score, tier, asset, wallet_balance, config)
+    sizing = calculate_sizing(score, tier, asset, wallet_balance, config, markets_cache=_markets_cache)
     leverage = sizing["leverage"]
     margin_pct = sizing["marginPercent"]
 
