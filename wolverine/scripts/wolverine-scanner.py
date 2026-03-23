@@ -3,21 +3,33 @@
 # Copyright 2026 Senpi (https://senpi.ai)
 # Licensed under MIT
 # Source: https://github.com/Senpi-ai/senpi-skills
-"""WOLVERINE v2.0 — HYPE Alpha Hunter with Position Lifecycle.
+"""WOLVERINE v2.0 — HYPE Alpha Hunter. Entry-Only Scanner.
 
-Single-asset focus. HYPE only. Every signal source available (SM, funding, OI,
-4-timeframe trend, volume, BTC correlation). 15-20x leverage, maximum conviction.
+v2.0 removes the scanner thesis exit entirely. The lesson from v1.1:
+25 of 27 trades were killed by the scanner's thesis exit, not by DSL.
+The scanner constantly re-evaluated SM flow and aborted positions on every
+wobble. On HYPE, which wobbles every 10 minutes, this meant the scanner
+was chopping its own winners before they could run.
 
-v2.0 adds three-mode position lifecycle:
-  MODE 1 — HUNTING: normal scanning, all signals must align, score 10+ to enter
-  MODE 2 — RIDING: position open, DSL trails, monitor thesis
-  MODE 3 — STALKING: DSL closed, watch for reload on dip, or reset if thesis dies
+Trade #6 proved the thesis: HYPE LONG, +29.92% ROE, held 757 minutes.
+The scanner let that one ride and it was a monster. If even 2-3 more
+trades had been allowed to run, Wolverine would be deeply profitable.
 
-The loop: HUNTING → enter → RIDING → DSL closes → STALKING → reload or reset.
+The fix: SCANNER DECIDES ENTRIES. DSL MANAGES EXITS.
+Once a position is open, only DSL can close it (floor, timeout, trailing
+tier, stagnation TP). The scanner never re-evaluates open positions.
 
+Entry requirements are raised: score 8+ with multi-timeframe agreement
+(4H + 1H aligned). Fewer entries, wider stops, let HYPE be HYPE.
+
+Leverage lowered to 7x (from 10x). At 7x, a 2% move = 14% ROE.
+A 4% move = 28% ROE. That's plenty of upside with more room to breathe.
+
+Uses: leaderboard_get_markets (SM consensus on HYPE)
 Runs every 3 minutes.
 """
 
+import json
 import sys
 import os
 from datetime import datetime, timezone
@@ -26,691 +38,369 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wolverine_config as cfg
 
 
-# ─── Technical Helpers ────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+# HARDCODED CONSTANTS
+# ═══════════════════════════════════════════════════════════════
 
-def price_momentum(candles, n_bars=1):
-    if len(candles) < n_bars + 1:
-        return 0
-    old = float(candles[-(n_bars + 1)].get("close", candles[-(n_bars + 1)].get("c", 0)))
-    new = float(candles[-1].get("close", candles[-1].get("c", 0)))
-    if old == 0:
-        return 0
-    return ((new - old) / old) * 100
+ASSET = "HYPE"                     # Single-asset hunter
+MIN_LEVERAGE = 5
+MAX_LEVERAGE = 7                   # Lowered from 10x — HYPE is volatile enough
+DEFAULT_LEVERAGE = 7
+MAX_POSITIONS = 1                  # One HYPE position at a time
+MAX_DAILY_ENTRIES = 4              # Max 4 entries/day — patience is the edge
+MAX_DAILY_LOSS_PCT = 10            # Daily loss circuit breaker
+COOLDOWN_MINUTES = 180             # 3 hours between entries (not 2)
 
+# Entry thresholds — raised from v1.1
+MIN_SCORE = 8                      # Was effectively ~5 in v1.1. Now 8.
+MIN_SM_TRADERS = 15                # Minimum SM traders on HYPE
+MIN_SM_RANK = 30                   # HYPE must be in top 30 of SM leaderboard
+REQUIRE_4H_1H_ALIGNMENT = True     # Both timeframes must agree on direction
 
-def trend_structure(candles, lookback=6):
-    if len(candles) < lookback:
-        return "NEUTRAL", 0
-    lows = [float(c.get("low", c.get("l", 0))) for c in candles[-lookback:]]
-    highs = [float(c.get("high", c.get("h", 0))) for c in candles[-lookback:]]
-    higher_lows = sum(1 for i in range(1, len(lows)) if lows[i] > lows[i - 1])
-    lower_highs = sum(1 for i in range(1, len(highs)) if highs[i] < highs[i - 1])
-    total = lookback - 1
-    if higher_lows >= total * 0.6:
-        return "BULLISH", higher_lows / total
-    elif lower_highs >= total * 0.6:
-        return "BEARISH", lower_highs / total
-    return "NEUTRAL", 0
+# XYZ ban
+XYZ_BANNED = True
 
+# DSL configuration — wide for HYPE's volatility
+# Scanner generates these in the DSL state file. DSL manages ALL exits.
+DSL_CONFIG = {
+    "lockMode": "pct_of_high_water",
+    "phase2TriggerRoe": 15,        # Don't start trailing until +15% ROE
+    "phase1": {
+        "consecutiveBreachesRequired": 3,
+        "phase1MaxMinutes": 120,    # 2 hours — give HYPE time to move
+        "weakPeakCutMinutes": 60,   # 1 hour weak peak tolerance
+        "deadWeightCutMin": 45,     # 45 min dead weight
+        "absoluteFloorRoe": -20,    # Wide floor — 20% loss at 7x = 2.85% price move
+        "retraceThreshold": 0.25,   # 25% retrace from entry peak
+    },
+    "tiers": [
+        {"triggerPct": 15, "lockHwPct": 30, "consecutiveBreachesRequired": 3},
+        {"triggerPct": 25, "lockHwPct": 50, "consecutiveBreachesRequired": 2},
+        {"triggerPct": 40, "lockHwPct": 65, "consecutiveBreachesRequired": 1},
+        {"triggerPct": 60, "lockHwPct": 75, "consecutiveBreachesRequired": 1},
+        {"triggerPct": 80, "lockHwPct": 85, "consecutiveBreachesRequired": 1},
+    ],
+    "stagnationTp": {"enabled": True, "roeMin": 15, "hwStaleMin": 60},
+    "execution": {
+        "phase1SlOrderType": "MARKET",
+        "phase2SlOrderType": "MARKET",
+        "breachCloseOrderType": "MARKET",
+    },
+}
 
-def volume_ratio(candles, lookback=10):
-    if len(candles) < lookback + 1:
-        return 1.0
-    vols = [float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles[-(lookback + 1):-1]]
-    avg = sum(vols) / len(vols) if vols else 1
-    latest = float(candles[-1].get("volume", candles[-1].get("v", candles[-1].get("vlm", 0))))
-    return latest / avg if avg > 0 else 1.0
-
-
-def volume_trend(candles, lookback=6):
-    if len(candles) < lookback + 2:
-        return 0
-    vols = [float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles[-(lookback + 2):]]
-    half = lookback // 2
-    recent = sum(vols[-half:]) / half if half > 0 else 1
-    earlier = sum(vols[:half]) / half if half > 0 else 1
-    if earlier == 0:
-        return 0
-    return ((recent - earlier) / earlier) * 100
-
-
-def calc_rsi(closes, period=14):
-    if len(closes) < period + 1:
-        return 50
-    gains, losses = [], []
-    for i in range(1, len(closes)):
-        d = closes[i] - closes[i - 1]
-        gains.append(max(0, d))
-        losses.append(max(0, -d))
-    g, l = gains[-period:], losses[-period:]
-    avg_g, avg_l = sum(g) / period, sum(l) / period
-    if avg_l == 0:
-        return 100.0
-    return 100.0 - (100.0 / (1.0 + avg_g / avg_l))
+# Conviction tiers for Phase 1 timing
+CONVICTION_TIERS = [
+    {"minScore": 8,  "absoluteFloorRoe": -20, "phase1MaxMinutes": 120, "weakPeakCutMin": 60, "deadWeightCutMin": 45},
+    {"minScore": 10, "absoluteFloorRoe": -25, "phase1MaxMinutes": 180, "weakPeakCutMin": 90, "deadWeightCutMin": 60},
+]
 
 
-# ─── Asset-Specific Data ────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+# HELPERS
+# ═══════════════════════════════════════════════════════════════
 
-def get_hype_full_picture():
-    """Fetch comprehensive HYPE data across all timeframes."""
-    data = cfg.mcporter_call("market_get_asset_data", asset="HYPE",
-                              candle_intervals=["5m", "15m", "1h", "4h"],
-                              include_funding=True, include_order_book=False)
-    if not data or not data.get("success"):
-        return None
-    return data.get("data", data)
-
-
-def get_btc_correlation():
-    """Fetch BTC data to check if it confirms HYPE's move."""
-    data = cfg.mcporter_call("market_get_asset_data", asset="BTC",
-                              candle_intervals=["15m", "1h"],
-                              include_funding=False, include_order_book=False)
-    if not data or not data.get("success"):
-        return None, None
-    candles_15m = data.get("data", {}).get("candles", {}).get("15m", [])
-    candles_1h = data.get("data", {}).get("candles", {}).get("1h", [])
-    mom_15m = price_momentum(candles_15m, 1) if len(candles_15m) >= 2 else 0
-    mom_1h = price_momentum(candles_1h, 1) if len(candles_1h) >= 2 else 0
-    return mom_15m, mom_1h
+def safe_float(val, default=0.0):
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
 
 
-def get_hype_sm_direction():
-    """Get smart money positioning specifically for HYPE.
-    leaderboard_get_markets returns: token, direction, pct_of_top_traders_gain, trader_count."""
-    data = cfg.mcporter_call("leaderboard_get_markets")
-    if not data or not data.get("success"):
-        return None, 0, 0
+def is_xyz(asset):
+    return asset.lower().startswith("xyz")
 
-    markets = data.get("data", data)
-    if isinstance(markets, dict):
-        markets = markets.get("markets", markets.get("leaderboard", markets))
-    if isinstance(markets, dict):
-        markets = markets.get("markets", [])
 
-    # Aggregate long vs short entries for HYPE
-    hype_long_pct = 0
-    hype_short_pct = 0
-    hype_traders = 0
-    found = False
+# ═══════════════════════════════════════════════════════════════
+# SIGNAL SCORING
+# ═══════════════════════════════════════════════════════════════
 
-    for m in markets:
+def score_hype_signal(markets_data):
+    """Score HYPE from leaderboard_get_markets data.
+    Returns (score, direction, reasons) or (0, None, [])."""
+
+    hype_data = None
+    for m in markets_data:
         if not isinstance(m, dict):
             continue
-        token = m.get("token", m.get("coin", m.get("asset", "")))
-        if token != "HYPE":
-            continue
-        found = True
-        direction = m.get("direction", "").lower()
-        pct = float(m.get("pct_of_top_traders_gain", m.get("longPct", 0)))
-        traders = int(m.get("trader_count", m.get("traderCount", 0)))
-        if direction == "long":
-            hype_long_pct = pct
-            hype_traders += traders
-        elif direction == "short":
-            hype_short_pct = pct
-            hype_traders += traders
+        token = str(m.get("token", m.get("asset", ""))).upper()
+        dex = str(m.get("dex", "")).lower()
+        if token == ASSET and dex != "xyz":
+            hype_data = m
+            break
 
-    if not found:
-        return None, 0, 0
-
-    # Determine dominant direction
-    total = hype_long_pct + hype_short_pct
-    if total == 0:
-        return "NEUTRAL", 50, hype_traders
-
-    long_ratio = (hype_long_pct / total) * 100 if total > 0 else 50
-    if long_ratio > 58:
-        return "LONG", long_ratio, hype_traders
-    elif long_ratio < 42:
-        return "SHORT", 100 - long_ratio, hype_traders
-    return "NEUTRAL", 50, hype_traders
-
-
-# ─── Thesis Builder (BTC Only) ───────────────────────────────
-
-def build_hype_thesis(entry_cfg):
-    """Build a conviction thesis from every BTC signal source."""
-
-    hype_data = get_hype_full_picture()
     if not hype_data:
-        return None
+        return 0, None, []
 
-    candles_5m = hype_data.get("candles", {}).get("5m", [])
-    candles_15m = hype_data.get("candles", {}).get("15m", [])
-    candles_1h = hype_data.get("candles", {}).get("1h", [])
-    candles_4h = hype_data.get("candles", {}).get("4h", [])
-    asset_ctx = hype_data.get("asset_context", {})
-    funding = float(asset_ctx.get("funding", hype_data.get("funding", 0)))
-    oi = float(asset_ctx.get("openInterest", hype_data.get("openInterest", 0)))
-
-    if len(candles_5m) < 12 or len(candles_15m) < 8 or len(candles_1h) < 8 or len(candles_4h) < 6:
-        return None
-
-    price = float(candles_5m[-1].get("close", candles_5m[-1].get("c", 0)))
-
-    # ── REQUIRED: 4h trend structure ──────────────────────────
-    trend_4h, trend_strength_4h = trend_structure(candles_4h)
-    if trend_4h == "NEUTRAL":
-        return None  # No conviction without macro structure
-
-    direction = "LONG" if trend_4h == "BULLISH" else "SHORT"
-
-    # ── REQUIRED: 1h trend agrees ─────────────────────────────
-    trend_1h, trend_strength_1h = trend_structure(candles_1h)
-    if trend_1h != trend_4h:
-        return None
-
-    # ── REQUIRED: 15m momentum confirms ───────────────────────
-    mom_5m = price_momentum(candles_5m, 1)
-    mom_15m = price_momentum(candles_15m, 1)
-    mom_1h = price_momentum(candles_1h, 2)
-    mom_4h = price_momentum(candles_4h, 1)
-
-    min_mom_15m = entry_cfg.get("minMom15mPct", 0.1)
-    if direction == "LONG" and mom_15m < min_mom_15m:
-        return None
-    if direction == "SHORT" and mom_15m > -min_mom_15m:
-        return None
-
-    # ── SCORING ───────────────────────────────────────────────
     score = 0
     reasons = []
 
-    # 4h trend (3 pts — the foundation)
-    score += 3
-    reasons.append(f"4h_{trend_4h.lower()}_{trend_strength_4h:.0%}")
+    # SM direction and trader count
+    sm_direction = str(hype_data.get("direction", "")).lower()
+    trader_count = int(hype_data.get("trader_count", 0))
+    sm_rank = int(hype_data.get("rank", hype_data.get("position", 999)))
+    contribution = safe_float(hype_data.get("pct_of_top_traders_gain", 0))
+    contrib_change = safe_float(hype_data.get("contribution_pct_change_4h", 0))
 
-    # 1h trend agreement (2 pts)
+    if not sm_direction or sm_direction not in ("long", "short"):
+        return 0, None, []
+
+    direction = sm_direction
+
+    # Gate: minimum traders
+    if trader_count < MIN_SM_TRADERS:
+        return 0, None, []
+
+    # Gate: minimum SM rank
+    if sm_rank > MIN_SM_RANK:
+        return 0, None, []
+
+    # ── Scoring ──
+
+    # SM presence (base)
     score += 2
-    reasons.append(f"1h_confirms_{mom_1h:+.2f}%")
+    reasons.append(f"SM_{direction.upper()} rank#{sm_rank} ({trader_count} traders)")
 
-    # 15m momentum (1 pt — already required, but strength matters)
-    if abs(mom_15m) > min_mom_15m * 2:
-        score += 1
-        reasons.append(f"15m_strong_{mom_15m:+.2f}%")
-    else:
-        reasons.append(f"15m_{mom_15m:+.2f}%")
-
-    # 5m alignment (1 pt — all 4 timeframes agree)
-    if (direction == "LONG" and mom_5m > 0) or (direction == "SHORT" and mom_5m < 0):
-        score += 1
-        reasons.append("4TF_aligned")
-
-    # ── SM positioning (BTC-specific, very strong signal) ─────
-    sm_dir, sm_pct, sm_count = get_hype_sm_direction()
-    if sm_dir == direction:
+    # Trader count depth
+    if trader_count >= 40:
         score += 2
-        reasons.append(f"sm_aligned_{sm_pct:.0f}%_{sm_count}traders")
-        if sm_pct > 65:
-            score += 1
-            reasons.append("sm_strongly_tilted")
-    elif sm_dir and sm_dir != "NEUTRAL" and sm_dir != direction:
-        # SM opposes — hard block for BTC. SM has the best read on BTC.
-        return None
+        reasons.append(f"DEEP_SM ({trader_count} traders)")
+    elif trader_count >= 25:
+        score += 1
+        reasons.append(f"SOLID_SM ({trader_count} traders)")
 
-    # ── Funding alignment ─────────────────────────────────────
-    if (direction == "LONG" and funding < 0):
+    # Contribution strength
+    if contribution >= 5.0:
         score += 2
-        reasons.append(f"funding_pays_longs_{funding:+.4f}")
-    elif (direction == "SHORT" and funding > 0):
+        reasons.append(f"HIGH_CONTRIB {contribution:.1f}%")
+    elif contribution >= 2.0:
+        score += 1
+        reasons.append(f"MODERATE_CONTRIB {contribution:.1f}%")
+
+    # Contribution acceleration (gen-2 signal)
+    if contrib_change > 0.003:
         score += 2
-        reasons.append(f"funding_pays_shorts_{funding:+.4f}")
-    elif (direction == "LONG" and funding > 0.005) or (direction == "SHORT" and funding < -0.005):
-        score -= 1
-        reasons.append(f"funding_crowded_{funding:+.4f}")
-
-    # ── Volume confirmation ───────────────────────────────────
-    vol_1h = volume_ratio(candles_1h)
-    min_vol = entry_cfg.get("minVolRatio", 1.2)
-    if vol_1h >= min_vol:
+        reasons.append(f"CONTRIB_ACCEL +{contrib_change * 100:.3f}%/4h")
+    elif contrib_change > 0.001:
         score += 1
-        reasons.append(f"vol_{vol_1h:.1f}x")
-    elif vol_1h < 0.7:
-        score -= 1
-        reasons.append("vol_weak")
+        reasons.append(f"CONTRIB_BUILDING +{contrib_change * 100:.3f}%/4h")
 
-    vol_trend_1h = volume_trend(candles_1h)
-    if vol_trend_1h > 15:
-        score += 1
-        reasons.append(f"vol_rising_{vol_trend_1h:+.0f}%")
+    # Price momentum alignment
+    price_4h = safe_float(hype_data.get("token_price_change_pct_4h", 0))
+    price_1h = safe_float(hype_data.get("token_price_change_pct_1h",
+                          hype_data.get("price_change_1h", 0)))
 
-    # ── OI growth (new money entering BTC) ────────────────────
-    vol_recent = sum(float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles_1h[-3:])
-    vol_earlier = sum(float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles_1h[-6:-3])
-    oi_proxy = ((vol_recent - vol_earlier) / vol_earlier * 100) if vol_earlier > 0 else 0
-    if oi_proxy > 10:
-        score += 1
-        reasons.append(f"oi_growing_{oi_proxy:+.0f}%")
-
-    # ── BTC correlation (bonus only, never a block or penalty) ─
-    # HYPE is driven by platform growth, not crypto macro.
-    # But when BTC runs, HYPE runs MORE. So BTC alignment is a strong bonus.
-    corr_mom_15m, corr_mom_1h = get_btc_correlation()
-    if corr_mom_15m is not None and corr_mom_1h is not None:
-        corr_agrees = (direction == "LONG" and corr_mom_15m > 0 and corr_mom_1h > 0) or \
-                     (direction == "SHORT" and corr_mom_15m < 0 and corr_mom_1h < 0)
-        if corr_agrees:
+    if direction == "long":
+        if price_4h > 0 and price_1h > 0:
             score += 2
-            reasons.append(f"btc_confirms_{corr_mom_1h:+.2f}%_STRONG_BONUS")
-        # BTC divergence is NOT a penalty — HYPE often moves independently
+            reasons.append(f"4H_1H_ALIGNED (+{price_4h:.1f}%/+{price_1h:.1f}%)")
+        elif price_4h > 0:
+            score += 1
+            reasons.append(f"4H_ALIGNED (+{price_4h:.1f}%)")
+    else:
+        if price_4h < 0 and price_1h < 0:
+            score += 2
+            reasons.append(f"4H_1H_ALIGNED ({price_4h:.1f}%/{price_1h:.1f}%)")
+        elif price_4h < 0:
+            score += 1
+            reasons.append(f"4H_ALIGNED ({price_4h:.1f}%)")
 
-    # ── RSI filter ────────────────────────────────────────────
-    closes_1h = [float(c.get("close", c.get("c", 0))) for c in candles_1h]
-    rsi = calc_rsi(closes_1h)
-    if direction == "LONG" and rsi > entry_cfg.get("rsiMaxLong", 74):
-        return None
-    if direction == "SHORT" and rsi < entry_cfg.get("rsiMinShort", 26):
-        return None
-    if (direction == "LONG" and rsi < 55) or (direction == "SHORT" and rsi > 45):
-        score += 1
-        reasons.append(f"rsi_room_{rsi:.0f}")
+    # 4H/1H alignment gate
+    if REQUIRE_4H_1H_ALIGNMENT:
+        if direction == "long" and (price_4h <= 0 or price_1h <= 0):
+            return 0, None, [f"4H_1H_NOT_ALIGNED (4h={price_4h:.1f}%, 1h={price_1h:.1f}%)"]
+        if direction == "short" and (price_4h >= 0 or price_1h >= 0):
+            return 0, None, [f"4H_1H_NOT_ALIGNED (4h={price_4h:.1f}%, 1h={price_1h:.1f}%)"]
 
-    # ── 4h momentum strength bonus ────────────────────────────
-    if abs(mom_4h) > 1.0:
+    # Volume confirmation
+    volume = safe_float(hype_data.get("volume", hype_data.get("volume_24h", 0)))
+    avg_volume = safe_float(hype_data.get("avg_volume_6h", hype_data.get("avgVolume", 0)))
+    if avg_volume > 0 and volume > avg_volume * 1.2:
         score += 1
-        reasons.append(f"4h_momentum_{mom_4h:+.1f}%")
+        reasons.append(f"VOLUME_UP ({volume / avg_volume:.1f}x)")
+
+    return score, direction, reasons
+
+
+# ═══════════════════════════════════════════════════════════════
+# DSL STATE BUILDER
+# ═══════════════════════════════════════════════════════════════
+
+def build_dsl_state(direction, score, leverage):
+    """Build COMPLETE DSL state. Scanner generates, agent writes directly.
+    NO thesis exit. DSL is the ONLY exit mechanism."""
+
+    # Select conviction tier for Phase 1 timing
+    tier = CONVICTION_TIERS[0]  # default
+    for t in CONVICTION_TIERS:
+        if score >= t["minScore"]:
+            tier = t
+
+    wallet, strategy_id = cfg.get_wallet_and_strategy()
 
     return {
-        "coin": "HYPE",
+        "active": True,
+        "asset": ASSET,
         "direction": direction,
         "score": score,
-        "reasons": reasons,
-        "price": price,
-        "trend_4h": trend_4h,
-        "trend_1h": trend_1h,
-        "momentum": {"5m": mom_5m, "15m": mom_15m, "1h": mom_1h, "4h": mom_4h},
-        "sm_direction": sm_dir,
-        "sm_pct": sm_pct,
-        "funding": funding,
-        "rsi": rsi,
-        "vol_ratio": vol_1h,
+        "phase": 1,
+        "highWaterPrice": None,
+        "highWaterRoe": None,
+        "currentTierIndex": -1,
+        "consecutiveBreaches": 0,
+        # Wallet info — prevents DSL Bug #1
+        "wallet": wallet,
+        "strategyWalletAddress": wallet,
+        "strategyId": strategy_id,
+        # Phase 1
+        "lockMode": DSL_CONFIG["lockMode"],
+        "phase2TriggerRoe": DSL_CONFIG["phase2TriggerRoe"],
+        "phase1": {
+            "enabled": True,
+            "retraceThreshold": DSL_CONFIG["phase1"]["retraceThreshold"],
+            "consecutiveBreachesRequired": DSL_CONFIG["phase1"]["consecutiveBreachesRequired"],
+            "phase1MaxMinutes": tier["phase1MaxMinutes"],
+            "weakPeakCutMinutes": tier["weakPeakCutMin"],
+            "deadWeightCutMin": tier["deadWeightCutMin"],
+            "absoluteFloorRoe": tier["absoluteFloorRoe"],
+            "weakPeakCut": {
+                "enabled": True,
+                "intervalInMinutes": tier["weakPeakCutMin"],
+                "minValue": 3.0,
+            },
+        },
+        # Phase 2
+        "phase2": {
+            "enabled": True,
+            "retraceThreshold": 0.015,
+            "consecutiveBreachesRequired": 2,
+        },
+        # Trailing tiers — wide for HYPE
+        "tiers": DSL_CONFIG["tiers"],
+        "stagnationTp": DSL_CONFIG["stagnationTp"],
+        "execution": DSL_CONFIG["execution"],
+        # v2.0 flag — tells the agent NOT to thesis-exit
+        "_v2_no_thesis_exit": True,
+        "_note": "DSL manages ALL exits. Scanner does NOT re-evaluate open positions.",
     }
 
 
-# ─── Thesis Re-Evaluation ────────────────────────────────────
-
-def evaluate_hype_position(direction, entry_cfg):
-    """Re-evaluate HYPE thesis. Returns (still_valid, invalidation_reasons)."""
-    hype_data = get_hype_full_picture()
-    if not hype_data:
-        return True, ["data_unavailable_hold"]
-
-    candles_1h = hype_data.get("candles", {}).get("1h", [])
-    candles_4h = hype_data.get("candles", {}).get("4h", [])
-    asset_ctx = hype_data.get("asset_context", {})
-    funding = float(asset_ctx.get("funding", hype_data.get("funding", 0)))
-
-    if len(candles_4h) < 6:
-        return True, ["insufficient_data_hold"]
-
-    invalidations = []
-
-    # 4h trend flipped?
-    trend_4h, _ = trend_structure(candles_4h)
-    if direction == "LONG" and trend_4h == "BEARISH":
-        invalidations.append("4h_trend_flipped_bearish")
-    elif direction == "SHORT" and trend_4h == "BULLISH":
-        invalidations.append("4h_trend_flipped_bullish")
-
-    # SM flipped against?
-    sm_dir, sm_pct, _ = get_hype_sm_direction()
-    if sm_dir and sm_dir != "NEUTRAL" and sm_dir != direction:
-        invalidations.append(f"sm_flipped_{sm_dir}_{sm_pct:.0f}%")
-
-    # Funding extreme against position?
-    threshold = entry_cfg.get("fundingExtremeThreshold", 0.012)
-    if direction == "LONG" and funding > threshold:
-        invalidations.append(f"funding_extreme_{funding:+.4f}")
-    elif direction == "SHORT" and funding < -threshold:
-        invalidations.append(f"funding_extreme_{funding:+.4f}")
-
-    # Volume died for 3+ hours?
-    if len(candles_1h) >= 12:
-        recent_vols = [float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles_1h[-3:]]
-        avg_vol = sum(float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles_1h[-12:-3]) / 9
-        if avg_vol > 0 and all(v < avg_vol * 0.3 for v in recent_vols):
-            invalidations.append("volume_dried_up_3h")
-
-    # BTC divergence: NOT an invalidation for HYPE.
-    # HYPE is driven by platform growth and often moves independently of BTC.
-    # BTC divergence that would kill a Grizzly/Polar/Kodiak trade is normal for HYPE.
-
-    return (len(invalidations) == 0), invalidations
-
-
-# ─── Stalk Evaluation (after DSL exit) ────────────────────────
-
-def evaluate_reload(exit_state, entry_cfg):
-    """Check if conditions are met to reload after a DSL exit.
-    Returns (should_reload, reasons) or (False, kill_reasons)."""
-
-    stalk_cfg = entry_cfg.get("stalk", {})
-    direction = exit_state.get("exitDirection")
-    exit_ts = exit_state.get("exitTimestamp", 0)
-    exit_vol = exit_state.get("exitEntryVolRatio", 1.0)
-    now = cfg.now_ts()
-    hours_stalking = (now - exit_ts) / 3600
-
-    # KILL: stalking too long — trend is over
-    max_stalk_hours = stalk_cfg.get("maxStalkHours", 6)
-    if hours_stalking > max_stalk_hours:
-        return False, ["stalk_timeout_{:.1f}h".format(hours_stalking)]
-
-    hype_data = get_hype_full_picture()
-    if not hype_data:
-        return False, ["data_unavailable"]
-
-    candles_5m = hype_data.get("candles", {}).get("5m", [])
-    candles_1h = hype_data.get("candles", {}).get("1h", [])
-    candles_4h = hype_data.get("candles", {}).get("4h", [])
-    asset_ctx = hype_data.get("asset_context", {})
-    funding = float(asset_ctx.get("funding", hype_data.get("funding", 0)))
-
-    kill_reasons = []
-    reload_checks = []
-
-    # KILL CHECK: 4h trend reversed
-    trend_4h, _ = trend_structure(candles_4h)
-    expected_trend = "BULLISH" if direction == "LONG" else "BEARISH"
-    if trend_4h != expected_trend and trend_4h != "NEUTRAL":
-        kill_reasons.append(f"4h_trend_reversed_{trend_4h}")
-
-    # KILL CHECK: SM flipped
-    sm_dir, sm_pct, _ = get_hype_sm_direction()
-    if sm_dir and sm_dir != "NEUTRAL" and sm_dir != direction:
-        kill_reasons.append(f"sm_flipped_{sm_dir}")
-
-    # KILL CHECK: Funding spiked into extreme crowding
-    funding_ann = abs(funding) * 8760
-    max_funding = stalk_cfg.get("maxFundingAnnPct", 100)
-    if (direction == "LONG" and funding > 0 and funding_ann > max_funding) or \
-       (direction == "SHORT" and funding < 0 and funding_ann > max_funding):
-        kill_reasons.append(f"funding_extreme_{funding_ann:.0f}%ann")
-
-    # KILL CHECK: OI collapsed
-    if len(candles_1h) >= 6:
-        recent_vols = [float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles_1h[-3:]]
-        earlier_vols = [float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles_1h[-6:-3]]
-        avg_recent = sum(recent_vols) / len(recent_vols) if recent_vols else 0
-        avg_earlier = sum(earlier_vols) / len(earlier_vols) if earlier_vols else 1
-        if avg_earlier > 0:
-            oi_change = ((avg_recent - avg_earlier) / avg_earlier) * 100
-            if oi_change < -20:
-                kill_reasons.append(f"oi_collapsed_{oi_change:+.0f}%")
-
-    if kill_reasons:
-        return False, kill_reasons
-
-    # RELOAD CHECK 1: At least one completed 1h candle since exit
-    if len(candles_1h) >= 2:
-        last_completed_close_ts = candles_1h[-2].get("t", candles_1h[-2].get("T", 0))
-        if isinstance(last_completed_close_ts, str):
-            last_completed_close_ts = 0
-        # Simple check: must have been stalking for at least 30 min (roughly one 1h candle)
-        if hours_stalking < 0.5:
-            reload_checks.append("waiting_for_1h_candle")
-
-    # RELOAD CHECK 2: Fresh 5m momentum impulse
-    if len(candles_5m) >= 3:
-        mom_5m_1 = price_momentum(candles_5m, 1)
-        mom_5m_2 = price_momentum(candles_5m[:-1], 1)
-        if direction == "LONG":
-            if mom_5m_1 > 0.15 and mom_5m_1 > mom_5m_2:
-                reload_checks.append(f"fresh_5m_impulse_{mom_5m_1:+.2f}%")
-            else:
-                reload_checks.append("no_5m_impulse")
-        else:
-            if mom_5m_1 < -0.15 and mom_5m_1 < mom_5m_2:
-                reload_checks.append(f"fresh_5m_impulse_{mom_5m_1:+.2f}%")
-            else:
-                reload_checks.append("no_5m_impulse")
-
-    # RELOAD CHECK 3: OI stable or growing
-    if len(candles_1h) >= 4:
-        recent_v = sum(float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles_1h[-2:]) / 2
-        earlier_v = sum(float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles_1h[-4:-2]) / 2
-        if earlier_v > 0 and recent_v >= earlier_v * 0.8:
-            reload_checks.append("oi_stable")
-        else:
-            reload_checks.append("oi_declining")
-
-    # RELOAD CHECK 4: Volume at least 50% of original entry
-    min_vol_pct = stalk_cfg.get("minReloadVolPct", 50)
-    vol = volume_ratio(candles_5m)
-    if vol >= exit_vol * min_vol_pct / 100:
-        reload_checks.append(f"vol_sufficient_{vol:.1f}x")
-    else:
-        reload_checks.append(f"vol_weak_{vol:.1f}x")
-
-    # RELOAD CHECK 5: Funding not crowded
-    crowd_threshold = stalk_cfg.get("crowdedFundingAnnPct", 50)
-    if (direction == "LONG" and (funding <= 0 or funding_ann < crowd_threshold)) or \
-       (direction == "SHORT" and (funding >= 0 or funding_ann < crowd_threshold)):
-        reload_checks.append("funding_ok")
-    else:
-        reload_checks.append(f"funding_crowded_{funding_ann:.0f}%ann")
-
-    # RELOAD CHECK 6: SM still aligned
-    if sm_dir == direction:
-        reload_checks.append(f"sm_aligned_{sm_pct:.0f}%")
-    elif sm_dir == "NEUTRAL":
-        reload_checks.append("sm_neutral_ok")
-    else:
-        reload_checks.append(f"sm_not_aligned_{sm_dir}")
-
-    # RELOAD CHECK 7: 4h trend intact
-    if trend_4h == expected_trend:
-        reload_checks.append("4h_intact")
-    else:
-        reload_checks.append(f"4h_{trend_4h}")
-
-    # Count passes vs fails
-    fails = [r for r in reload_checks if any(bad in r for bad in
-              ["no_5m", "oi_declining", "vol_weak", "funding_crowded",
-               "sm_not_aligned", "waiting_for"])]
-
-    if not fails:
-        return True, reload_checks
-    else:
-        return False, reload_checks
-
-
-# ─── Main ─────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+# MAIN SCANNER
+# ═══════════════════════════════════════════════════════════════
 
 def run():
     config = cfg.load_config()
-    wallet, _ = cfg.get_wallet_and_strategy()
+    wallet, strategy_id = cfg.get_wallet_and_strategy()
 
     if not wallet:
-        cfg.output({"success": True, "heartbeat": "NO_REPLY", "note": "no wallet"})
+        cfg.output({"status": "ok", "heartbeat": "NO_REPLY", "note": "no wallet"})
         return
 
+    # ── Check existing positions ──────────────────────────────
+    positions = cfg.get_positions(wallet)
+    hype_positions = [p for p in positions if p["coin"].upper() == ASSET]
+
+    if len(hype_positions) >= MAX_POSITIONS:
+        # Already in a HYPE position. Do NOT re-evaluate. Do NOT thesis exit.
+        # DSL handles everything from here.
+        cfg.output({
+            "status": "ok",
+            "heartbeat": "NO_REPLY",
+            "note": f"HYPE position active. DSL manages exit. Scanner does NOT re-evaluate.",
+            "activePosition": {
+                "direction": hype_positions[0]["direction"],
+                "entryPrice": hype_positions[0]["entryPrice"],
+                "markPrice": hype_positions[0]["markPrice"],
+                "upnl": hype_positions[0]["upnl"],
+                "margin": hype_positions[0]["margin"],
+            },
+            "_v2_no_thesis_exit": True,
+        })
+        return
+
+    # ── Daily limits ──────────────────────────────────────────
     tc = cfg.load_trade_counter()
-    if tc.get("gate") != "OPEN":
-        cfg.output({"success": True, "heartbeat": "NO_REPLY", "note": f"gate={tc['gate']}"})
+    if tc.get("entries", 0) >= MAX_DAILY_ENTRIES:
+        cfg.output({"status": "ok", "heartbeat": "NO_REPLY",
+                     "note": f"Daily entry limit ({MAX_DAILY_ENTRIES}) reached"})
         return
 
-    account_value, positions = cfg.get_positions(wallet)
-    entry_cfg = config.get("entry", {})
-    state = cfg.load_state("wolverine-state.json")
-    current_mode = state.get("currentMode", "HUNTING")
-    hype_position = next((p for p in positions if p["coin"] == "HYPE"), None)
-
-    # ── MODE 2: RIDING ────────────────────────────────────────
-    if hype_position and current_mode in ("RIDING", "HUNTING"):
-        # We have a position — ensure we're in RIDING mode
-        if current_mode != "RIDING":
-            state["currentMode"] = "RIDING"
-            cfg.save_state(state, "wolverine-state.json")
-
-        still_valid, reasons = evaluate_hype_position(hype_position["direction"], entry_cfg)
-        if not still_valid:
-            cfg.output({
-                "success": True,
-                "action": "thesis_exit",
-                "exits": [{
-                    "coin": "HYPE",
-                    "direction": hype_position["direction"],
-                    "reasons": reasons,
-                    "upnl": hype_position.get("upnl", 0),
-                }],
-                "note": "BTC thesis invalidated — conviction broken",
-            })
-            # On thesis exit, go to HUNTING (thesis is dead, don't stalk)
-            state["currentMode"] = "HUNTING"
-            state.pop("exitState", None)
-            cfg.save_state(state, "wolverine-state.json")
-            return
-
-        cfg.output({"success": True, "heartbeat": "NO_REPLY",
-                     "note": f"RIDING: BTC {hype_position['direction']} thesis intact"})
-        cfg.save_state(state, "wolverine-state.json")
+    # ── Cooldown ──────────────────────────────────────────────
+    if cfg.is_asset_cooled_down(ASSET, COOLDOWN_MINUTES):
+        cfg.output({"status": "ok", "heartbeat": "NO_REPLY",
+                     "note": f"HYPE on cooldown ({COOLDOWN_MINUTES} min)"})
         return
 
-    # ── Detect DSL exit: was RIDING, now no position ──────────
-    if not hype_position and current_mode == "RIDING":
-        # DSL closed our position. Transition to STALKING.
-        # Record exit state for reload evaluation
-        hype_data = get_hype_full_picture()
-        exit_vol = 1.0
-        if hype_data:
-            candles_5m = hype_data.get("candles", {}).get("5m", [])
-            exit_vol = volume_ratio(candles_5m) if candles_5m else 1.0
-
-        state["currentMode"] = "STALKING"
-        state["exitState"] = {
-            "exitDirection": state.get("lastDirection", "LONG"),
-            "exitTimestamp": cfg.now_ts(),
-            "exitEntryVolRatio": exit_vol,
-        }
-        cfg.save_state(state, "wolverine-state.json")
-        cfg.output({"success": True, "heartbeat": "NO_REPLY",
-                     "note": "DSL closed position — transitioning to STALKING mode"})
+    # ── Fetch SM data ─────────────────────────────────────────
+    raw = cfg.mcporter_call("leaderboard_get_markets")
+    if not raw:
+        cfg.output({"status": "error", "error": "failed to fetch markets"})
         return
 
-    # ── MODE 3: STALKING ──────────────────────────────────────
-    if current_mode == "STALKING":
-        exit_state = state.get("exitState", {})
-        if not exit_state:
-            # Corrupted state — reset
-            state["currentMode"] = "HUNTING"
-            cfg.save_state(state, "wolverine-state.json")
-        else:
-            should_reload, reasons = evaluate_reload(exit_state, entry_cfg)
+    markets = []
+    if isinstance(raw, dict):
+        markets = raw.get("markets", raw.get("data", []))
+    elif isinstance(raw, list):
+        markets = raw
 
-            if should_reload:
-                # RELOAD: re-enter same direction
-                direction = exit_state["exitDirection"]
-                lev_cfg = config.get("leverage", {})
-                leverage = lev_cfg.get("default", 15)
-                base_margin_pct = entry_cfg.get("marginPctBase", 0.30)
-                margin = round(account_value * base_margin_pct, 2)
+    # ── Score HYPE ────────────────────────────────────────────
+    score, direction, reasons = score_hype_signal(markets)
 
-                state["currentMode"] = "RIDING"
-                state["lastDirection"] = direction
-                state.pop("exitState", None)
-                cfg.save_state(state, "wolverine-state.json")
-
-                cfg.output({
-                    "success": True,
-                    "action": "reload",
-                    "entry": {
-                        "coin": "HYPE",
-                        "direction": direction,
-                        "leverage": leverage,
-                        "margin": margin,
-                        "orderType": config.get("execution", {}).get("entryOrderType", "FEE_OPTIMIZED_LIMIT"),
-                    },
-                    "reasons": reasons,
-                    "note": f"STALKING → RELOAD: fresh impulse confirmed, re-entering BTC {direction}",
-                })
-                return
-
-            # Check for kill conditions (returned as reasons when should_reload=False)
-            kill_signals = [r for r in reasons if any(k in r for k in
-                           ["stalk_timeout", "4h_trend_reversed", "sm_flipped",
-                            "funding_extreme", "oi_collapsed"])]
-
-            if kill_signals:
-                state["currentMode"] = "HUNTING"
-                state.pop("exitState", None)
-                cfg.save_state(state, "wolverine-state.json")
-                cfg.output({"success": True, "heartbeat": "NO_REPLY",
-                             "note": f"STALKING → RESET: {kill_signals[0]}"})
-                return
-
-            # Still stalking, conditions not met yet
-            hours = (cfg.now_ts() - exit_state.get("exitTimestamp", cfg.now_ts())) / 3600
-            cfg.output({"success": True, "heartbeat": "NO_REPLY",
-                         "note": f"STALKING {hours:.1f}h — waiting for reload conditions"})
-            cfg.save_state(state, "wolverine-state.json")
-            return
-
-    # ── MODE 1: HUNTING ───────────────────────────────────────
-    # Entry cap
-    dynamic = entry_cfg.get("dynamicSlots", {})
-    if dynamic.get("enabled", True):
-        base_max = dynamic.get("baseMax", 3)
-        day_pnl = tc.get("realizedPnl", 0)
-        effective_max = base_max
-        for t in dynamic.get("unlockThresholds", []):
-            if day_pnl >= t.get("pnl", 999999):
-                effective_max = t.get("maxEntries", effective_max)
-        max_entries = min(effective_max, dynamic.get("absoluteMax", 6))
-    else:
-        max_entries = config.get("risk", {}).get("maxEntriesPerDay", 4)
-
-    if tc.get("entries", 0) >= max_entries:
-        cfg.output({"success": True, "heartbeat": "NO_REPLY", "note": f"max entries ({max_entries})"})
+    if score < MIN_SCORE or not direction:
+        cfg.output({
+            "status": "ok",
+            "heartbeat": "NO_REPLY",
+            "note": f"HYPE score {score} < {MIN_SCORE}. Waiting.",
+            "score": score,
+            "reasons": reasons,
+        })
         return
 
-    # Build BTC thesis
-    thesis = build_hype_thesis(entry_cfg)
+    # ── Build entry signal ────────────────────────────────────
+    leverage = DEFAULT_LEVERAGE
+    margin_pct = 0.30 if score >= 10 else 0.20  # 30% at high conviction, 20% at base
 
-    if not thesis or thesis["score"] < entry_cfg.get("minScore", 10):
-        note = "no BTC thesis" if not thesis else f"BTC score {thesis['score']} below {entry_cfg.get('minScore', 10)}"
-        cfg.output({"success": True, "heartbeat": "NO_REPLY", "note": note})
-        return
+    dsl_state = build_dsl_state(direction, score, leverage)
 
-    # Conviction-scaled leverage
-    lev_cfg = config.get("leverage", {})
-    if thesis["score"] >= 14:
-        leverage = lev_cfg.get("max", 20)
-    elif thesis["score"] >= 12:
-        leverage = lev_cfg.get("high", 18)
-    elif thesis["score"] >= 10:
-        leverage = lev_cfg.get("default", 15)
-    else:
-        leverage = lev_cfg.get("min", 12)
-
-    # Conviction-scaled margin
-    base_margin_pct = entry_cfg.get("marginPctBase", 0.30)
-    if thesis["score"] >= 14:
-        margin_pct = base_margin_pct * 1.5
-    elif thesis["score"] >= 12:
-        margin_pct = base_margin_pct * 1.25
-    else:
-        margin_pct = base_margin_pct
-    margin = round(account_value * margin_pct, 2)
-
-    # Enter and switch to RIDING
-    state["currentMode"] = "RIDING"
-    state["lastDirection"] = thesis["direction"]
-    cfg.save_state(state, "wolverine-state.json")
+    # Update trade counter
+    tc["entries"] = tc.get("entries", 0) + 1
+    cfg.save_trade_counter(tc)
 
     cfg.output({
-        "success": True,
-        "signal": thesis,
+        "status": "ok",
+        "signal": {
+            "asset": ASSET,
+            "direction": direction,
+            "score": score,
+            "mode": "LIFECYCLE",
+            "reasons": reasons,
+        },
         "entry": {
-            "coin": "HYPE",
-            "direction": thesis["direction"],
+            "asset": ASSET,
+            "direction": direction,
             "leverage": leverage,
-            "margin": margin,
-            "orderType": config.get("execution", {}).get("entryOrderType", "FEE_OPTIMIZED_LIMIT"),
+            "marginPercent": margin_pct * 100,
+            "orderType": "FEE_OPTIMIZED_LIMIT",
+        },
+        "dslState": dsl_state,
+        "constraints": {
+            "maxPositions": MAX_POSITIONS,
+            "maxLeverage": MAX_LEVERAGE,
+            "minLeverage": MIN_LEVERAGE,
+            "maxDailyEntries": MAX_DAILY_ENTRIES,
+            "cooldownMinutes": COOLDOWN_MINUTES,
+            "xyzBanned": XYZ_BANNED,
+            "_v2_no_thesis_exit": True,
+            "_note": "DSL manages ALL exits. Do NOT re-evaluate or thesis-exit open positions.",
         },
     })
 
 
 if __name__ == "__main__":
-    run()
+    try:
+        run()
+    except Exception as e:
+        cfg.log(f"CRITICAL ERROR: {e}")
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        cfg.output({"status": "error", "error": str(e)})

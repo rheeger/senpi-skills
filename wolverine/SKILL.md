@@ -1,178 +1,174 @@
 ---
 name: wolverine-strategy
 description: >-
-  WOLVERINE v1.0 — HYPE alpha hunter with position lifecycle. Single asset, every signal
-  (SM, funding, OI, 4TF trend, volume, BTC correlation). Three-mode lifecycle:
-  HUNTING (scan for entry) / RIDING (DSL trails) / STALKING (watch for reload on dip).
-  After DSL takes profit, watches for fresh momentum impulse while confirming macro thesis
-  is intact. If thesis dies, resets. If dip reloads, re-enters. DSL High Water Mode (mandatory).
+  WOLVERINE v2.0 — HYPE alpha hunter. Entry-only scanner, DSL-exit-only
+  architecture. v1.1 lost -22.7% because the scanner's thesis exit chopped
+  25/27 trades before DSL could manage them. v2.0 removes thesis exit entirely.
+  Scanner decides entries (score 8+, 4H/1H aligned, SM consensus). DSL manages
+  all exits (wide Phase 1 for HYPE volatility, trailing tiers starting at +15% ROE).
+  Leverage lowered to 7x. Max 4 entries/day. 3-hour cooldown between entries.
 license: MIT
 metadata:
   author: jason-goldberg
-  version: "1.1"
+  version: "2.0"
   platform: senpi
   exchange: hyperliquid
-  base_skill: grizzly-v2.0
 ---
 
-# WOLVERINE v1.1 — HYPE Alpha Hunter with Position Lifecycle
+# 🦡 WOLVERINE v2.0 — HYPE Alpha Hunter
 
-One asset. Every signal. Maximum conviction. Reload-on-dip.
+Scanner enters. DSL exits. The scanner NEVER re-evaluates open positions.
 
-## v1.1 Changes — DSL Recalibrated for HYPE Speed
+---
 
-Day 1 data: Wolverine caught a textbook HYPE LONG — score 10+, SM aligned, peaked at +9.3% ROE (+$18.54). Then gave it ALL back because the DSL was too loose. Price dropped from +9.3% to -2.3% ROE faster than the 3-minute scan could react. The old Tier 1 locked only 20% of high water = 1.86% floor, which was meaningless.
+## ⛔ CRITICAL AGENT RULES
 
-**v1.1 fix:** Phase 2 trigger lowered from 6% to 3% ROE. Tier 1 lock raised from 20% to 40%. Breaches reduced from 3 to 2. HYPE reverses fast — the DSL must lock profits aggressively.
+### RULE 1: Install path is `/data/workspace/skills/wolverine-strategy/`
 
-With v1.1 DSL, that same trade locks +3.7% ROE at worst instead of exiting at -2.3%.
+### RULE 2: THE SCANNER DOES NOT EXIT POSITIONS
 
-**Also in v1.1:** BTC correlation is bonus-only, never a gate or thesis exit. HYPE moves independently of BTC — up 50% while BTC dropped 30%. When BTC confirms, HYPE runs harder (+2 score bonus). When BTC diverges, it's a non-event.
+This is the single most important rule. When the scanner output contains `"_v2_no_thesis_exit": true` and the note says "DSL manages exit. Scanner does NOT re-evaluate," that means **DO NOT close, modify, or re-evaluate the open position for any reason.** The DSL cron is the ONLY mechanism that can close positions.
 
-WOLVERINE stares at HYPE and nothing else. Every signal source available — smart money positioning, funding rate, open interest, 4-timeframe trend structure, volume, BTC correlation — feeds into a single thesis: is there a high-conviction HYPE trade right now?
+v1.1 lost -22.7% because the scanner kept killing positions via "thesis exit" — 25 of 27 trades were chopped by the scanner before DSL could manage them. On HYPE, which wicks 5-10% ROE routinely, the scanner saw every wick as "thesis invalidation" and cut winners that would have run to +30%.
 
-Based on GRIZZLY v2.0's three-mode lifecycle, adapted for HYPE's volatility profile.
+**If you close a position because "the thesis changed" or "SM flipped" or "the 4H trend broke," you are violating this rule and will bleed exactly like v1.1 did.**
 
-## The Three-Mode Lifecycle
+### RULE 3: MAX 1 POSITION at a time
 
-### MODE 1 — HUNTING (default)
+Only one HYPE position at a time. Check clearinghouse before every entry.
 
-Scan HYPE every 3 minutes. All signals must align (4h trend, 1h momentum, SM, funding, OI, volume). Score 10+ to enter. When a position opens, switch to MODE 2.
+### RULE 4: Scanner output is AUTHORITATIVE
 
-### MODE 2 — RIDING
+Leverage, margin, direction — use exactly what the scanner says.
 
-Active position. DSL High Water trails it. Thesis re-evaluation every scan. If thesis breaks (4h trend flips, SM flips, funding extreme, volume dies) -> thesis exit and reset to MODE 1. If DSL closes the position -> switch to MODE 3. Note: BTC divergence does NOT invalidate HYPE thesis — HYPE moves independently.
+### RULE 5: Write dslState directly — include wallet address
 
-### MODE 3 — STALKING
+Write the scanner's `dslState` block directly to the state file. It already contains `wallet` and `strategyWalletAddress`. Do NOT strip these fields.
 
-DSL locked profits. The trend may not be over. Watch for a reload opportunity. Every scan checks:
+### RULE 6: Verify BOTH crons on every session start
 
-**Reload conditions (ALL must pass):**
-1. At least one completed 1h candle since exit (~30 min minimum)
-2. Fresh 5m momentum impulse in the exit direction
-3. OI stable or growing
-4. Volume at least 50% of original entry
-5. Funding not spiked into crowded territory
-6. SM still aligned in the exit direction
-7. 4h trend structure still intact
+Scanner cron (3 min) and DSL cron (3 min) must both be running.
 
-If ALL pass -> RELOAD. Re-enter same direction, same leverage. Switch to MODE 2.
+### RULE 7: Never modify parameters
 
-**Kill conditions (ANY triggers reset to MODE 1):**
-- 4h trend reversed
-- SM flipped against exit direction
-- OI collapsed 20%+
-- Stalking for more than 6 hours with no reload
-- Funding spiked above 100% annualized
+### RULE 8: 3-hour cooldown between entries
 
-**maxPositions: 1.** WOLVERINE holds one HYPE position at a time.
+After any position close (DSL floor, timeout, trailing stop, stagnation TP), wait 3 hours before the next entry. This prevents revenge trading after a loss.
 
-## MANDATORY: DSL High Water Mode
+---
 
-**WOLVERINE MUST use DSL High Water Mode. This is not optional.**
+## What Changed From v1.1
 
-Spec: https://github.com/Senpi-ai/senpi-skills/blob/main/dsl-dynamic-stop-loss/dsl-high-water-spec%201.0.md
-
-DSL tiers in `wolverine-config.json`. Arm DSL immediately after every entry fill. Zero naked positions.
-
-## Why HYPE-Only at 5-10x Leverage
-
-- **Native to Hyperliquid** — deepest on-exchange liquidity for HYPE
-- **Platform momentum** — HYPE price correlates with Hyperliquid volume/TVL growth
-- **High volatility** — moves fast, rewards conviction entries with wide trails
-- **BTC as bonus, not filter** — when BTC runs with HYPE, the move is amplified (+2 score bonus). But HYPE often decouples during platform-specific events, so BTC divergence is never a penalty or exit signal
-- **Lower leverage compensates for volatility** — 10x on HYPE captures large structural moves without overexposure
-
-## How WOLVERINE Trades
-
-### Entry (score >= 10 required)
-
-Every 3 minutes, the scanner evaluates HYPE across all signal sources:
-
-| Signal | Points | Required? |
-|---|---|---|
-| 4h trend structure (higher lows / lower highs) | 3 | **Yes** |
-| 1h trend agrees with 4h | 2 | **Yes** |
-| 15m momentum confirms direction | 0-1 | **Yes** |
-| 5m alignment (all 4 timeframes agree) | 1 | No |
-| SM aligned with direction | 2-3 | **Hard block if opposing** |
-| Funding pays to hold the direction | 2 | No |
-| Volume above average | 1-2 | No |
-| OI growing | 1 | No |
-| BTC confirms move | 2 | No (bonus only — HYPE moves independently of BTC) |
-| RSI has room | 1 | No (blocks overbought/oversold) |
-| 4h momentum strength | 1 | No |
-
-Maximum score: ~18. Minimum to enter: 10.
-
-### Conviction-Scaled Leverage
-
-| Score | Leverage |
-|---|---|
-| 10-11 | 8x |
-| 12-13 | 9x |
-| 14+ | 10x |
-
-### Conviction-Scaled Margin
-
-| Score | Margin |
-|---|---|
-| 10-11 | 20% of account |
-| 12-13 | 25% |
-| 14+ | 30% |
-
-## Risk Management
-
-| Rule | Value |
-|---|---|
-| Max positions | 1 |
-| Phase 1 floor | 2.5% notional (~25% ROE at 10x) |
-| Drawdown halt | 25% from peak |
-| Daily loss limit | 10% |
-| Cooldown | 120 min after 3 consecutive losses |
-| Stagnation TP | 10% ROE stale 75 min |
-
-## Cron Architecture
-
-| Cron | Interval | Session | Purpose |
+| Setting | v1.1 | v2.0 | Why |
 |---|---|---|---|
-| Scanner | 3 min | isolated | Thesis builder + re-evaluator + stalk/reload |
-| DSL v5 | 3 min | isolated | High Water Mode trailing stops |
+| Scanner thesis exit | ENABLED (killed 25/27 trades) | **REMOVED** | Was chopping winners |
+| DSL authority | Shared with scanner | **DSL-ONLY exits** | One exit mechanism, no conflicts |
+| Entry score threshold | ~5 (effectively) | **8** | Fewer, higher conviction entries |
+| 4H/1H alignment | Optional | **REQUIRED** | Both timeframes must agree |
+| Leverage | 10x | **7x** | More room to breathe on HYPE |
+| Max daily entries | Unlimited | **4** | Patience is the edge |
+| Cooldown | 120 min | **180 min** | 3 hours, prevent revenge trading |
+| Phase 2 trigger | 7% ROE | **15% ROE** | Don't trail until a real move |
+| First trailing tier | 7% trigger, 40% lock | **15% trigger, 30% lock** | Wide breathing room |
 
-Both MUST be isolated sessions with `agentTurn`. Use `NO_REPLY` for idle cycles.
+---
 
-## Notification Policy
+## The Thesis
 
-**ONLY alert:** Position OPENED (direction, leverage, score, reasons), position CLOSED (DSL or thesis exit), risk guardian triggered, critical error.
-**NEVER alert:** Scanner found no thesis, thesis re-eval passed, DSL routine, any reasoning.
+HYPE moves 2-4% routinely. At 7x leverage, that's 14-28% ROE. The edge is:
+1. Enter only when SM consensus + price momentum + contribution acceleration all align (score 8+)
+2. Let DSL manage the position through HYPE's normal volatility
+3. Wide Phase 1 floor (-20% ROE) survives the wicks that killed v1.1 entries
+4. Trailing tiers don't engage until +15% ROE — no premature profit locking
+5. When HYPE runs, it runs hard. One +30% ROE trade pays for 3 losing trades at -10%
+
+**v1.1 proof:** Trade #6 hit +29.92% ROE (+$112) when the scanner accidentally let it run. That single trade was worth more than all other 13 winners combined.
+
+---
+
+## DSL Configuration (Wide for HYPE)
+
+### Phase 1 (Entry Protection)
+| Parameter | Value | Why |
+|---|---|---|
+| Absolute floor | -20% ROE | At 7x, allows ~2.85% adverse price move |
+| Hard timeout | 120 min | 2 hours to develop thesis |
+| Weak peak cut | 60 min | 1 hour at weak profit before cutting |
+| Dead weight cut | 45 min | 45 min flat before cutting |
+| Consecutive breaches | 3 | Survives single wicks |
+
+### Phase 2 (Profit Trailing)
+| Trigger ROE | Lock % of Peak | Breaches | Note |
+|---|---|---|---|
+| +15% | 30% | 3 | Initial pop — wide room |
+| +25% | 50% | 2 | Quarter-way up, lock half |
+| +40% | 65% | 1 | Solid profit |
+| +60% | 75% | 1 | Deep run |
+| +80% | 85% | 1 | Infinite trail |
+
+### Stagnation TP
+If ROE >= 15% and high water hasn't moved for 60 minutes, take profit.
+
+---
+
+## Cron Setup
+
+Scanner cron (3 minutes, main session):
+```
+python3 /data/workspace/skills/wolverine-strategy/scripts/wolverine-scanner.py
+```
+
+DSL cron (3 minutes, isolated session):
+```
+python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-dir /data/workspace/skills/wolverine-strategy/state
+```
+
+---
 
 ## Bootstrap Gate
 
-On EVERY session, check `config/bootstrap-complete.json`. If missing:
+On EVERY session start, check `config/bootstrap-complete.json`. If missing:
 1. Verify Senpi MCP
-2. Create scanner cron (3 min, isolated) and DSL cron (3 min, isolated)
-3. Write `config/bootstrap-complete.json`
-4. Send: "🦡 WOLVERINE is online. Watching HYPE. DSL High Water Mode active. Silence = no conviction."
+2. Create scanner cron (3 min, main) and DSL cron (3 min, isolated)
+3. Verify BOTH crons `status: ok`
+4. Write `config/bootstrap-complete.json`
+5. Send: "🦡 WOLVERINE v2.0 online. HYPE hunter. Entry-only scanner. DSL manages all exits. Waiting for score 8+ setup."
+
+---
+
+## Notification Policy
+
+**ONLY alert:** Position OPENED (direction, score, reasons, leverage), Position CLOSED BY DSL (P&L, close reason, duration), critical error.
+
+**NEVER alert:** Scanner found no signal, scanner sees open position and is not re-evaluating, DSL routine checks, any reasoning about whether to exit an open position.
+
+---
 
 ## Expected Behavior
 
 | Metric | Expected |
 |---|---|
-| Trades/day | 1-3 |
-| Avg hold time | 1-12 hours |
-| Win rate | ~45-55% |
-| Avg winner | 20-50%+ ROE |
-| Avg loser | -20 to -40% ROE |
+| Entries/day | 0-3 (some zero-trade days) |
+| Position duration | 30 min to 12+ hours |
+| Win rate | ~35-40% |
+| Avg winner | +15% to +30% ROE |
+| Avg loser | -10% to -20% ROE (Phase 1 cuts) |
+| Net edge | Winners 2-3x larger than losers |
+
+**Long periods of silence are expected.** HYPE must have SM consensus, 4H/1H alignment, contribution acceleration, AND score 8+ to enter. That's rare. The patience IS the edge.
+
+---
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `scripts/wolverine-scanner.py` | HYPE thesis builder + re-evaluator + stalk/reload |
-| `scripts/wolverine_config.py` | Shared config, MCP helpers, state I/O |
-| `config/wolverine-config.json` | All configurable variables with DSL High Water tiers |
+| `scripts/wolverine-scanner.py` | Entry-only scanner. NO thesis exit. |
+| `scripts/wolverine_config.py` | Config helper |
+| `config/wolverine-config.json` | All parameters |
+
+---
 
 ## License
 
 MIT — Built by Senpi (https://senpi.ai).
-Source: https://github.com/Senpi-ai/senpi-skills

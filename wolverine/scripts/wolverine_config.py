@@ -1,7 +1,7 @@
-"""WOLVERINE Strategy — Shared config, MCP helpers, state I/O."""
+"""WOLVERINE v2.0 — Config Helper.
+Self-contained. Scanner-entry-only, DSL-exit-only architecture."""
 # Copyright 2026 Senpi (https://senpi.ai)
 # Licensed under MIT
-# Source: https://github.com/Senpi-ai/senpi-skills
 
 import json
 import os
@@ -20,27 +20,22 @@ STATE_DIR = SKILL_DIR / "state"
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ─── Atomic Write ────────────────────────────────────────────
-
 def atomic_write(path, data):
-    """Write JSON atomically via tmp file + os.replace."""
     path = str(path)
-    dir_name = os.path.dirname(path) or "."
-    os.makedirs(dir_name, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp_path, path)
+            json.dump(data, f, indent=2, default=str)
+        os.replace(tmp, path)
     except BaseException:
         try:
-            os.unlink(tmp_path)
+            os.unlink(tmp)
         except OSError:
             pass
         raise
 
-
-# ─── Config ──────────────────────────────────────────────────
 
 def load_config():
     if CONFIG_PATH.exists():
@@ -50,80 +45,89 @@ def load_config():
 
 
 def get_wallet_and_strategy():
-    wallet = os.environ.get("WOLVERINE_WALLET", "")
-    strategy_id = os.environ.get("WOLVERINE_STRATEGY_ID", "")
-    if not wallet or not strategy_id:
-        config = load_config()
-        wallet = wallet or config.get("wallet", "")
-        strategy_id = strategy_id or config.get("strategyId", "")
-    return wallet, strategy_id
+    w = os.environ.get("WOLVERINE_WALLET", "")
+    s = os.environ.get("WOLVERINE_STRATEGY_ID", "")
+    if not w or not s:
+        c = load_config()
+        w = w or c.get("wallet", "")
+        s = s or c.get("strategyId", "")
+    return w, s
 
 
-# ─── State I/O ───────────────────────────────────────────────
+# ─── Scan History ────────────────────────────────────────────
 
-def load_state(filename="state.json"):
-    path = STATE_DIR / filename
-    if path.exists():
-        with open(path) as f:
-            return json.load(f)
-    return {}
+def load_scan_history():
+    p = STATE_DIR / "scan-history.json"
+    if p.exists():
+        try:
+            with open(p) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {"scans": []}
 
 
-def save_state(data, filename="state.json"):
-    atomic_write(str(STATE_DIR / filename), data)
+def save_scan_history(history):
+    scans = history.get("scans", [])
+    if len(scans) > 60:
+        history["scans"] = scans[-60:]
+    atomic_write(str(STATE_DIR / "scan-history.json"), history)
 
 
 # ─── Trade Counter ───────────────────────────────────────────
 
 def load_trade_counter():
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    path = STATE_DIR / "trade-counter.json"
-    default = {
-        "date": today, "entries": 0, "realizedPnl": 0,
-        "gate": "OPEN", "gateReason": None, "cooldownUntil": None,
-        "lastResults": []
-    }
-    if path.exists():
+    p = STATE_DIR / "trade-counter.json"
+    if p.exists():
         try:
-            with open(path) as f:
-                tc = json.load(f)
-            if tc.get("date") != today:
-                for k in ["entries", "realizedPnl"]:
-                    tc[k] = 0
-                tc["date"] = today
-                tc["gate"] = "OPEN"
-                tc["gateReason"] = None
-                tc["cooldownUntil"] = None
-            for k, v in default.items():
-                if k not in tc:
-                    tc[k] = v
-            return tc
+            with open(p) as f:
+                return json.load(f)
         except (json.JSONDecodeError, IOError):
             pass
-    return dict(default)
+    return {"date": now_date(), "entries": 0, "dailyLoss": 0}
 
 
 def save_trade_counter(tc):
-    tc["updatedAt"] = now_iso()
+    if tc.get("date") != now_date():
+        tc["date"] = now_date()
+        tc["entries"] = 0
+        tc["dailyLoss"] = 0
     atomic_write(str(STATE_DIR / "trade-counter.json"), tc)
 
 
-def increment_entry(tc):
-    tc["entries"] = tc.get("entries", 0) + 1
-    save_trade_counter(tc)
+# ─── Cooldown ────────────────────────────────────────────────
+
+def is_asset_cooled_down(coin, minutes=120):
+    p = STATE_DIR / "cooldowns.json"
+    if not p.exists():
+        return False
+    try:
+        with open(p) as f:
+            cooldowns = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return False
+    entry = cooldowns.get(coin)
+    if not entry:
+        return False
+    return time.time() < entry.get("until", 0)
 
 
-def record_trade_result(tc, pnl):
-    tc["lastResults"].append("W" if pnl >= 0 else "L")
-    tc["lastResults"] = tc["lastResults"][-20:]
-    tc["realizedPnl"] = tc.get("realizedPnl", 0) + pnl
-    save_trade_counter(tc)
+def set_cooldown(coin, minutes=120):
+    p = STATE_DIR / "cooldowns.json"
+    cooldowns = {}
+    if p.exists():
+        try:
+            with open(p) as f:
+                cooldowns = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    cooldowns[coin] = {"until": time.time() + minutes * 60, "set_at": now_iso()}
+    atomic_write(str(p), cooldowns)
 
 
-# ─── MCP Helpers ─────────────────────────────────────────────
+# ─── MCP ─────────────────────────────────────────────────────
 
 def mcporter_call(tool, retries=2, timeout=25, **params):
-    """Call a Senpi MCP tool via mcporter. Array syntax, no shell=True."""
     args = json.dumps(params) if params else "{}"
     cmd = ["mcporter", "call", "senpi", tool, "--args", args]
     for attempt in range(retries):
@@ -131,7 +135,7 @@ def mcporter_call(tool, retries=2, timeout=25, **params):
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
             if r.returncode != 0:
                 if attempt < retries - 1:
-                    time.sleep(2)
+                    time.sleep(1)
                     continue
                 return None
             raw = json.loads(r.stdout)
@@ -147,7 +151,7 @@ def mcporter_call(tool, retries=2, timeout=25, **params):
             return raw
         except subprocess.TimeoutExpired:
             if attempt < retries - 1:
-                time.sleep(2)
+                time.sleep(1)
                 continue
             return None
         except (json.JSONDecodeError, Exception):
@@ -155,24 +159,20 @@ def mcporter_call(tool, retries=2, timeout=25, **params):
     return None
 
 
-def get_clearinghouse(wallet):
+def get_positions(wallet=None):
     if not wallet:
-        return None
-    return mcporter_call("strategy_get_clearinghouse_state", strategy_wallet=wallet)
-
-
-def get_positions(wallet):
-    ch = get_clearinghouse(wallet)
-    if not ch:
-        return 0, []
+        wallet, _ = get_wallet_and_strategy()
+    if not wallet:
+        return []
+    ch = mcporter_call("strategy_get_clearinghouse_state", strategy_wallet=wallet)
+    if not ch or not isinstance(ch, dict):
+        return []
     data = ch.get("data", ch)
-    positions, account_value = [], 0
+    positions = []
     for section in ("main", "xyz"):
         s = data.get(section, {})
         if not isinstance(s, dict):
             continue
-        ms = s.get("marginSummary", {})
-        account_value += float(ms.get("accountValue", 0))
         for ap in s.get("assetPositions", []):
             pos = ap.get("position", ap)
             szi = float(pos.get("szi", 0))
@@ -181,22 +181,35 @@ def get_positions(wallet):
             positions.append({
                 "coin": pos.get("coin", ""),
                 "direction": "LONG" if szi > 0 else "SHORT",
-                "upnl": float(pos.get("unrealizedPnl", 0)),
+                "szi": szi,
+                "size": abs(szi),
                 "margin": float(pos.get("marginUsed", 0)),
                 "entryPrice": float(pos.get("entryPx", 0)),
-                "size": abs(szi),
+                "markPrice": float(pos.get("markPx", 0)),
+                "leverage": float(
+                    pos.get("leverage", {}).get("value", 7)
+                    if isinstance(pos.get("leverage"), dict)
+                    else pos.get("leverage", 7)
+                ),
+                "upnl": float(pos.get("unrealizedPnl", 0)),
             })
-    return account_value, positions
+    return positions
 
 
 def output(data):
-    print(json.dumps(data))
+    print(json.dumps(data, default=str))
     sys.stdout.flush()
+
+
+def log(msg):
+    print(f"[WOLVERINE] {msg}", file=sys.stderr)
 
 
 def now_ts():
     return time.time()
 
-
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
+
+def now_date():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")

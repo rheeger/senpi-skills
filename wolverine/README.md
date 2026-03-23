@@ -1,69 +1,31 @@
-# 🦡 WOLVERINE v1.0 — HYPE Alpha Hunter
+# 🦡 WOLVERINE v2.0 — HYPE Alpha Hunter
 
-Part of the [Senpi Trading Skills Zoo](https://github.com/Senpi-ai/senpi-skills).
+Part of the [Senpi Trading Skills](https://github.com/Senpi-ai/senpi-skills).
 
-## What WOLVERINE Does
+## What Changed
 
-WOLVERINE is a single-asset alpha hunter for **HYPE** on Hyperliquid. It uses every available signal source (SM positioning, funding, OI, 4-timeframe trend, volume, BTC correlation) to build a conviction thesis, then trades it with 5-10x leverage and DSL High Water trailing stops.
+v1.1 lost -22.7% because the scanner's "thesis exit" killed 25 of 27 trades before DSL could manage them. On HYPE (which wicks 5-10% ROE routinely), the scanner saw every normal wick as thesis invalidation and chopped winners that would have run to +30%.
 
-Based on GRIZZLY v2.0's three-mode lifecycle, adapted for HYPE's volatility profile.
+v2.0 removes the thesis exit entirely. Scanner decides entries. DSL manages all exits. Once a position is open, the scanner explicitly refuses to re-evaluate it.
 
-## Three-Mode Lifecycle
+## Key Settings
 
-```
-HUNTING ──> enter ──> RIDING ──> DSL closes ──> STALKING
-   ^                    |                          |
-   |                    v                          v
-   |              thesis breaks              reload OR kill
-   |              (reset to HUNT)           (reload=RIDE, kill=HUNT)
-   +───────────────────────────────────────────────+
-```
-
-- **HUNTING:** Scan every 3 min. Score 10+ across all signals to enter.
-- **RIDING:** Position open. DSL trails. Thesis re-evaluated every scan.
-- **STALKING:** DSL took profit. Watch for reload on dip, or kill if thesis dies.
-
-## Quick Start
-
-1. Deploy `config/wolverine-config.json` to your Senpi agent
-2. Deploy `scripts/wolverine-scanner.py` and `scripts/wolverine_config.py`
-3. Create scanner cron (3 min, isolated) and DSL cron (3 min, isolated)
-4. Fund with $1,000 on the Senpi Predators leaderboard
-
-## Directory Structure
-
-```
-wolverine-v1.0/
-|-- README.md
-|-- SKILL.md
-|-- config/
-|   +-- wolverine-config.json
-+-- scripts/
-    |-- wolverine-scanner.py
-    +-- wolverine_config.py
-```
-
-## Key Config Differences from GRIZZLY (BTC)
-
-| Setting | GRIZZLY (BTC) | WOLVERINE (HYPE) |
-|---|---|---|
-| Asset | BTC | HYPE |
-| Correlation | ETH | BTC |
-| Leverage | 12-20x | 5-10x |
-| Margin base | 30% | 20% |
-| DSL floor | 3.5% notional | 2.5% notional |
-| Stagnation TP | 12% ROE / 90 min | 10% ROE / 75 min |
-
-## Entry Requirements (all must pass)
-
-| Gate | Requirement |
+| Setting | Value |
 |---|---|
-| 4h trend | Bullish or bearish structure (required) |
-| 1h trend | Must agree with 4h (required) |
-| 15m momentum | Must confirm direction (required) |
-| SM positioning | Hard block if opposing |
-| Score | >= 10 combined |
+| Asset | HYPE only |
+| Leverage | 7x (down from 10x) |
+| Entry score | 8+ (up from ~5) |
+| 4H/1H alignment | Required |
+| Max entries/day | 4 |
+| Cooldown | 3 hours |
+| Phase 1 floor | -20% ROE |
+| Phase 2 trigger | +15% ROE |
+| Thesis exit | **REMOVED** |
+
+## The Proof
+
+v1.1 Trade #6: HYPE LONG, +29.92% ROE, held 757 minutes. The one trade where the scanner accidentally let it run was worth more than all other 13 winners combined.
 
 ## License
 
-MIT — see root repo LICENSE.
+MIT — Copyright 2026 Senpi (https://senpi.ai)
