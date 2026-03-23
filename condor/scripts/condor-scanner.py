@@ -508,28 +508,11 @@ def run():
             state["activeAsset"] = asset
             cfg.save_state(state, "condor-state.json")
 
-        still_valid, reasons = evaluate_position(asset, active_position["direction"], entry_cfg)
-        if not still_valid:
-            cfg.output({
-                "success": True,
-                "action": "thesis_exit",
-                "exits": [{
-                    "coin": asset,
-                    "direction": active_position["direction"],
-                    "reasons": reasons,
-                    "upnl": active_position.get("upnl", 0),
-                }],
-                "note": f"{asset} thesis invalidated — conviction broken",
-            })
-            # Thesis died → HUNTING across all assets (not STALKING)
-            state["currentMode"] = "HUNTING"
-            state.pop("exitState", None)
-            state.pop("activeAsset", None)
-            cfg.save_state(state, "condor-state.json")
-            return
-
+        # v2.0: DSL manages ALL exits. Scanner does NOT thesis-exit.
+        # Condor data: all 40 trades closed by scanner thesis exit. DSL never got to work.
         cfg.output({"success": True, "heartbeat": "NO_REPLY",
-                     "note": f"RIDING: {asset} {active_position['direction']} thesis intact"})
+                     "note": f"RIDING: {asset} {active_position['direction']} — DSL manages exit. Scanner does NOT re-evaluate.",
+                     "_v2_no_thesis_exit": True})
         return
 
     # ── Detect DSL exit: was RIDING, now no position ──────────
