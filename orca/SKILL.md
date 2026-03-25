@@ -3,10 +3,9 @@ name: orca-strategy
 description: >-
   ORCA v1.2 — Hardened dual-mode emerging movers scanner with Fox's live
   trading lessons applied. Stalker minScore raised to 7, minTotalClimb to 8.
-  Tighter Phase 1 timing for low-score entries (deadWeight 8 min, timeout 25 min).
   Stalker consecutive-loss streak gate: 3 losses in a row raises minScore to 9
-  until a win resets. All v1.1.1 DSL audit fixes preserved. XYZ banned.
-  Leverage 7-10x. DSL state template in scanner output.
+  until a win resets. XYZ banned. Leverage 7-10x.
+  DSL exit managed by plugin runtime via dsl.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
@@ -37,23 +36,19 @@ Before opening ANY position, call `strategy_get_clearinghouse_state` and count o
 
 If the scanner says `minLeverage: 7`, you use 7. Not 5 from your MEMORY.md. The scanner is the single source of truth.
 
-### RULE 4: Verify BOTH crons on every session start
+### RULE 4: Verify scanner cron on every session start
 
-Run `openclaw crons list`. Scanner cron and DSL cron must both be `status: ok`.
+Run `openclaw crons list`. Scanner cron must be `status: ok`. DSL exit is handled by the plugin runtime.
 
-### RULE 5: Write dslState directly — do not construct manually
-
-Write the scanner's `dslState` block DIRECTLY to `state/{TOKEN}.json`. Do not modify. Do not reconstruct.
-
-### RULE 6: Never retry timed-out position creation
+### RULE 5: Never retry timed-out position creation
 
 If `create_position` times out, check clearinghouse state. If position exists, create DSL state. If not, wait for next scan.
 
-### RULE 7: Never modify your own configuration
+### RULE 6: Never modify your own configuration
 
-Do not adjust leverage, margin, entry caps, scoring thresholds, or DSL parameters.
+Do not adjust leverage, margin, entry caps, or scoring thresholds.
 
-### RULE 8: Record Stalker results for streak tracking
+### RULE 7: Record Stalker results for streak tracking
 
 After every Stalker position closes, call `record_stalker_result(tc, is_win)` from orca_config.py. The scanner uses this to detect losing streaks and temporarily raise the entry bar.
 
@@ -98,50 +93,20 @@ Fox v1.0 ran the Orca scanner for 5+ days. Analysis of 20 closed positions revea
 
 ---
 
-## MANDATORY: DSL High Water Mode
+## Exit Management
 
-```json
-{
-  "lockMode": "pct_of_high_water",
-  "phase2TriggerRoe": 7,
-  "tiers": [
-    {"triggerPct": 7,  "lockHwPct": 40, "consecutiveBreachesRequired": 3},
-    {"triggerPct": 12, "lockHwPct": 55, "consecutiveBreachesRequired": 2},
-    {"triggerPct": 15, "lockHwPct": 75, "consecutiveBreachesRequired": 2},
-    {"triggerPct": 20, "lockHwPct": 85, "consecutiveBreachesRequired": 1}
-  ]
-}
-```
-
-### Phase 1 (Conviction-Scaled) — v1.2 tightened for low scores
-
-| Score | Absolute Floor | Hard Timeout | Weak Peak | Dead Weight |
-|---|---|---|---|---|
-| 6-7 | -18% ROE | 25 min | 12 min | 8 min |
-| 8-9 | -25% ROE | 45 min | 20 min | 15 min |
-| 10+ | -30% ROE | 60 min | 30 min | 20 min |
-
-### Stagnation TP (MANDATORY)
-
-If ROE >= 10% and high water hasn't moved for 45 minutes, take profit.
-
----
-
-## Scanner Output — DSL State Template
-
-Each signal includes a `dslState` block. Write this directly as the state file.
+DSL exit is handled by the plugin runtime via `dsl.yaml`. See `dsl.yaml` and `dsl-implementation.md` for configuration details.
 
 **Entry flow:**
-1. Scanner outputs signal with `dslState` block
+1. Scanner outputs signal
 2. Verify positions < 3 (check clearinghouse state)
 3. Verify exchange max leverage >= 7 for this asset
 4. Call `create_position` with coin, direction, leverage, margin
-5. Write `state/{TOKEN}.json` with exact `signal.dslState` plus `entryPrice`, `leverage`, `createdAt`
-6. Send ONE notification: position opened
-7. DSL cron picks up the state file
+5. Send ONE notification: position opened
+6. Plugin DSL monitor handles exit management automatically
 
 **On position close:**
-8. Record result: call `record_stalker_result(tc, is_win)` if the position was a Stalker entry
+7. Record result: call `record_stalker_result(tc, is_win)` if the position was a Stalker entry
 
 ---
 
@@ -154,10 +119,7 @@ Scanner cron (90 seconds, main session):
 python3 /data/workspace/skills/orca-strategy/scripts/orca-scanner.py
 ```
 
-DSL cron (3 minutes, isolated session):
-```
-python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-dir /data/workspace/skills/orca-strategy/state
-```
+DSL exit management is handled by the plugin runtime via `dsl.yaml` — no DSL cron needed.
 
 ---
 
@@ -165,12 +127,12 @@ python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-d
 
 On EVERY session start, check `config/bootstrap-complete.json`. If missing:
 1. Verify Senpi MCP
-2. Create scanner cron (90s, main) and DSL cron (3 min, isolated)
-3. Verify BOTH crons `status: ok`
+2. Create scanner cron (90s, main)
+3. Verify scanner cron `status: ok`
 4. Write `config/bootstrap-complete.json`
 5. Send: "🐋 ORCA v1.2 online. Fox's lessons applied. Stalker minScore 7, climb 8+, streak gate active. Silence = no conviction."
 
-If bootstrap exists, still verify crons on every session start.
+If bootstrap exists, still verify scanner cron on every session start.
 
 ---
 
@@ -193,7 +155,7 @@ If bootstrap exists, still verify crons on every session start.
 
 **ONLY alert:** Position OPENED, position CLOSED (with P&L and reason), streak gate activated/deactivated, risk guardian triggered, critical error.
 
-**NEVER alert:** Scanner ran with no signals, DSL routine check, any reasoning.
+**NEVER alert:** Scanner ran with no signals, any reasoning.
 
 ---
 

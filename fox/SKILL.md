@@ -7,7 +7,7 @@ description: >-
   pass the score threshold. This forces breadth of confirmation beyond the
   auto-awarded base climb score + one bonus. Stalker minScore 7, minTotalClimb 8,
   tighter Phase 1 for low-score entries, consecutive-loss streak gate. XYZ banned.
-  Leverage 7-10x. DSL state template in scanner output.
+  Leverage 7-10x. DSL exit managed by plugin runtime via dsl.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
@@ -37,23 +37,19 @@ Before opening ANY position, call `strategy_get_clearinghouse_state` and count o
 
 The scanner is the single source of truth for all trading parameters.
 
-### RULE 4: Verify BOTH crons on every session start
+### RULE 4: Verify scanner cron on every session start
 
-Run `openclaw crons list`. Scanner cron and DSL cron must both be `status: ok`.
+Run `openclaw crons list`. Scanner cron must be `status: ok`. DSL exit is handled by the plugin runtime.
 
-### RULE 5: Write dslState directly — do not construct manually
-
-Write the scanner's `dslState` block DIRECTLY to `state/{TOKEN}.json`. Do not modify.
-
-### RULE 6: Never retry timed-out position creation
+### RULE 5: Never retry timed-out position creation
 
 If `create_position` times out, check clearinghouse state first.
 
-### RULE 7: Never modify your own configuration
+### RULE 6: Never modify your own configuration
 
-No adjustments to leverage, margin, scoring, DSL, or any parameter.
+No adjustments to leverage, margin, scoring, or any parameter.
 
-### RULE 8: Record Stalker results for streak tracking
+### RULE 7: Record Stalker results for streak tracking
 
 After every Stalker position closes, call `record_stalker_result(tc, is_win)`.
 
@@ -89,50 +85,20 @@ After every Stalker position closes, call `record_stalker_result(tc, is_win)`.
 
 ---
 
-## MANDATORY: DSL High Water Mode
+## Exit Management
 
-```json
-{
-  "lockMode": "pct_of_high_water",
-  "phase2TriggerRoe": 7,
-  "tiers": [
-    {"triggerPct": 7,  "lockHwPct": 40, "consecutiveBreachesRequired": 3},
-    {"triggerPct": 12, "lockHwPct": 55, "consecutiveBreachesRequired": 2},
-    {"triggerPct": 15, "lockHwPct": 75, "consecutiveBreachesRequired": 2},
-    {"triggerPct": 20, "lockHwPct": 85, "consecutiveBreachesRequired": 1}
-  ]
-}
-```
-
-### Phase 1 (Conviction-Scaled)
-
-| Score | Absolute Floor | Hard Timeout | Weak Peak | Dead Weight |
-|---|---|---|---|---|
-| 6-7 | -18% ROE | 25 min | 12 min | 8 min |
-| 8-9 | -25% ROE | 45 min | 20 min | 15 min |
-| 10+ | -30% ROE | 60 min | 30 min | 20 min |
-
-### Stagnation TP (MANDATORY)
-
-If ROE >= 10% and high water hasn't moved for 45 minutes, take profit.
-
----
-
-## Scanner Output — DSL State Template
-
-Each signal includes a `dslState` block. Write this directly as the state file.
+DSL exit is handled by the plugin runtime via `dsl.yaml`. See `dsl.yaml` and `dsl-implementation.md` for configuration details.
 
 **Entry flow:**
-1. Scanner outputs signal with `dslState` block
+1. Scanner outputs signal
 2. Verify positions < 3
 3. Verify exchange max leverage >= 7
 4. Call `create_position`
-5. Write `state/{TOKEN}.json` with exact `signal.dslState` plus `entryPrice`, `leverage`, `createdAt`
-6. Send ONE notification: position opened
-7. DSL cron picks up the state file
+5. Send ONE notification: position opened
+6. Plugin DSL monitor handles exit management automatically
 
 **On position close:**
-8. Call `record_stalker_result(tc, is_win)` if Stalker entry
+7. Call `record_stalker_result(tc, is_win)` if Stalker entry
 
 ---
 
@@ -145,10 +111,7 @@ Scanner cron (90 seconds, main session):
 python3 /data/workspace/skills/fox-strategy/scripts/fox-scanner.py
 ```
 
-DSL cron (3 minutes, isolated session):
-```
-python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-dir /data/workspace/skills/fox-strategy/state
-```
+DSL exit management is handled by the plugin runtime via `dsl.yaml` — no DSL cron needed.
 
 ---
 
@@ -156,8 +119,8 @@ python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-d
 
 On EVERY session start, check `config/bootstrap-complete.json`. If missing:
 1. Verify Senpi MCP
-2. Create scanner cron (90s, main) and DSL cron (3 min, isolated)
-3. Verify BOTH crons `status: ok`
+2. Create scanner cron (90s, main)
+3. Verify scanner cron `status: ok`
 4. Write `config/bootstrap-complete.json`
 5. Send: "🦊 FOX v2.0 online. minReasons experiment active. Score 7+, climb 8+, 3 reasons minimum. Silence = no conviction."
 
@@ -183,7 +146,7 @@ On EVERY session start, check `config/bootstrap-complete.json`. If missing:
 
 **ONLY alert:** Position OPENED (include reason count), position CLOSED (P&L + reason), streak gate activated/deactivated, critical error.
 
-**NEVER alert:** Scanner found nothing, DSL routine, any reasoning.
+**NEVER alert:** Scanner found nothing, any reasoning.
 
 ---
 
