@@ -107,7 +107,7 @@ their live open positions. Look for the vulnerability trigger:
 
 | Condition | Threshold | Why |
 |---|---|---|
-| Leverage | >= 20x | Over-leveraged = close to liquidation |
+| Leverage | >= 10x | Over-leveraged = closer to liquidation |
 | ROE | < -10% | Already bleeding = liquidation approaching |
 | Position exists | Active, not closed | Still in the trade |
 
@@ -122,8 +122,8 @@ Not every bleeding degen is worth fading. Score the setup:
 
 | Signal | Points | Description |
 |---|---|---|
-| Target leverage >= 20x | 2 | Base threshold |
-| Target leverage >= 40x | +1 | Extreme leverage = faster cascade |
+| Target leverage >= 10x | 2 | Base threshold |
+| Target leverage >= 20x | +1 | High leverage = faster cascade |
 | Target ROE < -10% | 2 | Base threshold |
 | Target ROE < -20% | +1 | Deep in the red = liquidation imminent |
 | Multiple degens on same asset/direction | +2 | Cluster = bigger cascade |

@@ -32,7 +32,7 @@ import lemon_config as cfg
 # ═══════════════════════════════════════════════════════════════
 
 # Target selection
-DEGEN_LEVERAGE_THRESHOLD = 20      # Target must be >= 20x leveraged
+DEGEN_LEVERAGE_THRESHOLD = 10      # Target must be >= 10x leveraged
 DEGEN_ROE_THRESHOLD = -10          # Target must be losing >= 10% ROE
 TARGET_LIMIT = 10                  # Scan top 10 DEGEN/CHOPPY traders
 
@@ -207,10 +207,10 @@ def score_vulnerability(vuln, all_vulns, sm_data):
         score += 2
         reasons.append(f"DEGEN_{degen_direction} {vuln['leverage']:.0f}x")
 
-    # Extreme leverage bonus
-    if vuln["leverage"] >= 40:
+    # High leverage bonus
+    if vuln["leverage"] >= 20:
         score += 1
-        reasons.append(f"EXTREME_LEV {vuln['leverage']:.0f}x")
+        reasons.append(f"HIGH_LEV {vuln['leverage']:.0f}x")
 
     # Base: bleeding threshold met
     if vuln["roe"] <= DEGEN_ROE_THRESHOLD:
