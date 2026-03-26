@@ -5,7 +5,7 @@ description: >-
   trading lessons applied. Stalker minScore raised to 7, minTotalClimb to 8.
   Stalker consecutive-loss streak gate: 3 losses in a row raises minScore to 9
   until a win resets. XYZ banned. Leverage 7-10x.
-  DSL exit managed by plugin runtime via dsl.yaml.
+  DSL exit managed by plugin runtime via recipe.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
@@ -14,6 +14,8 @@ metadata:
   exchange: hyperliquid
   based_on: orca-v1.1.1
   config_source: orca-v1.1.1-plus-fox-trade-data-lessons
+  requires:
+    - senpi-trading-runtime
 ---
 
 # 🐋 ORCA v1.2 — Hardened Dual-Mode Scanner + Fox's Lessons
@@ -36,13 +38,13 @@ Before opening ANY position, call `strategy_get_clearinghouse_state` and count o
 
 If the scanner says `minLeverage: 7`, you use 7. Not 5 from your MEMORY.md. The scanner is the single source of truth.
 
-### RULE 4: Verify scanner cron on every session start
+### RULE 4: Verify recipe is installed on every session start
 
-Run `openclaw crons list`. Scanner cron must be `status: ok`. DSL exit is handled by the plugin runtime.
+Run `openclaw senpi trading-recipe list`. Recipe must be listed. The position tracker and DSL exit are handled by the plugin runtime.
 
 ### RULE 5: Never retry timed-out position creation
 
-If `create_position` times out, check clearinghouse state. If position exists, create DSL state. If not, wait for next scan.
+If `create_position` times out, check clearinghouse state. If position exists, the position tracker will pick it up automatically. If not, wait for next scan.
 
 ### RULE 6: Never modify your own configuration
 
@@ -66,13 +68,9 @@ Fox v1.0 ran the Orca scanner for 5+ days. Analysis of 20 closed positions revea
 |---|---|---|---|
 | Stalker minScore | 6 | 7 | Score 6 entries were 100% losers (AVAX, PAXG) |
 | Stalker minTotalClimb | 5 | 8 | Weak +5/+6 climbs were noise, not accumulation |
-| Low-score absoluteFloorRoe | -20% | -18% | Tighter floor gets out faster on weak entries |
-| Low-score hardTimeoutMin | 30 | 25 | Don't wait as long for weak signals to prove |
-| Low-score weakPeakCutMin | 15 | 12 | Cut the weak peak bleed earlier |
-| Low-score deadWeightCutMin | 10 | 8 | Kill dead trades faster at low conviction |
 | Stalker streak gate | (none) | 3 consecutive losses → minScore raised to 9 | Prevents "death by a thousand cuts" bleed |
 
-**What's unchanged:** Striker logic, DSL tiers, stagnation TP, XYZ ban, leverage caps, max positions, cooldowns, all v1.1.1 DSL audit fixes.
+**What's unchanged:** Striker logic, DSL tiers, XYZ ban, leverage caps, max positions, cooldowns.
 
 ---
 
@@ -95,7 +93,7 @@ Fox v1.0 ran the Orca scanner for 5+ days. Analysis of 20 closed positions revea
 
 ## Exit Management
 
-DSL exit is handled by the plugin runtime via `dsl.yaml`. See `dsl.yaml` and `dsl-implementation.md` for configuration details.
+DSL exit is handled by the plugin runtime via `recipe.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `recipe.yaml` for configuration details.
 
 **Entry flow:**
 1. Scanner outputs signal
@@ -103,36 +101,51 @@ DSL exit is handled by the plugin runtime via `dsl.yaml`. See `dsl.yaml` and `ds
 3. Verify exchange max leverage >= 7 for this asset
 4. Call `create_position` with coin, direction, leverage, margin
 5. Send ONE notification: position opened
-6. Plugin DSL monitor handles exit management automatically
+6. `position_tracker` detects the new position automatically
+7. Plugin DSL monitor applies trailing stop-loss protection
+
+**Monitor positions:**
+- `openclaw senpi dsl positions` — list all DSL-tracked positions
+- `openclaw senpi dsl inspect <ASSET>` — full position details
 
 **On position close:**
-7. Record result: call `record_stalker_result(tc, is_win)` if the position was a Stalker entry
+8. Record result: call `record_stalker_result(tc, is_win)` if the position was a Stalker entry
 
 ---
 
-## Cron Setup
+## Recipe Setup
 
-**EXACT commands — copy-paste. Do not modify.**
-
-Scanner cron (90 seconds, main session):
+**Step 1:** Set your strategy wallet address in the recipe:
+```bash
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/orca-strategy/recipe.yaml
 ```
-python3 /data/workspace/skills/orca-strategy/scripts/orca-scanner.py
+Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
+
+**Step 2:** Install the trading recipe:
+```bash
+openclaw senpi trading-recipe create --path /data/workspace/skills/orca-strategy/recipe.yaml
 ```
 
-DSL exit management is handled by the plugin runtime via `dsl.yaml` — no DSL cron needed.
+**Step 3:** Verify:
+```bash
+openclaw senpi trading-recipe list
+```
 
 ---
 
 ## Bootstrap Gate
 
 On EVERY session start, check `config/bootstrap-complete.json`. If missing:
-1. Verify Senpi MCP
-2. Create scanner cron (90s, main)
-3. Verify scanner cron `status: ok`
-4. Write `config/bootstrap-complete.json`
-5. Send: "🐋 ORCA v1.2 online. Fox's lessons applied. Stalker minScore 7, climb 8+, streak gate active. Silence = no conviction."
+1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for recipe management and DSL position inspection.
+2. Verify Senpi MCP
+3. Set wallet in recipe: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/orca-strategy/recipe.yaml`
+4. Install recipe: `openclaw senpi trading-recipe create --path /data/workspace/skills/orca-strategy/recipe.yaml`
+5. Verify recipe installed: `openclaw senpi trading-recipe list`
+6. Create scanner cron (90s, main)
+7. Write `config/bootstrap-complete.json`
+8. Send: "🐋 ORCA v1.2 online. Fox's lessons applied. Stalker minScore 7, climb 8+, streak gate active. Silence = no conviction."
 
-If bootstrap exists, still verify scanner cron on every session start.
+If bootstrap exists, still verify recipe and scanner cron on every session start.
 
 ---
 
@@ -145,7 +158,6 @@ If bootstrap exists, still verify scanner cron on every session start.
 | Leverage | 7-10x | Sub-7x can't overcome fees; 15x blows up |
 | Daily loss limit | 10% | Proven across 30 agents |
 | Per-asset cooldown | 2 hours | PAXG double-entry lesson |
-| Stagnation TP | 10% ROE / 45 min | Captures peaks that flatline |
 | XYZ equities | Banned | Net negative across every agent |
 | Stalker streak gate | 3 consecutive Stalker losses → minScore 9 | Prevents weak-peak bleed |
 
@@ -166,6 +178,7 @@ If bootstrap exists, still verify scanner cron on every session start.
 | `scripts/orca-scanner.py` | Dual-mode scanner with Fox's lessons + streak gate |
 | `scripts/orca_config.py` | Config helper with stalkerResults tracking |
 | `config/orca-config.json` | Config with v1.2 Stalker thresholds |
+| `recipe.yaml` | Trading recipe for plugin runtime (DSL exit + position tracker) |
 
 ---
 

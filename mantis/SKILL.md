@@ -6,7 +6,7 @@ description: >-
   raised from 0.001 to 0.003 and the weak +1 tier (CONTRIB_POSITIVE) eliminated.
   Only genuine SM acceleration earns contribution points. Stalker minScore 7,
   minTotalClimb 8, tighter Phase 1 for low-score entries, consecutive-loss
-  streak gate. XYZ banned. Leverage 7-10x. DSL exit managed by plugin runtime via dsl.yaml.
+  streak gate. XYZ banned. Leverage 7-10x. DSL exit managed by plugin runtime via recipe.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
@@ -14,6 +14,8 @@ metadata:
   platform: senpi
   exchange: hyperliquid
   config_source: mantis-v2-plus-contrib-threshold-experiment
+  requires:
+    - senpi-trading-runtime
 ---
 
 # 🦗 MANTIS v3.0 — Dual-Mode Scanner + Contribution Threshold Experiment
@@ -36,9 +38,9 @@ Before opening ANY position, call `strategy_get_clearinghouse_state` and count o
 
 The scanner is the single source of truth for all trading parameters.
 
-### RULE 4: Verify scanner cron on every session start
+### RULE 4: Verify recipe is installed on every session start
 
-Run `openclaw crons list`. Scanner cron must be `status: ok`. DSL exit is handled by the plugin runtime.
+Run `openclaw senpi trading-recipe list`. Recipe must be listed. The position tracker and DSL exit are handled by the plugin runtime.
 
 ### RULE 5: Never retry timed-out position creation
 
@@ -89,7 +91,7 @@ After every Stalker position closes, call `record_stalker_result(tc, is_win)`.
 
 ## Exit Management
 
-DSL exit is handled by the plugin runtime via `dsl.yaml`. See `dsl.yaml` and `dsl-implementation.md` for configuration details.
+DSL exit is handled by the plugin runtime via `recipe.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `recipe.yaml` for configuration details.
 
 **Entry flow:**
 1. Scanner outputs signal
@@ -97,34 +99,51 @@ DSL exit is handled by the plugin runtime via `dsl.yaml`. See `dsl.yaml` and `ds
 3. Verify exchange max leverage >= 7
 4. Call `create_position`
 5. Send ONE notification: position opened
-6. Plugin DSL monitor handles exit management automatically
+6. `position_tracker` detects the new position automatically
+7. Plugin DSL monitor applies trailing stop-loss protection
+
+**Monitor positions:**
+- `openclaw senpi dsl positions` — list all DSL-tracked positions
+- `openclaw senpi dsl inspect <ASSET>` — full position details
 
 **On position close:**
-7. Call `record_stalker_result(tc, is_win)` if Stalker entry
+8. Call `record_stalker_result(tc, is_win)` if Stalker entry
 
 ---
 
-## Cron Setup
+## Recipe Setup
 
-**EXACT commands — copy-paste. Do not modify.**
-
-Scanner cron (90 seconds, main session):
+**Step 1:** Set your strategy wallet address in the recipe:
+```bash
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/mantis-strategy/recipe.yaml
 ```
-python3 /data/workspace/skills/mantis-strategy/scripts/mantis-scanner.py
+Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
+
+**Step 2:** Install the trading recipe:
+```bash
+openclaw senpi trading-recipe create --path /data/workspace/skills/mantis-strategy/recipe.yaml
 ```
 
-DSL exit management is handled by the plugin runtime via `dsl.yaml` — no DSL cron needed.
+**Step 3:** Verify:
+```bash
+openclaw senpi trading-recipe list
+```
 
 ---
 
 ## Bootstrap Gate
 
 On EVERY session start, check `config/bootstrap-complete.json`. If missing:
-1. Verify Senpi MCP
-2. Create scanner cron (90s, main)
-3. Verify scanner cron `status: ok`
-4. Write `config/bootstrap-complete.json`
-5. Send: "🦗 MANTIS v3.0 online. Contrib threshold 0.003, no weak tier. Silence = no conviction."
+1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for recipe management and DSL position inspection.
+2. Verify Senpi MCP
+3. Set wallet in recipe: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/mantis-strategy/recipe.yaml`
+4. Install recipe: `openclaw senpi trading-recipe create --path /data/workspace/skills/mantis-strategy/recipe.yaml`
+5. Verify recipe installed: `openclaw senpi trading-recipe list`
+6. Create scanner cron (90s, main)
+7. Write `config/bootstrap-complete.json`
+8. Send: "🦗 MANTIS v3.0 online. Contrib threshold 0.003, no weak tier. Silence = no conviction."
+
+If bootstrap exists, still verify recipe and scanner cron on every session start.
 
 ---
 
@@ -137,7 +156,6 @@ On EVERY session start, check `config/bootstrap-complete.json`. If missing:
 | Leverage | 7-10x |
 | Daily loss limit | 10% |
 | Per-asset cooldown | 2 hours |
-| Stagnation TP | 10% ROE / 45 min |
 | XYZ equities | Banned |
 | Contrib accel threshold | 0.003 (experiment, was 0.001) |
 | Stalker streak gate | 3 losses → minScore 9 |
@@ -159,6 +177,7 @@ On EVERY session start, check `config/bootstrap-complete.json`. If missing:
 | `scripts/mantis-scanner.py` | Dual-mode scanner with contrib threshold experiment |
 | `scripts/mantis_config.py` | Config helper with stalkerResults tracking |
 | `config/mantis-config.json` | Config with Mantis v3.0 thresholds |
+| `recipe.yaml` | Trading recipe for plugin runtime (DSL exit + position tracker) |
 
 ---
 
