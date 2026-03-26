@@ -139,7 +139,7 @@ Code preserved for reference. Each was retired based on live performance data or
 | 👻 Ghost Fox | 1,078 | **-58.5%** | Over-trading kills |
 | 🐅 Tiger | 726 | **-58.0%** | More scanners ≠ better results |
 
-### The #1 Bug: Missing DSL Wallet Fields
+### Missing DSL Wallet Fields
 
 8 agents lost a combined **$3,000+** from the same root cause: the Python scanner generates a DSL state file without `wallet` and `strategyWalletAddress` fields, so dsl-v5.py can't match the state file to the on-chain position, and the position runs unprotected.
 
@@ -152,12 +152,6 @@ Agents hit: Jaguar, Condor, Bald Eagle, Wolverine, Orca v1.2, Fox, Hydra, Grizzl
 When the scanner re-evaluates open positions and closes them on "thesis invalidation," it chops winners before DSL can trail them. Wolverine v1.1 lost -23.4% because the scanner killed 25 of 27 trades. The one trade it let run (+29.9% ROE) was worth more than all other winners combined.
 
 **Fix:** All v2.0 scanners output `NO_REPLY` when a position is active. DSL is the only exit mechanism.
-
-### Fee Bleed from Rapid Cycling
-
-Orca v1.1 had +$136 gross P&L across 3 days — the scanner finds real edge. But $279 in exchange fees from 80 trades ate all the profit. DSL stops out quickly → slot opens → scanner re-enters immediately → fees compound.
-
-**Fix:** `MAX_ENTRIES_PER_DAY` hardcoded in every v2.0 scanner.
 
 ---
 
