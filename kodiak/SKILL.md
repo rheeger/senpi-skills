@@ -5,7 +5,8 @@ description: >-
   (SM, funding, OI, 4TF trend, volume, BTC correlation). Three-mode lifecycle:
   HUNTING (scan for entry) / RIDING (DSL trails) / STALKING (watch for reload on dip).
   After DSL takes profit, watches for fresh momentum impulse while confirming macro thesis
-  is intact. If thesis dies, resets. If dip reloads, re-enters. DSL High Water Mode (mandatory).
+  is intact. If thesis dies, resets. If dip reloads, re-enters.
+  DSL exit managed by plugin runtime via recipe.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
@@ -13,6 +14,8 @@ metadata:
   platform: senpi
   exchange: hyperliquid
   base_skill: grizzly-v2.0
+  requires:
+    - senpi-trading-runtime
 ---
 
 # KODIAK v1.0 — SOL Alpha Hunter with Position Lifecycle
@@ -31,7 +34,7 @@ Scan SOL every 3 minutes. All signals must align (4h trend, 1h momentum, SM, fun
 
 ### MODE 2 — RIDING
 
-Active position. DSL High Water trails it. Thesis re-evaluation every scan. If thesis breaks (4h trend flips, SM flips, funding extreme, volume dies, BTC diverges) -> thesis exit and reset to MODE 1. If DSL closes the position -> switch to MODE 3.
+Active position. DSL trails it via the plugin runtime. Thesis re-evaluation every scan. If thesis breaks (4h trend flips, SM flips, funding extreme, volume dies, BTC diverges) -> thesis exit and reset to MODE 1. If DSL closes the position -> switch to MODE 3.
 
 ### MODE 3 — STALKING
 
@@ -56,14 +59,6 @@ If ALL pass -> RELOAD. Re-enter same direction, same leverage. Switch to MODE 2.
 - Funding spiked above 100% annualized
 
 **maxPositions: 1.** KODIAK holds one SOL position at a time.
-
-## MANDATORY: DSL High Water Mode
-
-**KODIAK MUST use DSL High Water Mode. This is not optional.**
-
-Spec: https://github.com/Senpi-ai/senpi-skills/blob/main/dsl-dynamic-stop-loss/dsl-high-water-spec%201.0.md
-
-DSL tiers in `kodiak-config.json`. Arm DSL immediately after every entry fill. Zero naked positions.
 
 ## Why SOL-Only at 7-12x Leverage
 
@@ -111,6 +106,14 @@ Maximum score: ~18. Minimum to enter: 10.
 | 12-13 | 25% |
 | 14+ | 30% |
 
+## Exit Management
+
+DSL exit is handled by the plugin runtime via `recipe.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `recipe.yaml` for configuration details.
+
+**Monitor positions:**
+- `openclaw senpi dsl positions` — list all DSL-tracked positions
+- `openclaw senpi dsl inspect <ASSET>` — full position details
+
 ## Risk Management
 
 | Rule | Value |
@@ -120,29 +123,56 @@ Maximum score: ~18. Minimum to enter: 10.
 | Drawdown halt | 25% from peak |
 | Daily loss limit | 10% |
 | Cooldown | 120 min after 3 consecutive losses |
-| Stagnation TP | 10% ROE stale 75 min |
 
-## Cron Architecture
+## Recipe Setup
 
-| Cron | Interval | Session | Purpose |
-|---|---|---|---|
-| Scanner | 3 min | isolated | Thesis builder + re-evaluator + stalk/reload |
-| DSL v5 | 3 min | isolated | High Water Mode trailing stops |
+**Step 1:** Set your strategy wallet address in the recipe:
+```bash
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/kodiak-strategy/recipe.yaml
+```
+Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
 
-Both MUST be isolated sessions with `agentTurn`. Use `NO_REPLY` for idle cycles.
+**Step 2:** Set telegram chat ID for notifications:
+```bash
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/kodiak-strategy/recipe.yaml
+```
+Replace `<CHAT_ID>` with the actual Telegram chat ID.
+
+**Step 3:** Install the trading recipe:
+```bash
+openclaw senpi trading-recipe create --path /data/workspace/skills/kodiak-strategy/recipe.yaml
+```
+
+**Step 4:** Verify:
+```bash
+openclaw senpi trading-recipe list
+```
+
+---
+
+## Bootstrap Gate
+
+On EVERY session start, check `config/bootstrap-complete.json`. If missing:
+1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for recipe management and DSL position inspection.
+2. Verify Senpi MCP
+3. Set wallet in recipe: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/kodiak-strategy/recipe.yaml`
+4. Set telegram in recipe: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/kodiak-strategy/recipe.yaml`
+5. Install recipe: `openclaw senpi trading-recipe create --path /data/workspace/skills/kodiak-strategy/recipe.yaml`
+6. Verify recipe installed: `openclaw senpi trading-recipe list`
+7. Create scanner cron (3 min, isolated)
+8. Write `config/bootstrap-complete.json`
+9. Send: "KODIAK is online. Watching SOL. DSL managed by plugin runtime. Silence = no conviction."
+
+If bootstrap exists, still verify recipe and scanner cron on every session start.
+
+---
 
 ## Notification Policy
 
 **ONLY alert:** Position OPENED (direction, leverage, score, reasons), position CLOSED (DSL or thesis exit), risk guardian triggered, critical error.
-**NEVER alert:** Scanner found no thesis, thesis re-eval passed, DSL routine, any reasoning.
+**NEVER alert:** Scanner found no thesis, thesis re-eval passed, any reasoning.
 
-## Bootstrap Gate
-
-On EVERY session, check `config/bootstrap-complete.json`. If missing:
-1. Verify Senpi MCP
-2. Create scanner cron (3 min, isolated) and DSL cron (3 min, isolated)
-3. Write `config/bootstrap-complete.json`
-4. Send: "🐻 KODIAK is online. Watching SOL. DSL High Water Mode active. Silence = no conviction."
+---
 
 ## Expected Behavior
 
@@ -154,13 +184,18 @@ On EVERY session, check `config/bootstrap-complete.json`. If missing:
 | Avg winner | 20-50%+ ROE |
 | Avg loser | -20 to -40% ROE |
 
+---
+
 ## Files
 
 | File | Purpose |
 |---|---|
 | `scripts/kodiak-scanner.py` | SOL thesis builder + re-evaluator + stalk/reload |
 | `scripts/kodiak_config.py` | Shared config, MCP helpers, state I/O |
-| `config/kodiak-config.json` | All configurable variables with DSL High Water tiers |
+| `config/kodiak-config.json` | All configurable variables |
+| `recipe.yaml` | Trading recipe for plugin runtime (DSL exit + position tracker) |
+
+---
 
 ## License
 

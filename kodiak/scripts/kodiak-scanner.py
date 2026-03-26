@@ -520,47 +520,6 @@ def evaluate_reload(exit_state, entry_cfg):
 MAX_LEVERAGE = 10         # Capped from 15-20x
 MIN_LEVERAGE = 7
 
-KODIAK_DSL_TIERS = [
-    {"triggerPct": 7,  "lockHwPct": 40, "consecutiveBreachesRequired": 3},
-    {"triggerPct": 12, "lockHwPct": 55, "consecutiveBreachesRequired": 2},
-    {"triggerPct": 15, "lockHwPct": 75, "consecutiveBreachesRequired": 2},
-    {"triggerPct": 20, "lockHwPct": 85, "consecutiveBreachesRequired": 1},
-]
-
-KODIAK_CONVICTION_TIERS = [
-    {"minScore": 8,  "absoluteFloorRoe": -25, "hardTimeoutMin": 45, "weakPeakCutMin": 20, "deadWeightCutMin": 15},
-    {"minScore": 10, "absoluteFloorRoe": -30, "hardTimeoutMin": 60, "weakPeakCutMin": 30, "deadWeightCutMin": 20},
-    {"minScore": 12, "absoluteFloorRoe": -35, "hardTimeoutMin": 90, "weakPeakCutMin": 45, "deadWeightCutMin": 30},
-]
-
-KODIAK_STAGNATION_TP = {"enabled": True, "roeMin": 10, "hwStaleMin": 45}
-
-
-def build_dsl_state_template(direction, score):
-    """Build exact DSL state file for a Kodiak SOL position."""
-    tier = KODIAK_CONVICTION_TIERS[0]
-    for ct in KODIAK_CONVICTION_TIERS:
-        if score >= ct["minScore"]:
-            tier = ct
-    return {
-        "active": True, "asset": "SOL", "direction": direction, "score": score,
-        "phase": 1, "highWaterPrice": None, "highWaterRoe": None,
-        "currentTierIndex": -1, "consecutiveBreaches": 0,
-        "lockMode": "pct_of_high_water", "phase2TriggerRoe": 7,
-        "phase1": {
-            "enabled": True, "retraceThreshold": 0.03, "consecutiveBreachesRequired": 3,
-            "phase1MaxMinutes": tier["hardTimeoutMin"],
-            "weakPeakCutMinutes": tier["weakPeakCutMin"],
-            "deadWeightCutMin": tier["deadWeightCutMin"],
-            "weakPeakCut": {"enabled": True, "intervalInMinutes": tier["weakPeakCutMin"], "minValue": 3.0},
-        },
-        "phase2": {"enabled": True, "retraceThreshold": 0.015, "consecutiveBreachesRequired": 2},
-        "tiers": KODIAK_DSL_TIERS,
-        "stagnationTp": KODIAK_STAGNATION_TP,
-        "execution": {"phase1SlOrderType": "MARKET", "phase2SlOrderType": "MARKET", "breachCloseOrderType": "MARKET"},
-        "_kodiak_version": "1.1.1",
-    }
-
 
 # ─── Main ─────────────────────────────────────────────────────
 
@@ -668,7 +627,6 @@ def run():
                         "margin": margin,
                         "orderType": config.get("execution", {}).get("entryOrderType", "FEE_OPTIMIZED_LIMIT"),
                     },
-                    "dslState": build_dsl_state_template(direction, 10),
                     "reasons": reasons,
                     "note": f"STALKING → RELOAD: fresh impulse confirmed, re-entering SOL {direction}",
                 })
@@ -756,13 +714,9 @@ def run():
             "margin": margin,
             "orderType": config.get("execution", {}).get("entryOrderType", "FEE_OPTIMIZED_LIMIT"),
         },
-        "dslState": build_dsl_state_template(thesis["direction"], thesis["score"]),
         "constraints": {
             "minLeverage": MIN_LEVERAGE,
             "maxLeverage": MAX_LEVERAGE,
-            "stagnationTp": KODIAK_STAGNATION_TP,
-            "dslTiers": KODIAK_DSL_TIERS,
-            "_dslNote": "Use dslState as the DSL state file. Do NOT merge with dsl-profile.json.",
         },
     })
 

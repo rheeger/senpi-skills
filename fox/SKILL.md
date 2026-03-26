@@ -117,12 +117,18 @@ sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/f
 ```
 Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
 
-**Step 2:** Install the trading recipe:
+**Step 2:** Set telegram chat ID for notifications:
+```bash
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/fox-strategy/recipe.yaml
+```
+Replace `<CHAT_ID>` with the actual Telegram chat ID.
+
+**Step 3:** Install the trading recipe:
 ```bash
 openclaw senpi trading-recipe create --path /data/workspace/skills/fox-strategy/recipe.yaml
 ```
 
-**Step 3:** Verify:
+**Step 4:** Verify:
 ```bash
 openclaw senpi trading-recipe list
 ```
@@ -135,11 +141,12 @@ On EVERY session start, check `config/bootstrap-complete.json`. If missing:
 1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for recipe management and DSL position inspection.
 2. Verify Senpi MCP
 3. Set wallet in recipe: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/fox-strategy/recipe.yaml`
-4. Install recipe: `openclaw senpi trading-recipe create --path /data/workspace/skills/fox-strategy/recipe.yaml`
-5. Verify recipe installed: `openclaw senpi trading-recipe list`
-6. Create scanner cron (90s, main)
-7. Write `config/bootstrap-complete.json`
-8. Send: "🦊 FOX v2.0 online. minReasons experiment active. Score 7+, climb 8+, 3 reasons minimum. Silence = no conviction."
+4. Set telegram in recipe: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/fox-strategy/recipe.yaml`
+5. Install recipe: `openclaw senpi trading-recipe create --path /data/workspace/skills/fox-strategy/recipe.yaml`
+6. Verify recipe installed: `openclaw senpi trading-recipe list`
+7. Create scanner cron (90s, main)
+8. Write `config/bootstrap-complete.json`
+9. Send: "🦊 FOX v2.0 online. minReasons experiment active. Score 7+, climb 8+, 3 reasons minimum. Silence = no conviction."
 
 If bootstrap exists, still verify recipe and scanner cron on every session start.
 
