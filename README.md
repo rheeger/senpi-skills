@@ -1,4 +1,4 @@
-[README (8).md](https://github.com/user-attachments/files/26147922/README.8.md)
+[senpi-skills-README (1).md](https://github.com/user-attachments/files/26288945/senpi-skills-README.1.md)
 # Senpi Skills — Autonomous AI Trading Agents for Hyperliquid
 
 30+ AI trading skills. Open source. Real money. Live tracked.
@@ -6,66 +6,87 @@
 Senpi Skills is the open-source repository for autonomous trading strategies on [Hyperliquid](https://hyperliquid.xyz) via [Senpi](https://senpi.ai). Each skill is a self-contained trading agent that scans markets, enters and exits positions, manages trailing stops, and protects capital — autonomously, 24/7, with no human in the loop.
 
 **Live tracker:** [strategies.senpi.ai](https://strategies.senpi.ai)
+**Arena competition:** [senpi.ai/arena](https://senpi.ai/arena)
 
 ---
 
-
 ## Active Skills
 
-### The A/B/C/D Experiment (Stalker/Striker Scanner Variants)
+### Top Performers
 
-Four agents running the same base scanner, same capital, same market. Only the Stalker filter differs.
-
-| Skill | Version | Experiment Variable | Description |
+| Skill | Version | ROE | Description |
 |---|---|---|---|
-| 🐋 [ORCA](./orca) | v1.2 | Control | Dual-mode SM scanner. Stalker minScore 7, climb 8+, streak gate. Fox's lessons applied. |
-| 🦊 [FOX](./fox) | v2.0 | Breadth | Stalker requires 3+ distinct scoring reasons. Tests confirmation breadth. |
-| 🦗 [MANTIS](./mantis) | v3.0 | Signal quality | Contribution acceleration threshold 3x higher, weak +1 tier eliminated. Tests SM velocity quality. |
-| 🪳 [ROACH](./roach) | v1.0 | Stalker elimination | Striker only. Stalker disabled entirely. Tests whether Stalker is pure drag. |
+| 🐻‍❄️ [POLAR](./polar) | v1.0 | **+23.6%** | ETH lifecycle hunter. HUNT → RIDE → STALK → RELOAD. The proof that single-asset patience wins. |
+| 🦗 [MANTIS](./mantis) | v3.0 | **+5.6%** | Hardened SM scanner. Contribution acceleration quality gate. Steady performer. |
+| 🪳 [ROACH](./roach) | v1.0 | **+5.3%** | Striker-only. No Stalker. The A/B experiment winner — violent explosions only. |
+
+### The Stalker vs Striker Experiment
+
+Does Stalker (accumulation detection) add value on top of Striker (explosion detection)?
+
+| Skill | Version | Strategy | ROE | Verdict |
+|---|---|---|---|---|
+| 🪳 [ROACH](./roach) | v1.0 | Striker only | +5.3% | **Leading** |
+| 🐋 [ORCA](./orca) | v1.3 | Stalker + Striker | 0.0% | Just deployed — collecting data |
+| 🪳 [ROACH-B](./roach) | v1.0 | Striker only (variant B) | -0.3% | Early — 4 trades |
+
+### v2.0 Fleet (Hardened Rebuilds)
+
+These agents replace v1.0 versions that failed due to infrastructure bugs (missing DSL wallet fields, thesis exit chopping winners, broken cron coordination). All v2.0 agents share: DSL state with wallet + size fields, no thesis exit, reduced leverage, daily entry caps.
+
+| Skill | Version | Description | Replaces |
+|---|---|---|---|
+| 🦡 [WOLVERINE](./wolverine) | v2.0 | HYPE hunter. Entry-only scanner, 7x leverage, score 8+, 4H/1H alignment required. | v1.1 (-23.4%) |
+| 🦅 [CONDOR](./condor) | v2.0 | Multi-asset (BTC/ETH/SOL/HYPE). Thesis exit removed. DSL manages exits. | v1.0.1 (-24.9%) |
+| 🐆 [JAGUAR](./jaguar) | v2.0 | Striker-only. Stalker and Hunter removed. Pyramiding removed. | v1.0 (-29.3%) |
+| 🦈 [SHARK](./shark) | v2.0 | SM conviction scanner. 8-cron pipeline consolidated to 1 scanner. 4-gate entry. | v1.0 (-4.6%) |
+
+### New Strategies
+
+| Skill | Version | Description |
+|---|---|---|
+| 🍋 [LEMON](./lemon) | v1.0 | **The Degen Fader.** Finds DEGEN/CHOPPY traders via `discovery_get_top_traders`, waits until they're bleeding at 10x+ leverage and -10%+ ROE, counter-trades them. Rides the liquidation cascade. |
+| 🦅 [BALD EAGLE](./bald-eagle) | v2.0 | **XYZ Alpha Hunter.** Trades all 54 XYZ assets (commodities, indices, equities, currencies). Spread gate (>0.1% = rejected) filters illiquid assets. The only agent covering non-crypto markets. |
+
+### Single-Asset Hunters
+
+| Skill | Version | Asset | ROE | Description |
+|---|---|---|---|---|
+| 🐻‍❄️ [POLAR](./polar) | v1.0 | ETH | +23.6% | Three-mode lifecycle. The patience benchmark. |
+| 🐻 [GRIZZLY](./grizzly) | v2.1.1 | BTC | +0.1% | BTC lifecycle hunter. Recovering. |
+| 🐻 [KODIAK](./kodiak) | v2.0 | SOL | -2.3% | SOL hunter. Has $80 unrealized gains running. |
+| 🦡 [WOLVERINE](./wolverine) | v2.0 | HYPE | 0.0% | Waiting for HYPE trend alignment. Correct behavior in chop. |
+| 🐆 CHEETAH | v1.0 | HYPE | 0.0% | Different scanner than Wolverine. Zero trades in chop = correct. |
 
 ### Gen-2 Intelligence
 
 | Skill | Version | Description |
 |---|---|---|
-| 🐆 [JAGUAR](./jaguar) | v1.0 | Three-mode scanner (Stalker + Striker + Hunter) with gen-2 signal intelligence. TCS/TRP quality tags, momentum events, contribution velocity. Pyramiding on Phase 2 winners. Max 7 positions. |
-| 🐉 [HYDRA](./hydra) | v1.0 | Six-source squeeze scanner. Funding divergence, liquidation cascades, OI surges, momentum exhaustion, SM consensus, trend alignment. Independent monitor watchdog. Self-learning tier disablement. |
-| 🦅 [RAPTOR](./raptor) | v1.0 | Tier 2 momentum events filtered by TCS/TRP quality tags + SM leaderboard confluence. 3-5 trades/day. |
-| 🔥 [PHOENIX](./phoenix) | v1.0.1 | Contribution velocity scanner. SM profit velocity diverging from price. One API call, zero state. |
-| 🛡️ [SENTINEL](./sentinel) | v1.0 | Inverted pipeline: finds rising assets → verifies quality traders via momentum event tags. Most selective scanner in fleet. |
-
-### Momentum Pyramider
-
-| Skill | Version | Description |
-|---|---|---|
-| 🦏 [RHINO](./rhino) | v2.0 | Enter small (30%), add at +10% ROE (40%), add at +20% ROE (30%). Thesis re-validated before every add. Hardened after March 19 death loop. 🟡 Ready — awaiting deployment. |
-
-### Single-Asset Hunters
-
-| Skill | Version | Asset | Description |
-|---|---|---|---|
-| 🐻 [GRIZZLY](./grizzly) | v2.1.1 | BTC | Three-mode lifecycle: HUNT → RIDE → STALK → RELOAD. 10x cap. |
-| 🐻‍❄️ [POLAR](./polar) | v1.0 | ETH | #1 performer at +28.1%. The proof that single-asset + lifecycle works. |
-| 🐻 [KODIAK](./kodiak) | v1.1.1 | SOL | Tighter DSL floors for SOL's volatility. 10x cap. |
-| 🦡 [WOLVERINE](./wolverine) | v1.1 | HYPE | 5-10x leverage. BTC divergence is bonus-only. |
-| 🐆 CHEETAH | v1.0 | HYPE | Different scanner than Wolverine. Zero trades in chop = correct. |
-| 🦅 [CONDOR](./condor) | v1.0.1 | Multi | BTC/ETH/SOL/HYPE — picks strongest thesis. Conviction-scaled margin. |
+| 🐉 [HYDRA](./hydra) | v1.0 | Six-source squeeze scanner. FDD primary gate. Recovering from threshold bug. |
+| 🦅 [RAPTOR](./raptor) | v1.0 | Tier 2 momentum events + TCS/TRP quality tags. Waiting for signals. |
+| 🔥 [PHOENIX](./phoenix) | v1.0.1 | Contribution velocity scanner. SM profit velocity diverging from price. |
+| 🛡️ [SENTINEL](./sentinel) | v1.0 | Inverted pipeline: rising assets → verify quality traders. Most selective scanner. |
 
 ### Specialized Scanners
 
 | Skill | Version | Description |
 |---|---|---|
 | 🦬 [BISON](./bison) | v1.2.1 | Conviction trend holder. Requires 4H/1H agreement. Zero trades in chop = correct. |
-| 🐟 [BARRACUDA](./barracuda) | v1.0.1 | Funding decay collector. 6-gate model. Building local funding history (230 assets, 11K+ snapshots). |
-| 🦉 [OWL](./owl) | v5.2 | Contrarian crowding-unwind. Five-factor model. |
-| 🦅 [HAWK](./hawk-trading-bot) | v1.2 | Single best signal picker. 20x leverage (too high — monitoring). |
-| 🦅 [BALD EAGLE](./bald-eagle) | v1.0 | XYZ equities only (tokenized stocks: S&P500, NVDA, GOLD, SILVER). Lower trader thresholds for thin markets. |
-| 🦎 [KOMODO](./komodo) | v1.0 | Momentum event consensus. Uses real-time leaderboard_get_momentum_events. |
+| 🐟 [BARRACUDA](./barracuda) | v1.0.1 | Funding decay collector. Building local funding history (230 assets, 11K+ snapshots). |
+| 🦉 [OWL](./owl) | v5.2 | Contrarian crowding-unwind. |
+| 🦅 [HAWK](./hawk-trading-bot) | v1.2 | Single best signal picker. 20x leverage (flagged — too high). |
+
+### Volume Engine
+
+| Skill | Version | Description |
+|---|---|---|
+| 🦈 [MAKO](./mako-strategy) | v5.1 | Self-contained volume generation engine. Single Python process, infinite loop, no crons, no LLM in execution path. Generates $200K+/day volume on BTC/ETH. |
 
 ### Shared Infrastructure
 
 | Plugin | Purpose |
 |---|---|
-| [DSL Dynamic Stop Loss](./dsl-dynamic-stop-loss) | Trailing stop engine. [High Water Mode spec](./dsl-dynamic-stop-loss/dsl-high-water-spec%201.0.md). |
+| [DSL Dynamic Stop Loss](./dsl-dynamic-stop-loss) | Trailing stop engine. [High Water Mode spec](./dsl-dynamic-stop-loss/dsl-high-water-spec%201.0.md). Being migrated to plugin runtime. |
 | [Fee Optimizer](./fee-optimizer) | ALO vs MARKET decision, fee computations. |
 | [Emerging Movers](./emerging-movers) | Leaderboard scanner shared by FOX, WOLF, and VIXEN. |
 | [Opportunity Scanner](./opportunity-scanner) | Deep 4-stage funnel scanner. |
@@ -74,45 +95,69 @@ Four agents running the same base scanner, same capital, same market. Only the S
 
 ---
 
-## Paused Skills
+## Retired Skills
 
-These skills are not actively trading. Code is preserved for reference and potential reactivation. Each was paused based on live performance data.
+Code preserved for reference. Each was retired based on live performance data or replaced by a v2.0 rebuild.
 
-| Skill | Last Version | Reason Paused | Replaced By |
+| Skill | Last Version | ROE | Replaced By |
 |---|---|---|---|
-| 🦊 [VIXEN](./vixen) | v1.0 | -47.3% ROI. Scanner logic absorbed into Orca. | Orca v1.2 |
-| 👻 [Ghost Fox](./ghost-fox-strategy) | v2.0 | -58.5% ROI. 1,078 trades. Fee drag. | Orca v1.2 |
-| 🦊 [Feral Fox](./feral-fox-v3-strategy.md) | v3.0 | -31.5% ROI. | Orca v1.2 |
-| 🐺 [Dire Wolf](./wolf-strategy) | v1.0 | -42.3% ROI. | Orca v1.2 |
-| 🐺 [WOLF](./wolf-strategy) | v1.0 | Base scanner superseded. | Orca v1.2 |
-| 🐍 [COBRA](./cobra) | v2.0 | -53.0% ROI. | Paused |
-| 🐍 [MAMBA](./mamba) | v1.0 | -36.8% ROI. | Paused |
-| 🐍 [ANACONDA](./anaconda) | v1.0 | -21.9% ROI. | Paused |
-| 🐍 [VIPER](./viper) | v1.0 | -19.9% ROI. | Paused |
-| 🐺 [JACKAL](./jackal) | v2.0 | -32.8% ROI. | Paused |
-| 🦂 [SCORPION](./scorpion) | v2.0 | -21.1% ROI. Stale position data. | Komodo v1.0 |
-| 🐅 [TIGER](./tiger-strategy) | v1.0 | -58.0% ROI. Over-trading. | Paused |
-| 🦈 [SHARK](./shark) | v1.0 | -4.3% ROI. | Paused |
-| 🐊 [CROC](./croc) | v1.0 | -42.9% ROI. Fee drag. | Paused |
-| 🐊 [GATOR](./gator) | v1.0 | Funding arb underperformed. | Paused |
-| 🦅 EAGLE | v1.0 | Correlation breaks not profitable. | Paused |
-| 🐆 PANTHER | v1.0 | BB squeeze scalping not profitable. | Paused |
+| 🐋 [ORCA](./orca) | v1.1 | -10.0% | Orca v1.3 |
+| 🐋 [ORCA](./orca) | v1.2 | -1.5% | Orca v1.3 (infrastructure failures) |
+| 🦊 [FOX](./fox) | v2.0 | -9.3% | Experiment concluded — Roach won |
+| 🦡 [WOLVERINE](./wolverine) | v1.1 | -23.4% | Wolverine v2.0 |
+| 🦅 [CONDOR](./condor) | v1.0.1 | -24.9% | Condor v2.0 |
+| 🐆 [JAGUAR](./jaguar) | v1.0 | -29.3% | Jaguar v2.0 |
+| 🦈 [SHARK](./shark) | v1.0 | -4.6% | Shark v2.0 |
+| 🦅 [BALD EAGLE](./bald-eagle) | v1.0 | -28.6% | Bald Eagle v2.0 |
+| 🦊 [VIXEN](./vixen) | v1.0 | -47.3% | Orca v1.2 |
+| 👻 [Ghost Fox](./ghost-fox-strategy) | v2.0 | -58.5% | Orca v1.2 |
+| 🦊 [Feral Fox](./feral-fox-v3-strategy.md) | v3.0 | -31.5% | Orca v1.2 |
+| 🐺 [Dire Wolf](./wolf-strategy) | v1.0 | -42.3% | Orca v1.2 |
+| 🐍 [COBRA](./cobra) | v2.0 | -53.0% | Retired |
+| 🐍 [MAMBA](./mamba) | v1.0 | -36.8% | Retired |
+| 🐍 [ANACONDA](./anaconda) | v1.0 | -21.9% | Retired |
+| 🐍 [VIPER](./viper) | v1.0 | -19.9% | Retired |
+| 🐺 [JACKAL](./jackal) | v2.0 | -32.8% | Retired |
+| 🦂 [SCORPION](./scorpion) | v2.0 | -21.1% | Retired |
+| 🐅 [TIGER](./tiger-strategy) | v1.0 | -58.0% | Retired |
+| 🐊 [CROC](./croc) | v1.0 | -42.9% | Retired |
+| 🐊 [GATOR](./gator) | v1.0 | N/A | Retired |
 
 ---
 
-## The Proven Pattern
+## Lessons from 30+ Live Agents
 
-Across all 30+ skills, one pattern dominates: **fewer trades + higher conviction + wider stops = better performance.**
+### The Proven Pattern
 
-| Agent | Trades | Return | The Lesson |
+**Fewer trades + higher conviction + wider stops = better performance.**
+
+| Agent | Trades | ROE | The Lesson |
 |---|---|---|---|
-| 🐻‍❄️ Polar | 29 | **+28.1%** | Single asset, lifecycle patience, wide stops |
-| 🦗 Mantis | 460 | **+5.6%** | SM scanner, moderate frequency |
-| 🦊 Fox | 554 | **+3.7%** | Selective entries, let winners run |
+| 🐻‍❄️ Polar | 71 | **+23.6%** | Single asset, lifecycle patience, wide stops |
+| 🪳 Roach | 100 | **+5.3%** | Striker-only, highest conviction entries |
+| 🦗 Mantis | 460 | **+5.6%** | SM quality gate, moderate frequency |
 | 👻 Ghost Fox | 1,078 | **-58.5%** | Over-trading kills |
 | 🐅 Tiger | 726 | **-58.0%** | More scanners ≠ better results |
 
-Every winning skill upgrade has tightened entry filters, not loosened stop losses.
+### The #1 Bug: Missing DSL Wallet Fields
+
+8 agents lost a combined **$3,000+** from the same root cause: the Python scanner generates a DSL state file without `wallet` and `strategyWalletAddress` fields, so dsl-v5.py can't match the state file to the on-chain position, and the position runs unprotected.
+
+Agents hit: Jaguar, Condor, Bald Eagle, Wolverine, Orca v1.2, Fox, Hydra, Grizzly.
+
+**Fix:** All v2.0 scanners include wallet fields in DSL state. The DSL plugin (shipping soon) eliminates state files entirely.
+
+### Thesis Exit Kills Winners
+
+When the scanner re-evaluates open positions and closes them on "thesis invalidation," it chops winners before DSL can trail them. Wolverine v1.1 lost -23.4% because the scanner killed 25 of 27 trades. The one trade it let run (+29.9% ROE) was worth more than all other winners combined.
+
+**Fix:** All v2.0 scanners output `NO_REPLY` when a position is active. DSL is the only exit mechanism.
+
+### Fee Bleed from Rapid Cycling
+
+Orca v1.1 had +$136 gross P&L across 3 days — the scanner finds real edge. But $279 in exchange fees from 80 trades ate all the profit. DSL stops out quickly → slot opens → scanner re-enters immediately → fees compound.
+
+**Fix:** `MAX_ENTRIES_PER_DAY` hardcoded in every v2.0 scanner.
 
 ---
 
@@ -122,18 +167,26 @@ Every active skill uses this DSL state pattern. If any field is wrong, the agent
 
 ```json
 {
+  "active": true,
+  "wallet": "<strategy_wallet_address>",
+  "strategyWalletAddress": "<strategy_wallet_address>",
+  "strategyId": "<strategy_id>",
+  "size": null,
   "highWaterPrice": null,
   "highWaterRoe": null,
   "phase1": {
     "consecutiveBreachesRequired": 3,
-    "phase1MaxMinutes": 30,
-    "deadWeightCutMin": 10,
-    "absoluteFloorRoe": -20
+    "phase1MaxMinutes": 25,
+    "deadWeightCutMin": 8,
+    "absoluteFloorRoe": -18,
+    "retraceThreshold": 0.08
   }
 }
 ```
 
-Critical field names — get these wrong and positions bleed silently:
+Critical fields — get these wrong and positions bleed silently:
+- `wallet` and `strategyWalletAddress` — **MUST be present** or DSL skips the position entirely
+- `size` — agent MUST set from clearinghouse after entry fills, or DSL crashes
 - `phase1MaxMinutes` (NOT hardTimeoutMinutes)
 - `deadWeightCutMin` (NOT deadWeightCutMinutes)
 - `absoluteFloorRoe` (NOT absoluteFloor — no static price values)
@@ -164,7 +217,7 @@ Plugins ──→ Skills ──→ Agents
 3. The agent reads SKILL.md, runs bootstrap, creates crons, and starts trading
 4. Monitor via Telegram alerts and [strategies.senpi.ai](https://strategies.senpi.ai)
 
-**Recommended first skill:** [ORCA v1.2](./orca) — dual-mode scanner with Fox's live trading lessons applied. The most battle-tested scanner in the zoo.
+**Recommended first skill:** [ROACH v1.0](./roach) — Striker-only, highest conviction entries, simplest architecture, best risk-adjusted performance in the fleet.
 
 ## Requirements
 
