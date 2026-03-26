@@ -1,166 +1,152 @@
 ---
 name: kodiak-strategy
 description: >-
-  KODIAK v1.0 — SOL alpha hunter with position lifecycle. Single asset, every signal
-  (SM, funding, OI, 4TF trend, volume, BTC correlation). Three-mode lifecycle:
-  HUNTING (scan for entry) / RIDING (DSL trails) / STALKING (watch for reload on dip).
-  After DSL takes profit, watches for fresh momentum impulse while confirming macro thesis
-  is intact. If thesis dies, resets. If dip reloads, re-enters. DSL High Water Mode (mandatory).
+  KODIAK v2.0 — SOL alpha hunter with position lifecycle. Thesis exit removed.
+  DSL manages all exits. DSL state includes wallet + strategyWalletAddress +
+  strategyId + size. Leverage capped at 7x. Retrace widened to 0.08.
+  v1.1.1's SOL SHORT ran 13 hours unprotected due to missing wallet fields —
+  v2.0 prevents this.
 license: MIT
 metadata:
   author: jason-goldberg
-  version: "1.1.1"
+  version: "2.0"
   platform: senpi
   exchange: hyperliquid
   base_skill: grizzly-v2.0
 ---
 
-# KODIAK v1.0 — SOL Alpha Hunter with Position Lifecycle
+# 🐻 KODIAK v2.0 — SOL Alpha Hunter
 
-One asset. Every signal. Maximum conviction. Reload-on-dip.
+One asset. Every signal. Scanner enters. DSL exits.
 
-KODIAK stares at SOL and nothing else. Every signal source available — smart money positioning, funding rate, open interest, 4-timeframe trend structure, volume, BTC correlation — feeds into a single thesis: is there a high-conviction SOL trade right now?
+---
 
-Based on GRIZZLY v2.0's three-mode lifecycle, adapted for SOL's volatility profile.
+## ⛔ CRITICAL AGENT RULES
+
+### RULE 1: Install path is `/data/workspace/skills/kodiak-strategy/`
+
+### RULE 2: THE SCANNER DOES NOT EXIT POSITIONS
+
+When the scanner sees an active SOL position, it outputs NO_REPLY. DSL is the
+ONLY exit mechanism. v1.1.1 had a thesis exit that chopped positions before
+DSL could trail them. v2.0 removes it entirely.
+
+### RULE 3: MAX 1 POSITION — SOL only
+
+### RULE 4: Scanner output is AUTHORITATIVE
+
+### RULE 5: Write dslState directly — MUST update 'size' from clearinghouse
+
+The scanner provides a `dslState` block with `wallet`, `strategyWalletAddress`,
+`strategyId`, and `size: null`. After entry fills, read clearinghouse to get
+actual size (`abs(szi)`) and update the state file. **This was the exact bug
+that left a +$134 winner unprotected for 13 hours in v1.1.1.**
+
+### RULE 6: Verify BOTH crons on every session start
+
+### RULE 7: Never modify parameters. Never increase leverage above 7x.
+
+### RULE 8: 120-minute cooldown after consecutive losses
+
+---
+
+## What Changed From v1.1.1
+
+| v1.1.1 | v2.0 |
+|---|---|
+| Thesis exit active in RIDING mode | **Removed** — DSL manages all exits |
+| DSL state missing wallet + size | **All fields included** |
+| Leverage 10-12x | **Capped at 7x** |
+| Retrace 0.03 (3% ROE = 0.3% price at 10x) | **0.08 (8% ROE = 1.14% price at 7x)** |
+| `strategy_id` discarded in run() | **Captured and passed to DSL builder** |
+| SOL SHORT ran 13h unprotected | **Every position protected from second 1** |
+
+---
+
+## v1.1.1 Proof of Concept
+
+Kodiak's best trade: SOL SHORT, entry $90.36, DSL trailed to Tier 4 (+44% ROE),
+exit at $85.86, realized **+$134** profit. The scanner found the setup. DSL
+managed the exit perfectly — locked 85% of peak, gave back only $3 from top.
+
+The problem: DSL was manually patched onto this trade 13 hours after entry
+because the state file was missing wallet fields. v2.0 fixes this permanently.
+
+---
 
 ## The Three-Mode Lifecycle
 
 ### MODE 1 — HUNTING (default)
 
-Scan SOL every 3 minutes. All signals must align (4h trend, 1h momentum, SM, funding, OI, volume). Score 10+ to enter. When a position opens, switch to MODE 2.
+Scan SOL every 3 minutes. All signals must align (4h trend, 1h momentum, SM,
+funding, OI, volume). Score 10+ to enter. When a position opens, switch to MODE 2.
 
 ### MODE 2 — RIDING
 
-Active position. DSL High Water trails it. Thesis re-evaluation every scan. If thesis breaks (4h trend flips, SM flips, funding extreme, volume dies, BTC diverges) -> thesis exit and reset to MODE 1. If DSL closes the position -> switch to MODE 3.
+Active position. **DSL manages the exit. Scanner outputs NO_REPLY.**
+The scanner does NOT re-evaluate the thesis. It does NOT close positions.
+DSL High Water trails the position through Phase 1 protection and Phase 2
+trailing tiers. When DSL closes the position → switch to MODE 3.
 
 ### MODE 3 — STALKING
 
-DSL locked profits. The trend may not be over. Watch for a reload opportunity. Every scan checks:
+DSL locked profits. Watch for a reload opportunity. ALL reload conditions
+must pass: fresh momentum impulse, OI stable, volume present, funding not
+crowded, SM still aligned, 4h trend intact.
 
-**Reload conditions (ALL must pass):**
-1. At least one completed 1h candle since exit (~30 min minimum)
-2. Fresh 5m momentum impulse in the exit direction
-3. OI stable or growing
-4. Volume at least 50% of original entry
-5. Funding not spiked into crowded territory
-6. SM still aligned in the exit direction
-7. 4h trend structure still intact
+If reload fires → re-enter same direction, switch to MODE 2.
+If kill conditions trigger → reset to MODE 1.
 
-If ALL pass -> RELOAD. Re-enter same direction, same leverage. Switch to MODE 2.
+---
 
-**Kill conditions (ANY triggers reset to MODE 1):**
-- 4h trend reversed
-- SM flipped against exit direction
-- OI collapsed 20%+
-- Stalking for more than 6 hours with no reload
-- Funding spiked above 100% annualized
+## Cron Setup
 
-**maxPositions: 1.** KODIAK holds one SOL position at a time.
+Scanner (3 min, main):
+```
+python3 /data/workspace/skills/kodiak-strategy/scripts/kodiak-scanner.py
+```
 
-## MANDATORY: DSL High Water Mode
+DSL (3 min, isolated):
+```
+python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-dir /data/workspace/skills/kodiak-strategy/state
+```
 
-**KODIAK MUST use DSL High Water Mode. This is not optional.**
+---
 
-Spec: https://github.com/Senpi-ai/senpi-skills/blob/main/dsl-dynamic-stop-loss/dsl-high-water-spec%201.0.md
+## DSL Configuration (Conviction-Tiered)
 
-DSL tiers in `kodiak-config.json`. Arm DSL immediately after every entry fill. Zero naked positions.
+| Score | Floor | Timeout | Weak Peak | Dead Weight |
+|---|---|---|---|---|
+| 8-9 | -25% ROE | 45 min | 20 min | 15 min |
+| 10-11 | -30% ROE | 60 min | 30 min | 20 min |
+| 12+ | -35% ROE | 90 min | 45 min | 30 min |
 
-## Why SOL-Only at 7-12x Leverage
+Phase 1 retrace: 0.08 (8% ROE). Trailing tiers: 7%/40%, 12%/55%, 15%/75%, 20%/85%.
 
-- **High volatility** — SOL moves 5-10% in hours, amplifying conviction trades
-- **Growing liquidity on Hyperliquid** — increasingly tradeable at size
-- **Ecosystem momentum** — SOL trends driven by DeFi/NFT/memecoin cycles
-- **BTC as regime filter** — SOL trends rarely sustain against a BTC reversal
-- **Lower leverage compensates for volatility** — 10x on SOL ≈ 15x on BTC in terms of realized move
+---
 
-## How KODIAK Trades
-
-### Entry (score >= 10 required)
-
-Every 3 minutes, the scanner evaluates SOL across all signal sources:
-
-| Signal | Points | Required? |
-|---|---|---|
-| 4h trend structure (higher lows / lower highs) | 3 | **Yes** |
-| 1h trend agrees with 4h | 2 | **Yes** |
-| 15m momentum confirms direction | 0-1 | **Yes** |
-| 5m alignment (all 4 timeframes agree) | 1 | No |
-| SM aligned with direction | 2-3 | **Hard block if opposing** |
-| Funding pays to hold the direction | 2 | No |
-| Volume above average | 1-2 | No |
-| OI growing | 1 | No |
-| BTC confirms move | 1 | No |
-| RSI has room | 1 | No (blocks overbought/oversold) |
-| 4h momentum strength | 1 | No |
-
-Maximum score: ~18. Minimum to enter: 10.
-
-### Conviction-Scaled Leverage
-
-| Score | Leverage |
-|---|---|
-| 10-11 | 10x |
-| 12-13 | 11x |
-| 14+ | 12x |
-
-### Conviction-Scaled Margin
-
-| Score | Margin |
-|---|---|
-| 10-11 | 20% of account |
-| 12-13 | 25% |
-| 14+ | 30% |
-
-## Risk Management
+## Risk
 
 | Rule | Value |
 |---|---|
-| Max positions | 1 |
-| Phase 1 floor | 2.5% notional (~25% ROE at 10x) |
-| Drawdown halt | 25% from peak |
+| Max positions | 1 (SOL only) |
+| Max leverage | 7x |
+| Phase 1 retrace | 0.08 |
 | Daily loss limit | 10% |
 | Cooldown | 120 min after 3 consecutive losses |
-| Stagnation TP | 10% ROE stale 75 min |
+| Stagnation TP | 10% ROE stale 45 min |
 
-## Cron Architecture
-
-| Cron | Interval | Session | Purpose |
-|---|---|---|---|
-| Scanner | 3 min | isolated | Thesis builder + re-evaluator + stalk/reload |
-| DSL v5 | 3 min | isolated | High Water Mode trailing stops |
-
-Both MUST be isolated sessions with `agentTurn`. Use `NO_REPLY` for idle cycles.
-
-## Notification Policy
-
-**ONLY alert:** Position OPENED (direction, leverage, score, reasons), position CLOSED (DSL or thesis exit), risk guardian triggered, critical error.
-**NEVER alert:** Scanner found no thesis, thesis re-eval passed, DSL routine, any reasoning.
-
-## Bootstrap Gate
-
-On EVERY session, check `config/bootstrap-complete.json`. If missing:
-1. Verify Senpi MCP
-2. Create scanner cron (3 min, isolated) and DSL cron (3 min, isolated)
-3. Write `config/bootstrap-complete.json`
-4. Send: "🐻 KODIAK is online. Watching SOL. DSL High Water Mode active. Silence = no conviction."
-
-## Expected Behavior
-
-| Metric | Expected |
-|---|---|
-| Trades/day | 1-3 |
-| Avg hold time | 1-12 hours |
-| Win rate | ~45-55% |
-| Avg winner | 20-50%+ ROE |
-| Avg loser | -20 to -40% ROE |
+---
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `scripts/kodiak-scanner.py` | SOL thesis builder + re-evaluator + stalk/reload |
-| `scripts/kodiak_config.py` | Shared config, MCP helpers, state I/O |
-| `config/kodiak-config.json` | All configurable variables with DSL High Water tiers |
+| `scripts/kodiak-scanner.py` | SOL thesis builder + stalk/reload + DSL state generation |
+| `scripts/kodiak_config.py` | Config helper (MCP, state, cooldowns) |
+| `config/kodiak-config.json` | Wallet, strategy ID, configurable variables |
+
+---
 
 ## License
 
