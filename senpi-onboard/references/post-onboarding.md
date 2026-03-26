@@ -64,6 +64,7 @@ To get started:
 
 🟢 "I'm new" — I'll walk you through your first trade.
 🔵 "Show me the strategies" — Full catalog of AI trading strategies I can deploy.
+🟠 "Build a new trading strategy" — I'll help you scan the market and create a new plan.
 🟡 "Set me up" — Deploy one of our top 2 performers and start trading in under a minute:
    1️⃣ {TOP1_NAME} (+{TOP1_ROE}% ROE)
    2️⃣ {TOP2_NAME} (+{TOP2_ROE}% ROE)
@@ -75,6 +76,7 @@ All strategies are open source and tracked live at strategies.senpi.ai
 
 Render this 1-option template when only one leaderboard result is available:
 ```
+🟠 "Build a new trading strategy" — I'll help you scan the market and create a new plan.
 🟡 "Set me up" — Deploy our current top performer and start trading in under a minute:
    1️⃣ {TOP1_NAME} (+{TOP1_ROE}% ROE)
 
@@ -83,6 +85,7 @@ Render this 1-option template when only one leaderboard result is available:
 
 Fallback if leaderboard unavailable or empty:
 ```
+🟠 "Build a new trading strategy" — I'll help you scan the market and create a new plan.
 🟡 "Set me up" — I'll deploy our current top-performing strategy and get you trading in under a minute.
 
 🏆 Agents Arena — Ask me about the Arena to learn about Senpi's weekly AI trading competition.
@@ -107,6 +110,21 @@ Walk them through the `senpi-getting-started-guide` interactive tutorial:
 ### If user says "Show me the strategies"
 
 Fetch live strategy data from the senpi-agent-tracker MCP. Do NOT hardcode skill names. Do NOT show this unless the user asked.
+
+### If user says "Build a new trading strategy" or "build a strategy" or "custom strategy" or "create a strategy"
+
+Help the user brainstorm custom strategies by combining Senpi tools and skills. Start the conversation with:
+
+> Help me brainstorm some custom strategies we could build from combining senpi tools and/or senpi skills
+
+The LLM should use its knowledge of the available Senpi MCP tools (market data, discovery, trading, portfolio) and installed skills to propose creative strategy ideas. Walk the user through:
+
+1. **Market scan** — Use available MCP tools (`market_get_prices`, `discovery_get_top_traders`, `hyperfeed` tools) to identify current market conditions and opportunities.
+2. **Strategy ideation** — Brainstorm approaches that combine multiple Senpi tools and skills in novel ways (e.g. combining discovery signals with specific entry/exit logic, layering multiple timeframes, blending copy-trading signals with technical filters).
+3. **Plan outline** — Draft a concrete plan: which tools to use, entry/exit criteria, risk parameters, position sizing, and how the pieces fit together.
+4. **Next steps** — Offer to help the user refine the strategy, backtest the logic manually with current data, or point them to existing strategies that are closest to their idea.
+
+Do NOT require any specific skill installation for this flow — it is a brainstorming and planning session powered by the LLM and whatever MCP tools are already available.
 
 **How to render:**
 1. Run both calls in parallel:
