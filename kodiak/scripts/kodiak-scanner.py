@@ -517,8 +517,8 @@ def evaluate_reload(exit_state, entry_cfg):
 
 # ─── Hardcoded Constants & DSL State Builder ─────────────────
 
-MAX_LEVERAGE = 10         # Capped from 15-20x
-MIN_LEVERAGE = 7
+MAX_LEVERAGE = 7          # Reduced from 10x — SOL at 10x is too volatile
+MIN_LEVERAGE = 5
 
 KODIAK_DSL_TIERS = [
     {"triggerPct": 7,  "lockHwPct": 40, "consecutiveBreachesRequired": 3},
@@ -536,8 +536,9 @@ KODIAK_CONVICTION_TIERS = [
 KODIAK_STAGNATION_TP = {"enabled": True, "roeMin": 10, "hwStaleMin": 45}
 
 
-def build_dsl_state_template(direction, score):
-    """Build exact DSL state file for a Kodiak SOL position."""
+def build_dsl_state_template(direction, score, wallet, strategy_id):
+    """Build exact DSL state file for a Kodiak SOL position.
+    v2.0: includes wallet, strategyWalletAddress, strategyId, size placeholder."""
     tier = KODIAK_CONVICTION_TIERS[0]
     for ct in KODIAK_CONVICTION_TIERS:
         if score >= ct["minScore"]:
@@ -546,19 +547,29 @@ def build_dsl_state_template(direction, score):
         "active": True, "asset": "SOL", "direction": direction, "score": score,
         "phase": 1, "highWaterPrice": None, "highWaterRoe": None,
         "currentTierIndex": -1, "consecutiveBreaches": 0,
+        # CRITICAL: wallet fields prevent DSL Bug #1/#3
+        "wallet": wallet,
+        "strategyWalletAddress": wallet,
+        "strategyId": strategy_id,
+        # Size must be set by agent from clearinghouse after entry fills
+        "size": None,
         "lockMode": "pct_of_high_water", "phase2TriggerRoe": 7,
         "phase1": {
-            "enabled": True, "retraceThreshold": 0.03, "consecutiveBreachesRequired": 3,
+            "enabled": True, "retraceThreshold": 0.08, "consecutiveBreachesRequired": 3,
             "phase1MaxMinutes": tier["hardTimeoutMin"],
             "weakPeakCutMinutes": tier["weakPeakCutMin"],
             "deadWeightCutMin": tier["deadWeightCutMin"],
+            "absoluteFloorRoe": tier["absoluteFloorRoe"],
             "weakPeakCut": {"enabled": True, "intervalInMinutes": tier["weakPeakCutMin"], "minValue": 3.0},
         },
         "phase2": {"enabled": True, "retraceThreshold": 0.015, "consecutiveBreachesRequired": 2},
         "tiers": KODIAK_DSL_TIERS,
         "stagnationTp": KODIAK_STAGNATION_TP,
         "execution": {"phase1SlOrderType": "MARKET", "phase2SlOrderType": "MARKET", "breachCloseOrderType": "MARKET"},
-        "_kodiak_version": "1.1.1",
+        "_v2_no_thesis_exit": True,
+        "_kodiak_version": "2.0",
+        "_note": "DSL manages ALL exits. Scanner does NOT re-evaluate. "
+                 "Agent MUST set 'size' from clearinghouse after entry.",
     }
 
 
@@ -566,7 +577,7 @@ def build_dsl_state_template(direction, score):
 
 def run():
     config = cfg.load_config()
-    wallet, _ = cfg.get_wallet_and_strategy()
+    wallet, strategy_id = cfg.get_wallet_and_strategy()
 
     if not wallet:
         cfg.output({"success": True, "heartbeat": "NO_REPLY", "note": "no wallet"})
@@ -590,27 +601,12 @@ def run():
             state["currentMode"] = "RIDING"
             cfg.save_state(state, "kodiak-state.json")
 
-        still_valid, reasons = evaluate_sol_position(sol_position["direction"], entry_cfg)
-        if not still_valid:
-            cfg.output({
-                "success": True,
-                "action": "thesis_exit",
-                "exits": [{
-                    "coin": "SOL",
-                    "direction": sol_position["direction"],
-                    "reasons": reasons,
-                    "upnl": sol_position.get("upnl", 0),
-                }],
-                "note": "SOL thesis invalidated — conviction broken",
-            })
-            # On thesis exit, go to HUNTING (thesis is dead, don't stalk)
-            state["currentMode"] = "HUNTING"
-            state.pop("exitState", None)
-            cfg.save_state(state, "kodiak-state.json")
-            return
-
+        # v2.0: DSL manages ALL exits. Scanner does NOT thesis-exit.
+        # Wolverine v1.1 data: 25/27 trades killed by thesis exit, not DSL.
+        # The scanner re-evaluating open positions was chopping winners.
         cfg.output({"success": True, "heartbeat": "NO_REPLY",
-                     "note": f"RIDING: SOL {sol_position['direction']} thesis intact"})
+                     "note": f"RIDING: SOL {sol_position['direction']} — DSL manages exit. Scanner does NOT re-evaluate.",
+                     "_v2_no_thesis_exit": True})
         cfg.save_state(state, "kodiak-state.json")
         return
 
@@ -668,7 +664,7 @@ def run():
                         "margin": margin,
                         "orderType": config.get("execution", {}).get("entryOrderType", "FEE_OPTIMIZED_LIMIT"),
                     },
-                    "dslState": build_dsl_state_template(direction, 10),
+                    "dslState": build_dsl_state_template(direction, 10, wallet, strategy_id),
                     "reasons": reasons,
                     "note": f"STALKING → RELOAD: fresh impulse confirmed, re-entering SOL {direction}",
                 })
@@ -756,7 +752,7 @@ def run():
             "margin": margin,
             "orderType": config.get("execution", {}).get("entryOrderType", "FEE_OPTIMIZED_LIMIT"),
         },
-        "dslState": build_dsl_state_template(thesis["direction"], thesis["score"]),
+        "dslState": build_dsl_state_template(thesis["direction"], thesis["score"], wallet, strategy_id),
         "constraints": {
             "minLeverage": MIN_LEVERAGE,
             "maxLeverage": MAX_LEVERAGE,
