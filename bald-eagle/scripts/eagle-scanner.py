@@ -7,16 +7,14 @@
 Trades XYZ assets on Hyperliquid: commodities (CL, GOLD, SILVER, BRENTOIL),
 indices (SP500, XYZ100), and select high-volume equities.
 
-v1.0 lost -28.6% across 6 trades. 5/6 had broken DSL. One CL position was
-LIQUIDATED at -56.4% ROE because 20x leverage on oil + missing DSL state file.
+v1.0 lost -28.6% across 6 trades.
 
 v2.0 fixes:
 - Whitelist: only assets with $15M+ daily volume
 - Leverage capped at 7x (was 20x)
 - Spread gate: rejects assets with > 0.1% spread
-- DSL state includes wallet, strategyWalletAddress, strategyId, size
-- No thesis exit — DSL manages all exits
 - Max 3 entries/day, 120 min cooldown
+- Exit management handled by plugin runtime (recipe.yaml)
 
 SM signal: leaderboard_get_markets filtered for dex="xyz".
 
@@ -61,32 +59,6 @@ MIN_SM_TRADERS = 5
 
 # Risk
 MAX_DAILY_LOSS_PCT = 10
-
-# DSL v1.1.1
-DSL_CONFIG = {
-    "lockMode": "pct_of_high_water",
-    "phase2TriggerRoe": 8,
-    "phase1": {
-        "consecutiveBreachesRequired": 3,
-        "phase1MaxMinutes": 45,
-        "weakPeakCutMinutes": 20,
-        "deadWeightCutMin": 12,
-        "absoluteFloorRoe": -15,        # At 7x: 2.14% price move
-        "retraceThreshold": 0.08,       # Wide — commodities are volatile
-    },
-    "tiers": [
-        {"triggerPct": 7, "lockHwPct": 40, "consecutiveBreachesRequired": 3},
-        {"triggerPct": 12, "lockHwPct": 55, "consecutiveBreachesRequired": 2},
-        {"triggerPct": 20, "lockHwPct": 70, "consecutiveBreachesRequired": 1},
-        {"triggerPct": 30, "lockHwPct": 80, "consecutiveBreachesRequired": 1},
-    ],
-    "stagnationTp": {"enabled": True, "roeMin": 10, "hwStaleMin": 30},
-    "execution": {
-        "phase1SlOrderType": "MARKET",
-        "phase2SlOrderType": "MARKET",
-        "breachCloseOrderType": "MARKET",
-    },
-}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -263,51 +235,6 @@ def score_candidate(cand):
     return score, reasons
 
 
-# ═══════════════════════════════════════════════════════════════
-# DSL STATE BUILDER
-# ═══════════════════════════════════════════════════════════════
-
-def build_dsl_state(asset, direction, score, wallet, strategy_id):
-    """Build complete DSL v1.1.1 state with wallet + size placeholder."""
-    return {
-        "active": True,
-        "asset": f"xyz:{asset}",
-        "direction": direction,
-        "score": score,
-        "phase": 1,
-        "highWaterPrice": None,
-        "highWaterRoe": None,
-        "currentTierIndex": -1,
-        "consecutiveBreaches": 0,
-        "wallet": wallet,
-        "strategyWalletAddress": wallet,
-        "strategyId": strategy_id,
-        "size": None,
-        "lockMode": DSL_CONFIG["lockMode"],
-        "phase2TriggerRoe": DSL_CONFIG["phase2TriggerRoe"],
-        "phase1": {
-            "enabled": True,
-            "retraceThreshold": DSL_CONFIG["phase1"]["retraceThreshold"],
-            "consecutiveBreachesRequired": DSL_CONFIG["phase1"]["consecutiveBreachesRequired"],
-            "phase1MaxMinutes": DSL_CONFIG["phase1"]["phase1MaxMinutes"],
-            "weakPeakCutMinutes": DSL_CONFIG["phase1"]["weakPeakCutMinutes"],
-            "deadWeightCutMin": DSL_CONFIG["phase1"]["deadWeightCutMin"],
-            "absoluteFloorRoe": DSL_CONFIG["phase1"]["absoluteFloorRoe"],
-            "weakPeakCut": {
-                "enabled": True,
-                "intervalInMinutes": DSL_CONFIG["phase1"]["weakPeakCutMinutes"],
-                "minValue": 3.0,
-            },
-        },
-        "tiers": DSL_CONFIG["tiers"],
-        "stagnationTp": DSL_CONFIG["stagnationTp"],
-        "execution": DSL_CONFIG["execution"],
-        "_v2_no_thesis_exit": True,
-        "_eagle_version": "2.0",
-        "_note": "DSL manages ALL exits. Scanner does NOT re-evaluate. "
-                 "Agent MUST set 'size' from clearinghouse after entry.",
-    }
-
 
 # ═══════════════════════════════════════════════════════════════
 # SCAN HISTORY
@@ -349,8 +276,7 @@ def run():
 
     if len(positions) >= MAX_POSITIONS:
         cfg.output({"status": "ok", "heartbeat": "NO_REPLY",
-                     "note": f"{len(positions)} positions active. DSL manages exit.",
-                     "_v2_no_thesis_exit": True})
+                     "note": f"{len(positions)} positions active."})
         return
 
     # ── Trade counter ─────────────────────────────────────────
@@ -406,7 +332,6 @@ def run():
 
         # ── Entry ─────────────────────────────────────────────
         margin = round(account_value * MARGIN_PCT, 2)
-        dsl_state = build_dsl_state(token, cand["direction"], score, wallet, strategy_id)
 
         tc["entries"] = tc.get("entries", 0) + 1
         cfg.save_trade_counter(tc)
@@ -430,7 +355,6 @@ def run():
                 "margin": margin,
                 "orderType": "FEE_OPTIMIZED_LIMIT",
             },
-            "dslState": dsl_state,
             "constraints": {
                 "maxPositions": MAX_POSITIONS,
                 "maxLeverage": LEVERAGE,
@@ -439,8 +363,6 @@ def run():
                 "allowedAssets": "ALL_XYZ",
                 "bannedAssets": sorted(BANNED_ASSETS),
                 "maxSpreadPct": MAX_SPREAD_PCT,
-                "_v2_no_thesis_exit": True,
-                "_note": "DSL manages ALL exits. Agent MUST set dslState.size from clearinghouse.",
             },
         })
         return

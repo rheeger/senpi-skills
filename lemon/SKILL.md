@@ -1,21 +1,23 @@
 ---
 name: lemon-strategy
 description: >-
-  LEMON v1.0 — The Degen Fader. Identifies historically reckless traders
+  LEMON v2.0 — The Degen Fader. Identifies historically reckless traders
   (DEGEN activity + CHOPPY consistency) on Hyperliquid, monitors their live
   positions, and counter-trades them when they're bleeding at high leverage.
   If a cluster of degens goes max-leverage long on a coin and starts losing,
   LEMON shorts it — betting on their inevitable liquidation cascade.
-  Uses DSL v1.1.1 trailing stops for exits. No static TP/SL.
+  DSL exit managed by plugin runtime via recipe.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
-  version: "1.0"
+  version: "2.0"
   platform: senpi
   exchange: hyperliquid
+  requires:
+    - senpi-trading-runtime
 ---
 
-# 🍋 LEMON v1.0 — The Degen Fader
+# 🍋 LEMON v2.0 — The Degen Fader
 
 Find the worst traders. Wait until they're bleeding. Take the other side.
 
@@ -40,20 +42,17 @@ Check clearinghouse before every entry. If positions >= 2, skip.
 Leverage, margin, direction, coin — use exactly what the scanner says.
 Do not override from memory or "improve" the parameters.
 
-### RULE 5: Write dslState directly — include wallet address and size
+### RULE 5: Verify recipe is installed on every session start
 
-The scanner provides a `dslState` block. Write it to `state/dsl-{COIN}.json`.
-After the entry fills, read `strategy_get_clearinghouse_state` to get the
-actual position size (`abs(szi)`) and update the `size` field in the DSL
-state file. This prevents the DSL crash bug that hit 7+ agents.
+Run `openclaw senpi trading-recipe list`. Recipe must be listed. The position tracker and DSL exit are handled by the plugin runtime.
 
-### RULE 6: Verify BOTH crons on every session start
+### RULE 6: Never retry timed-out position creation
 
-Scanner cron AND DSL cron must both show `status: ok`.
+If `create_position` times out, check clearinghouse state. If position exists, the position tracker will pick it up automatically. If not, wait for next scan.
 
 ### RULE 7: Never modify parameters
 
-Do not adjust leverage, margin, thresholds, DSL settings, or any other
+Do not adjust leverage, margin, thresholds, or any other
 parameter. Every agent that self-modified made things worse.
 
 ### RULE 8: 180-minute per-asset cooldown after any exit
@@ -159,36 +158,13 @@ use, and that's why they blow up.
 
 ---
 
-## Exit Management (DSL v1.1.1)
+## Exit Management
 
-Scanner generates COMPLETE DSL state. Agent writes directly to
-`state/dsl-{COIN}.json`.
+DSL exit is handled by the plugin runtime via `recipe.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `recipe.yaml` for configuration details.
 
-### Phase 1 (Entry Protection)
-
-| Parameter | Value | Why |
-|---|---|---|
-| Absolute floor | -15% ROE | At 5x, allows 3% adverse price move |
-| Hard timeout | 60 min | If no cascade in 1 hour, thesis is wrong |
-| Weak peak cut | 30 min | Peak declining for 30 min = fading |
-| Dead weight cut | 15 min | 15 min flat = no cascade happening |
-| Consecutive breaches | 3 | Survive single wicks |
-| Retrace threshold | 0.20 | 20% retrace from entry peak |
-
-### Phase 2 (Profit Trailing)
-
-| Trigger ROE | Lock % of Peak | Breaches | Note |
-|---|---|---|---|
-| +10% | 40% | 3 | Initial cascade profits |
-| +20% | 55% | 2 | Cascade developing |
-| +30% | 70% | 1 | Strong cascade |
-| +40% | 80% | 1 | Full liquidation run |
-| +60% | 85% | 1 | Extended cascade |
-
-### Stagnation TP
-
-If ROE >= 10% and high water hasn't moved for 30 minutes, take profit.
-Cascades are violent and fast — if the move stalls, take what you have.
+**Monitor positions:**
+- `openclaw senpi dsl positions` — list all DSL-tracked positions
+- `openclaw senpi dsl inspect <ASSET>` — full position details
 
 ---
 
@@ -216,19 +192,29 @@ Cascades are violent and fast — if the move stalls, take what you have.
 
 ---
 
-## Cron Architecture (2 crons only)
+## Recipe Setup
 
-### Cron 1: Scanner (5 min, main session)
+**Step 1:** Set your strategy wallet address in the recipe:
+```bash
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/lemon-strategy/recipe.yaml
 ```
-python3 /data/workspace/skills/lemon-strategy/scripts/lemon-scanner.py
+Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
+
+**Step 2:** Set telegram chat ID for notifications:
+```bash
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/lemon-strategy/recipe.yaml
+```
+Replace `<CHAT_ID>` with the actual Telegram chat ID.
+
+**Step 3:** Install the trading recipe:
+```bash
+openclaw senpi trading-recipe create --path /data/workspace/skills/lemon-strategy/recipe.yaml
 ```
 
-### Cron 2: DSL (3 min, isolated session)
+**Step 4:** Verify:
+```bash
+openclaw senpi trading-recipe list
 ```
-python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-dir /data/workspace/skills/lemon-strategy/state
-```
-
-**No custom exit engine.** No highwater tracker cron. DSL handles all exits.
 
 ---
 
@@ -248,7 +234,6 @@ python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-d
 
 ```
 state/
-  dsl-{COIN}.json          # DSL v1.1.1 state per position
   trade-counter.json        # Daily entries, loss tracking, gate
   cooldowns.json            # Per-asset cooldown after exits
   scan-history.json         # Recent degen scans for cluster detection
@@ -259,12 +244,15 @@ state/
 ## Bootstrap Gate
 
 On EVERY session start, check `config/bootstrap-complete.json`. If missing:
-1. Verify Senpi MCP
-2. Create scanner cron (5 min, main)
-3. Create DSL cron (3 min, isolated)
-4. Verify BOTH crons `status: ok`
-5. Write `config/bootstrap-complete.json`
-6. Send: "🍋 LEMON v1.0 online. Degen Fader scanning for bleeding high-leverage traders. Silence = no vulnerable degens."
+1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for recipe management and DSL position inspection.
+2. Verify Senpi MCP
+3. Set wallet in recipe: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/lemon-strategy/recipe.yaml`
+4. Set telegram in recipe: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/lemon-strategy/recipe.yaml`
+5. Install recipe: `openclaw senpi trading-recipe create --path /data/workspace/skills/lemon-strategy/recipe.yaml`
+6. Verify recipe installed: `openclaw senpi trading-recipe list`
+7. Create scanner cron (5 min, main)
+8. Write `config/bootstrap-complete.json`
+9. Send: "🍋 LEMON v2.0 online. Degen Fader scanning for bleeding high-leverage traders. DSL managed by plugin runtime. Silence = no vulnerable degens."
 
 ---
 
@@ -274,8 +262,7 @@ On EVERY session start, check `config/bootstrap-complete.json`. If missing:
 fade direction, score), Position CLOSED (P&L, close reason, duration),
 risk gate triggered, critical error.
 
-**NEVER alert:** Scanner found no vulnerable degens, DSL routine checks,
-target trader still alive (not yet triggered), any reasoning about whether
+**NEVER alert:** Scanner found no vulnerable degens, target trader still alive (not yet triggered), any reasoning about whether
 to exit.
 
 ---
@@ -310,9 +297,10 @@ The complete skill is in `lemon-v1.0.tar.gz`. Extract to `/data/workspace/skills
 |---|---|
 | `SKILL.md` | This document — all rules, architecture, and configuration |
 | `README.md` | Short overview |
-| `scripts/lemon-scanner.py` | Degen finder + vulnerability scan + conviction scoring + entry signal + DSL state generation |
+| `scripts/lemon-scanner.py` | Degen finder + vulnerability scan + conviction scoring + entry signal |
 | `scripts/lemon_config.py` | Config helper (MCP calls, state I/O, cooldowns, trade counter) |
 | `config/lemon-config.json` | Wallet, strategy ID, configurable thresholds (agent fills in wallet/strategyId) |
+| `recipe.yaml` | Trading recipe for plugin runtime (DSL exit + position tracker) |
 
 ---
 
@@ -321,10 +309,13 @@ The complete skill is in `lemon-v1.0.tar.gz`. Extract to `/data/workspace/skills
 1. Extract `lemon-v1.0.tar.gz` to `/data/workspace/skills/lemon-strategy/`
 2. Create a strategy vault and fund it with $1,000
 3. Update `config/lemon-config.json` with the wallet address and strategy ID
-4. Create scanner cron (5 min, main): `python3 /data/workspace/skills/lemon-strategy/scripts/lemon-scanner.py`
-5. Create DSL cron (3 min, isolated): `python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-dir /data/workspace/skills/lemon-strategy/state`
-6. Verify BOTH crons running with `openclaw crons list`
-7. After first position opens, verify DSL state file exists at `state/dsl-{COIN}.json` with wallet address and size fields populated
+4. Set wallet in recipe: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/lemon-strategy/recipe.yaml`
+5. Set telegram in recipe: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/lemon-strategy/recipe.yaml`
+6. Install recipe: `openclaw senpi trading-recipe create --path /data/workspace/skills/lemon-strategy/recipe.yaml`
+7. Verify recipe: `openclaw senpi trading-recipe list`
+8. Create scanner cron (5 min, main): `python3 /data/workspace/skills/lemon-strategy/scripts/lemon-scanner.py`
+9. Verify scanner cron running with `openclaw crons list`
+10. After first position opens, verify DSL is tracking via `openclaw senpi dsl positions`
 
 ---
 

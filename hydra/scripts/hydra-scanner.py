@@ -7,7 +7,7 @@ HYDRA v1.0 — Multi-Source Squeeze Scanner
 ==========================================
 Detects crowded positions across 200+ crypto assets using 6 independent
 signal sources, scores candidates, and outputs entry signals with
-complete DSL state.
+entry signals.
 
 Signal Sources:
   1. FDD — Funding Divergence Detector (30/110, PRIMARY GATE)
@@ -16,8 +16,6 @@ Signal Sources:
   4. MED — Momentum Exhaustion Detector (-10 to +5, dual role)
   5. EM  — Emerging Movers from SM leaderboard (-8 to +15)
   6. OPP — Opportunity Scanner, hourly trend gate (-999 to +10)
-
-DSL v1.1.1 — scanner generates COMPLETE state. No dsl-profile.json.
 """
 
 import sys
@@ -655,99 +653,6 @@ def get_asset_max_leverage(asset: str, markets_cache: list = None) -> float:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Leverage-Adjusted Floor
-# ═══════════════════════════════════════════════════════════════════════════
-
-def calculate_leverage_floor(leverage: float, tier: str, config: dict) -> float:
-    """
-    Calculate leverage-adjusted absolute floor.
-    Higher leverage = tighter floor to limit dollar losses.
-    """
-    dsl_cfg = config.get("dsl", {})
-    tier_dsl = dsl_cfg.get("tiers", {}).get(tier, {})
-    floor_cfg = dsl_cfg.get("leverageFloor", {})
-
-    price_move = floor_cfg.get("priceMoveLimit5x", 1.0) if leverage >= 5 else \
-                 floor_cfg.get("priceMoveLimitBelow5x", 1.5)
-    min_floor = floor_cfg.get("minFloor", -3.0)
-
-    leverage_floor = -(price_move * leverage)
-
-    # The conviction-tier floor from config (e.g., MEDIUM phase1 has its own floor)
-    # We don't use a static conviction floor here — it comes from the conviction tiers
-    # in the handoff spec (-20, -25, -30), but those are wide. The leverage-adjusted
-    # floor is typically tighter and acts as the binding constraint.
-
-    effective_floor = max(leverage_floor, -30.0)  # Never wider than -30%
-    effective_floor = min(effective_floor, min_floor)  # Never tighter than -3%
-
-    return round(effective_floor, 1)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# DSL State Builder (v1.1.1)
-# ═══════════════════════════════════════════════════════════════════════════
-
-def build_dsl_state(asset: str, direction: str, score: int, tier: str,
-                    leverage: float, config: dict) -> dict:
-    """Build COMPLETE DSL state. No dsl-profile.json merging."""
-    dsl_cfg = config.get("dsl", {})
-    tier_dsl = dsl_cfg.get("tiers", {}).get(tier, {})
-
-    timeout = tier_dsl.get("phase1MaxMinutes", 120)
-    weak_peak = tier_dsl.get("weakPeakCutMinutes", 60)
-    dead_weight = tier_dsl.get("deadWeightCutMin", 45)
-    floor_roe = calculate_leverage_floor(leverage, tier, config)
-
-    state = {
-        "active": True,
-        "asset": asset,
-        "direction": direction,
-        "score": score,
-        "phase": 1,
-        "highWaterPrice": None,
-        "highWaterRoe": None,
-        "currentTierIndex": -1,
-        "consecutiveBreaches": 0,
-        "lockMode": dsl_cfg.get("lockMode", "pct_of_high_water"),
-        "phase2TriggerRoe": dsl_cfg.get("phase2TriggerRoe", 5),
-        "phase1": {
-            "enabled": True,
-            "retraceThreshold": dsl_cfg.get("phase1RetraceThreshold", 0.03),
-            "consecutiveBreachesRequired": 3,
-            "phase1MaxMinutes": timeout,
-            "weakPeakCutMinutes": weak_peak,
-            "deadWeightCutMin": dead_weight,
-            "absoluteFloorRoe": floor_roe,
-            "weakPeakCut": {
-                "enabled": True,
-                "intervalInMinutes": weak_peak,
-                "minValue": 3.0,
-            },
-        },
-        "phase2": {
-            "enabled": True,
-            "retraceThreshold": dsl_cfg.get("phase2RetraceThreshold", 0.015),
-            "consecutiveBreachesRequired": dsl_cfg.get("phase2ConsecutiveBreaches", 2),
-        },
-        "tiers": dsl_cfg.get("trailingTiers", [
-            {"triggerPct": 7,  "lockHwPct": 40, "consecutiveBreachesRequired": 3},
-            {"triggerPct": 12, "lockHwPct": 55, "consecutiveBreachesRequired": 2},
-            {"triggerPct": 15, "lockHwPct": 75, "consecutiveBreachesRequired": 2},
-            {"triggerPct": 20, "lockHwPct": 85, "consecutiveBreachesRequired": 1},
-        ]),
-        "stagnationTp": dsl_cfg.get("stagnationTp", {"enabled": True, "roeMin": 10, "hwStaleMin": 45}),
-        "execution": dsl_cfg.get("execution", {
-            "phase1SlOrderType": "MARKET",
-            "phase2SlOrderType": "MARKET",
-            "breachCloseOrderType": "MARKET",
-        }),
-    }
-
-    return state
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 # Main Scanner
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -924,8 +829,6 @@ def run():
     leverage = sizing["leverage"]
     margin_pct = sizing["marginPercent"]
 
-    dsl_state = build_dsl_state(asset, direction, score, tier, leverage, config)
-
     log(f"*** SIGNAL: {direction.upper()} {asset} "
         f"(score={score}, tier={tier}, lev={leverage}x, margin={margin_pct}%) ***")
 
@@ -953,7 +856,6 @@ def run():
             "marginUsd": sizing["margin"],
             "orderType": config.get("sizing", {}).get("orderType", "FEE_OPTIMIZED_LIMIT"),
         },
-        "dslState": dsl_state,
         "constraints": {
             "maxPositions": max_positions,
             "cooldownMinutes": config.get("risk", {}).get("cooldownMinutes", 120),

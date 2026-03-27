@@ -1,19 +1,22 @@
 ---
 name: shark
 description: >-
-  SHARK v2.0 — SM Conviction + Liquidation Cascade Hunter. Consolidated from
+  SHARK v3.0 — SM Conviction + Liquidation Cascade Hunter. Consolidated from
   v1.0's 8-cron pipeline into a single scanner. 4-gate entry: SM concentration
   (30+ traders, 5%+) → top 5 trader alignment → price momentum → funding
   structure. Score 8+ to enter. DSL manages all exits. No thesis exit.
+  DSL exit managed by plugin runtime via recipe.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
-  version: "2.0"
+  version: "3.0"
   platform: senpi
   exchange: hyperliquid
+  requires:
+    - senpi-trading-runtime
 ---
 
-# 🦈 SHARK v2.0 — SM Conviction + Liquidation Cascade Hunter
+# 🦈 SHARK v3.0 — SM Conviction + Liquidation Cascade Hunter
 
 Four gates. One scanner. DSL manages exits.
 
@@ -31,9 +34,13 @@ When the scanner sees an active position, it outputs NO_REPLY. DSL is the ONLY e
 
 ### RULE 4: Scanner output is AUTHORITATIVE
 
-### RULE 5: Write dslState directly — include wallet address
+### RULE 5: Verify recipe is installed on every session start
 
-### RULE 6: Verify BOTH crons on every session start
+Run `openclaw senpi trading-recipe list`. Recipe must be listed. The position tracker and DSL exit are handled by the plugin runtime.
+
+### RULE 6: Never retry timed-out position creation
+
+If `create_position` times out, check clearinghouse state. If position exists, the position tracker will pick it up automatically. If not, wait for next scan.
 
 ### RULE 7: Never modify parameters
 
@@ -69,37 +76,56 @@ Every candidate must pass ALL 4 gates to enter:
 
 ---
 
-## DSL Configuration
+## Exit Management
 
-| Parameter | Value | Why |
-|---|---|---|
-| Phase 1 floor | -15% ROE | At 7x, ~2.14% adverse price move |
-| Phase 1 timeout | 60 min | Cascades are fast — if nothing in 1hr, wrong |
-| Dead weight cut | 15 min | 15 min flat = no cascade happening |
-| Weak peak cut | 30 min | Peak declining for 30 min = fading |
-| Phase 2 trigger | 8% ROE | Start trailing at +8% |
-| Consecutive breaches | 3 | Survive single wicks |
+DSL exit is handled by the plugin runtime via `recipe.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `recipe.yaml` for configuration details.
 
-Trailing tiers: 5%/20%, 10%/40%, 20%/55%, 30%/65%, 40%/75%, 60%/80%, 80%/85%, 100%/90%.
+**Monitor positions:**
+- `openclaw senpi dsl positions` — list all DSL-tracked positions
+- `openclaw senpi dsl inspect <ASSET>` — full position details
 
 ---
 
-## Cron Setup (3 crons only)
+## Recipe Setup
 
-Scanner (5 min, main):
+**Step 1:** Set your strategy wallet address in the recipe:
+```bash
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/shark/recipe.yaml
 ```
-python3 /data/workspace/skills/shark/scripts/shark-scanner.py
+Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
+
+**Step 2:** Set telegram chat ID for notifications:
+```bash
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/shark/recipe.yaml
+```
+Replace `<CHAT_ID>` with the actual Telegram chat ID.
+
+**Step 3:** Install the trading recipe:
+```bash
+openclaw senpi trading-recipe create --path /data/workspace/skills/shark/recipe.yaml
 ```
 
-DSL (3 min, isolated):
-```
-python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-dir /data/workspace/skills/shark/state
+**Step 4:** Verify:
+```bash
+openclaw senpi trading-recipe list
 ```
 
-Risk (optional, 10 min, isolated):
-```
-python3 /data/workspace/skills/shark/scripts/shark-health.py
-```
+---
+
+## Bootstrap Gate
+
+On EVERY session start, check `config/bootstrap-complete.json`. If missing:
+1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for recipe management and DSL position inspection.
+2. Verify Senpi MCP
+3. Set wallet in recipe: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/shark/recipe.yaml`
+4. Set telegram in recipe: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/shark/recipe.yaml`
+5. Install recipe: `openclaw senpi trading-recipe create --path /data/workspace/skills/shark/recipe.yaml`
+6. Verify recipe installed: `openclaw senpi trading-recipe list`
+7. Create scanner cron (5 min, main)
+8. Write `config/bootstrap-complete.json`
+9. Send: "🦈 SHARK v3.0 online. SM Conviction + Liquidation Cascade Hunter. 4-gate entry, score 8+. DSL managed by plugin runtime. Silence = no conviction."
+
+If bootstrap exists, still verify recipe and scanner cron on every session start.
 
 ---
 

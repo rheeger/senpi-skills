@@ -12,7 +12,7 @@ Pipeline:
 2. discovery_get_trader_state → check their live positions
 3. Score the vulnerability: leverage × bleeding × cluster × SM × funding
 4. If score >= 6 and SM gate passes → enter opposite direction
-5. DSL manages all exits
+5. Exit management handled by plugin runtime (recipe.yaml)
 
 Runs every 5 minutes.
 """
@@ -53,33 +53,6 @@ MAX_DAILY_LOSS_PCT = 10
 CONSECUTIVE_LOSS_LIMIT = 3
 COOLDOWN_ON_LOSSES_MIN = 45
 XYZ_BANNED = True
-
-# DSL v1.1.1
-DSL_CONFIG = {
-    "lockMode": "pct_of_high_water",
-    "phase2TriggerRoe": 10,
-    "phase1": {
-        "consecutiveBreachesRequired": 3,
-        "phase1MaxMinutes": 60,
-        "weakPeakCutMinutes": 30,
-        "deadWeightCutMin": 15,
-        "absoluteFloorRoe": -15,       # At 5x, allows 3% adverse price move
-        "retraceThreshold": 0.20,
-    },
-    "tiers": [
-        {"triggerPct": 10, "lockHwPct": 40, "consecutiveBreachesRequired": 3},
-        {"triggerPct": 20, "lockHwPct": 55, "consecutiveBreachesRequired": 2},
-        {"triggerPct": 30, "lockHwPct": 70, "consecutiveBreachesRequired": 1},
-        {"triggerPct": 40, "lockHwPct": 80, "consecutiveBreachesRequired": 1},
-        {"triggerPct": 60, "lockHwPct": 85, "consecutiveBreachesRequired": 1},
-    ],
-    "stagnationTp": {"enabled": True, "roeMin": 10, "hwStaleMin": 30},
-    "execution": {
-        "phase1SlOrderType": "MARKET",
-        "phase2SlOrderType": "MARKET",
-        "breachCloseOrderType": "MARKET",
-    },
-}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -273,51 +246,6 @@ def get_sm_for_asset(sm_data, coin):
     return None
 
 
-# ═══════════════════════════════════════════════════════════════
-# DSL STATE BUILDER
-# ═══════════════════════════════════════════════════════════════
-
-def build_dsl_state(coin, direction, score, wallet, strategy_id):
-    """Build complete DSL v1.1.1 state with wallet + size placeholder."""
-    return {
-        "active": True,
-        "asset": coin,
-        "direction": direction,
-        "score": score,
-        "phase": 1,
-        "highWaterPrice": None,
-        "highWaterRoe": None,
-        "currentTierIndex": -1,
-        "consecutiveBreaches": 0,
-        "wallet": wallet,
-        "strategyWalletAddress": wallet,
-        "strategyId": strategy_id,
-        "size": None,  # Agent MUST set from clearinghouse after entry
-        "lockMode": DSL_CONFIG["lockMode"],
-        "phase2TriggerRoe": DSL_CONFIG["phase2TriggerRoe"],
-        "phase1": {
-            "enabled": True,
-            "retraceThreshold": DSL_CONFIG["phase1"]["retraceThreshold"],
-            "consecutiveBreachesRequired": DSL_CONFIG["phase1"]["consecutiveBreachesRequired"],
-            "phase1MaxMinutes": DSL_CONFIG["phase1"]["phase1MaxMinutes"],
-            "weakPeakCutMinutes": DSL_CONFIG["phase1"]["weakPeakCutMinutes"],
-            "deadWeightCutMin": DSL_CONFIG["phase1"]["deadWeightCutMin"],
-            "absoluteFloorRoe": DSL_CONFIG["phase1"]["absoluteFloorRoe"],
-            "weakPeakCut": {
-                "enabled": True,
-                "intervalInMinutes": DSL_CONFIG["phase1"]["weakPeakCutMinutes"],
-                "minValue": 3.0,
-            },
-        },
-        "tiers": DSL_CONFIG["tiers"],
-        "stagnationTp": DSL_CONFIG["stagnationTp"],
-        "execution": DSL_CONFIG["execution"],
-        "_v2_no_thesis_exit": True,
-        "_lemon_version": "1.0",
-        "_note": "DSL manages ALL exits. Scanner does NOT re-evaluate. "
-                 "Agent MUST set 'size' from clearinghouse after entry.",
-    }
-
 
 # ═══════════════════════════════════════════════════════════════
 # MAIN
@@ -337,8 +265,7 @@ def run():
 
     if len(positions) >= MAX_POSITIONS:
         cfg.output({"status": "ok", "heartbeat": "NO_REPLY",
-                     "note": f"{len(positions)} positions active. DSL manages exit.",
-                     "_v2_no_thesis_exit": True})
+                     "note": f"{len(positions)} positions active."})
         return
 
     # ── Trade counter / circuit breaker ───────────────────────
@@ -459,9 +386,6 @@ def run():
     best = scored[0]
     margin = round(account_value * MARGIN_PCT, 2)
 
-    dsl_state = build_dsl_state(best["coin"], best["fadeDirection"],
-                                 best["score"], wallet, strategy_id)
-
     tc["entries"] = tc.get("entries", 0) + 1
     cfg.save_trade_counter(tc)
 
@@ -499,16 +423,12 @@ def run():
             "margin": margin,
             "orderType": "FEE_OPTIMIZED_LIMIT",
         },
-        "dslState": dsl_state,
         "constraints": {
             "maxPositions": MAX_POSITIONS,
             "maxLeverage": LEVERAGE,
             "maxDailyEntries": MAX_DAILY_ENTRIES,
             "cooldownMinutes": COOLDOWN_MINUTES,
             "xyzBanned": XYZ_BANNED,
-            "_v2_no_thesis_exit": True,
-            "_note": "DSL manages ALL exits. Do NOT re-evaluate open positions. "
-                     "Agent MUST set dslState.size from clearinghouse after entry.",
         },
     })
 

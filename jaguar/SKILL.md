@@ -1,20 +1,23 @@
 ---
 name: jaguar-strategy
 description: >-
-  JAGUAR v2.0 — Striker-Only. Stalker and Hunter removed. Pyramiding removed.
+  JAGUAR v3.0 — Striker-Only. Stalker and Hunter removed. Pyramiding removed.
   v1.0 lost -29.3% across 5 trades. 4 of 5 had broken DSL (missing size field
   in state file). v2.0 fixes DSL state generation with wallet+size fields,
   reduces leverage to 7x, and focuses exclusively on STRIKER signals (violent
   FIRST_JUMP explosions, score 9+, volume 1.5x).
+  DSL exit managed by plugin runtime via recipe.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
-  version: "2.0"
+  version: "3.0"
   platform: senpi
   exchange: hyperliquid
+  requires:
+    - senpi-trading-runtime
 ---
 
-# 🐆 JAGUAR v2.0 — Striker-Only
+# 🐆 JAGUAR v3.0 — Striker-Only
 
 Violent explosions only. DSL manages exits.
 
@@ -30,14 +33,13 @@ Violent explosions only. DSL manages exits.
 
 ### RULE 4: Scanner output is AUTHORITATIVE
 
-### RULE 5: Write dslState directly — MUST update 'size' from clearinghouse
+### RULE 5: Verify recipe is installed on every session start
 
-After opening a position, read `strategy_get_clearinghouse_state` to get the
-actual position size (`abs(szi)`). Update the DSL state file's `size` field
-with this value. The scanner sets `size: null` as a placeholder — the agent
-MUST fill it in. **This was the exact bug that broke 4 of 5 trades in v1.0.**
+Run `openclaw senpi trading-recipe list`. Recipe must be listed. The position tracker and DSL exit are handled by the plugin runtime.
 
-### RULE 6: Verify BOTH crons on every session start
+### RULE 6: Never retry timed-out position creation
+
+If `create_position` times out, check clearinghouse state. If position exists, the position tracker will pick it up automatically. If not, wait for next scan.
 
 ### RULE 7: Never modify parameters
 
@@ -69,31 +71,56 @@ The ONLY trade with working DSL (HYPE) lost $35 instead of $138. With DSL, losse
 
 ---
 
-## Cron Setup
+## Exit Management
 
-Scanner cron (3 min, main):
+DSL exit is handled by the plugin runtime via `recipe.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `recipe.yaml` for configuration details.
+
+**Monitor positions:**
+- `openclaw senpi dsl positions` — list all DSL-tracked positions
+- `openclaw senpi dsl inspect <ASSET>` — full position details
+
+---
+
+## Recipe Setup
+
+**Step 1:** Set your strategy wallet address in the recipe:
+```bash
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/jaguar-strategy/recipe.yaml
 ```
-python3 /data/workspace/skills/jaguar-strategy/scripts/jaguar-scanner.py
+Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
+
+**Step 2:** Set telegram chat ID for notifications:
+```bash
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/jaguar-strategy/recipe.yaml
+```
+Replace `<CHAT_ID>` with the actual Telegram chat ID.
+
+**Step 3:** Install the trading recipe:
+```bash
+openclaw senpi trading-recipe create --path /data/workspace/skills/jaguar-strategy/recipe.yaml
 ```
 
-DSL cron (3 min, isolated):
-```
-python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-dir /data/workspace/skills/jaguar-strategy/state
+**Step 4:** Verify:
+```bash
+openclaw senpi trading-recipe list
 ```
 
 ---
 
-## DSL Configuration
+## Bootstrap Gate
 
-| Parameter | Value |
-|---|---|
-| Phase 1 floor | -20% ROE (at 7x = 2.86% price move) |
-| Phase 1 timeout | 45 min |
-| Dead weight cut | 12 min |
-| Weak peak cut | 25 min |
-| Phase 2 trigger | +7% ROE |
-| Consecutive breaches | 3 |
-| Trailing tiers | 7%/40%, 12%/55%, 15%/75%, 20%/85% |
+On EVERY session start, check `config/bootstrap-complete.json`. If missing:
+1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for recipe management and DSL position inspection.
+2. Verify Senpi MCP
+3. Set wallet in recipe: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/jaguar-strategy/recipe.yaml`
+4. Set telegram in recipe: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/jaguar-strategy/recipe.yaml`
+5. Install recipe: `openclaw senpi trading-recipe create --path /data/workspace/skills/jaguar-strategy/recipe.yaml`
+6. Verify recipe installed: `openclaw senpi trading-recipe list`
+7. Create scanner cron (3 min, main)
+8. Write `config/bootstrap-complete.json`
+9. Send: "🐆 JAGUAR v3.0 online. Striker-only scanner. DSL managed by plugin runtime. Silence = no explosions."
+
+If bootstrap exists, still verify recipe and scanner cron on every session start.
 
 ---
 
