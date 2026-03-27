@@ -1,27 +1,29 @@
 name: orca-tracker
 version: 1.0.0
 description: >
-  ORCA v1.0 position tracker with DSL trailing stop-loss.
+  Onchain position tracker — monitors strategy wallet on Hyperliquid
+  for position lifecycle events and wires them into the DSL exit engine.
   Dual-mode emerging movers scanner (Stalker + Striker).
 
-notifications:
-  telegram_chat_id: "${TELEGRAM_CHAT_ID}"
-
+# ── STRATEGY ──
 strategy:
   wallet: "${WALLET_ADDRESS}"
   enabled: true
 
+# ── SCANNERS ──
 scanners:
   - name: position_tracker
     type: position_tracker
     interval: 10s
 
+# ── ACTIONS ──
 actions:
   - name: position_tracker_action
     action_type: POSITION_TRACKER
     decision_mode: rule
     scanners: [position_tracker]
 
+# ── EXIT (DSL) ──
 exit:
   engine: dsl
   interval_seconds: 30
@@ -48,3 +50,7 @@ exit:
         - { trigger_pct: 12, lock_hw_pct: 55 }
         - { trigger_pct: 15, lock_hw_pct: 75 }
         - { trigger_pct: 20, lock_hw_pct: 85 }
+
+# ── NOTIFICATIONS ──
+notifications:
+  telegram_chat_id: "${TELEGRAM_CHAT_ID}"
