@@ -9,7 +9,7 @@ description: >-
 license: MIT
 metadata:
   author: jason-goldberg
-  version: "1.0.1"
+  version: "2.0"
   platform: senpi
   exchange: hyperliquid
   based_on: grizzly-v2.1

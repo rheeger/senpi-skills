@@ -9,7 +9,7 @@ description: >-
 license: MIT
 metadata:
   author: jason-goldberg
-  version: "1.2"
+  version: "2.0"
   platform: senpi
   exchange: hyperliquid
   based_on: orca-v1.1.1

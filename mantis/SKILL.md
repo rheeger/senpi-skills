@@ -10,7 +10,7 @@ description: >-
 license: MIT
 metadata:
   author: jason-goldberg
-  version: "3.0"
+  version: "4.0"
   platform: senpi
   exchange: hyperliquid
   config_source: mantis-v2-plus-contrib-threshold-experiment
