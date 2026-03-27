@@ -159,9 +159,10 @@ On EVERY session start, check `config/bootstrap-complete.json`. If missing:
 4. Set telegram in recipe: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/orca-strategy/recipe.yaml`
 5. Install recipe: `openclaw senpi trading-recipe create --path /data/workspace/skills/orca-strategy/recipe.yaml`
 6. Verify recipe installed: `openclaw senpi trading-recipe list`
-7. Create scanner cron (90s, main)
-8. Write `config/bootstrap-complete.json`
-9. Send: "🐋 ORCA v1.3 online. Stalker + Striker experiment. Max 8 entries/day. DSL managed by plugin runtime. Silence = no conviction."
+7. Remove old DSL cron (if upgrading): run `openclaw crons list`, delete any cron containing `dsl-v5.py` via `openclaw crons delete <id>`
+8. Create scanner cron (90s, main)
+9. Write `config/bootstrap-complete.json`
+10. Send: "🐋 ORCA v1.3 online. Stalker + Striker experiment. Max 8 entries/day. DSL managed by plugin runtime. Silence = no conviction."
 
 If bootstrap exists, still verify recipe and scanner cron on every session start.
 
