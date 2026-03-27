@@ -515,17 +515,17 @@ def evaluate_reload(exit_state, entry_cfg):
         return False, reload_checks
 
 
-# ─── Hardcoded Constants & DSL State Builder ─────────────────
+# ─── Hardcoded Constants ──────────────────────────────────────
 
-MAX_LEVERAGE = 10         # Capped from 15-20x
-MIN_LEVERAGE = 7
+MAX_LEVERAGE = 7          # Reduced from 10x — SOL at 10x is too volatile
+MIN_LEVERAGE = 5
 
 
 # ─── Main ─────────────────────────────────────────────────────
 
 def run():
     config = cfg.load_config()
-    wallet, _ = cfg.get_wallet_and_strategy()
+    wallet, strategy_id = cfg.get_wallet_and_strategy()
 
     if not wallet:
         cfg.output({"success": True, "heartbeat": "NO_REPLY", "note": "no wallet"})
@@ -549,27 +549,12 @@ def run():
             state["currentMode"] = "RIDING"
             cfg.save_state(state, "kodiak-state.json")
 
-        still_valid, reasons = evaluate_sol_position(sol_position["direction"], entry_cfg)
-        if not still_valid:
-            cfg.output({
-                "success": True,
-                "action": "thesis_exit",
-                "exits": [{
-                    "coin": "SOL",
-                    "direction": sol_position["direction"],
-                    "reasons": reasons,
-                    "upnl": sol_position.get("upnl", 0),
-                }],
-                "note": "SOL thesis invalidated — conviction broken",
-            })
-            # On thesis exit, go to HUNTING (thesis is dead, don't stalk)
-            state["currentMode"] = "HUNTING"
-            state.pop("exitState", None)
-            cfg.save_state(state, "kodiak-state.json")
-            return
-
+        # v2.0: DSL manages ALL exits. Scanner does NOT thesis-exit.
+        # Wolverine v1.1 data: 25/27 trades killed by thesis exit, not DSL.
+        # The scanner re-evaluating open positions was chopping winners.
         cfg.output({"success": True, "heartbeat": "NO_REPLY",
-                     "note": f"RIDING: SOL {sol_position['direction']} thesis intact"})
+                     "note": f"RIDING: SOL {sol_position['direction']} — DSL manages exit. Scanner does NOT re-evaluate.",
+                     "_v2_no_thesis_exit": True})
         cfg.save_state(state, "kodiak-state.json")
         return
 

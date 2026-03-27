@@ -1,11 +1,10 @@
 ---
 name: kodiak-strategy
 description: >-
-  KODIAK v1.0 — SOL alpha hunter with position lifecycle. Single asset, every signal
-  (SM, funding, OI, 4TF trend, volume, BTC correlation). Three-mode lifecycle:
-  HUNTING (scan for entry) / RIDING (DSL trails) / STALKING (watch for reload on dip).
-  After DSL takes profit, watches for fresh momentum impulse while confirming macro thesis
-  is intact. If thesis dies, resets. If dip reloads, re-enters.
+  KODIAK v2.0 — SOL alpha hunter with position lifecycle. Thesis exit removed.
+  DSL manages all exits. Leverage capped at 7x. Retrace widened to 0.08.
+  v1.1.1's SOL SHORT ran 13 hours unprotected due to missing wallet fields —
+  v2.0 prevents this.
   DSL exit managed by plugin runtime via recipe.yaml.
 license: MIT
 metadata:
@@ -18,55 +17,93 @@ metadata:
     - senpi-trading-runtime
 ---
 
-# KODIAK v1.0 — SOL Alpha Hunter with Position Lifecycle
+# 🐻 KODIAK v2.0 — SOL Alpha Hunter
 
-One asset. Every signal. Maximum conviction. Reload-on-dip.
+One asset. Every signal. Scanner enters. DSL exits.
 
-KODIAK stares at SOL and nothing else. Every signal source available — smart money positioning, funding rate, open interest, 4-timeframe trend structure, volume, BTC correlation — feeds into a single thesis: is there a high-conviction SOL trade right now?
+---
 
-Based on GRIZZLY v2.0's three-mode lifecycle, adapted for SOL's volatility profile.
+## ⛔ CRITICAL AGENT RULES
+
+### RULE 1: Install path is `/data/workspace/skills/kodiak-strategy/`
+
+### RULE 2: THE SCANNER DOES NOT EXIT POSITIONS
+
+When the scanner sees an active SOL position, it outputs NO_REPLY. DSL is the
+ONLY exit mechanism. v1.1.1 had a thesis exit that chopped positions before
+DSL could trail them. v2.0 removes it entirely.
+
+### RULE 3: MAX 1 POSITION — SOL only
+
+### RULE 4: Scanner output is AUTHORITATIVE
+
+### RULE 5: Verify recipe is installed on every session start
+
+Run `openclaw senpi trading-recipe list`. Recipe must be listed. The position tracker and DSL exit are handled by the plugin runtime.
+
+### RULE 6: Never modify parameters. Never increase leverage above 7x.
+
+### RULE 7: 120-minute cooldown after consecutive losses
+
+---
+
+## What Changed From v1.1.1
+
+| v1.1.1 | v2.0 |
+|---|---|
+| Thesis exit active in RIDING mode | **Removed** — DSL manages all exits |
+| DSL state missing wallet + size | **All fields included** |
+| Leverage 10-12x | **Capped at 7x** |
+| Retrace 0.03 (3% ROE = 0.3% price at 10x) | **0.08 (8% ROE = 1.14% price at 7x)** |
+| `strategy_id` discarded in run() | **Captured and passed to DSL builder** |
+| SOL SHORT ran 13h unprotected | **Every position protected from second 1** |
+
+---
+
+## v1.1.1 Proof of Concept
+
+Kodiak's best trade: SOL SHORT, entry $90.36, DSL trailed to Tier 4 (+44% ROE),
+exit at $85.86, realized **+$134** profit. The scanner found the setup. DSL
+managed the exit perfectly — locked 85% of peak, gave back only $3 from top.
+
+The problem: DSL was manually patched onto this trade 13 hours after entry
+because the state file was missing wallet fields. v2.0 fixes this permanently.
+
+---
 
 ## The Three-Mode Lifecycle
 
 ### MODE 1 — HUNTING (default)
 
-Scan SOL every 3 minutes. All signals must align (4h trend, 1h momentum, SM, funding, OI, volume). Score 10+ to enter. When a position opens, switch to MODE 2.
+Scan SOL every 3 minutes. All signals must align (4h trend, 1h momentum, SM,
+funding, OI, volume). Score 10+ to enter. When a position opens, switch to MODE 2.
 
 ### MODE 2 — RIDING
 
-Active position. DSL trails it via the plugin runtime. Thesis re-evaluation every scan. If thesis breaks (4h trend flips, SM flips, funding extreme, volume dies, BTC diverges) -> thesis exit and reset to MODE 1. If DSL closes the position -> switch to MODE 3.
+Active position. **DSL manages the exit via the plugin runtime. Scanner outputs NO_REPLY.**
+The scanner does NOT re-evaluate the thesis. It does NOT close positions.
+The plugin DSL trails the position through Phase 1 protection and Phase 2
+trailing tiers. When DSL closes the position → switch to MODE 3.
 
 ### MODE 3 — STALKING
 
-DSL locked profits. The trend may not be over. Watch for a reload opportunity. Every scan checks:
+DSL locked profits. Watch for a reload opportunity. ALL reload conditions
+must pass: fresh momentum impulse, OI stable, volume present, funding not
+crowded, SM still aligned, 4h trend intact.
 
-**Reload conditions (ALL must pass):**
-1. At least one completed 1h candle since exit (~30 min minimum)
-2. Fresh 5m momentum impulse in the exit direction
-3. OI stable or growing
-4. Volume at least 50% of original entry
-5. Funding not spiked into crowded territory
-6. SM still aligned in the exit direction
-7. 4h trend structure still intact
+If reload fires → re-enter same direction, switch to MODE 2.
+If kill conditions trigger → reset to MODE 1.
 
-If ALL pass -> RELOAD. Re-enter same direction, same leverage. Switch to MODE 2.
+---
 
-**Kill conditions (ANY triggers reset to MODE 1):**
-- 4h trend reversed
-- SM flipped against exit direction
-- OI collapsed 20%+
-- Stalking for more than 6 hours with no reload
-- Funding spiked above 100% annualized
+## Cron Setup
 
-**maxPositions: 1.** KODIAK holds one SOL position at a time.
+Scanner (3 min, main):
+```
+python3 /data/workspace/skills/kodiak-strategy/scripts/kodiak-scanner.py
+```
 
-## Why SOL-Only at 7-12x Leverage
-
-- **High volatility** — SOL moves 5-10% in hours, amplifying conviction trades
-- **Growing liquidity on Hyperliquid** — increasingly tradeable at size
-- **Ecosystem momentum** — SOL trends driven by DeFi/NFT/memecoin cycles
-- **BTC as regime filter** — SOL trends rarely sustain against a BTC reversal
-- **Lower leverage compensates for volatility** — 10x on SOL ≈ 15x on BTC in terms of realized move
+---
 
 ## How KODIAK Trades
 
@@ -94,9 +131,8 @@ Maximum score: ~18. Minimum to enter: 10.
 
 | Score | Leverage |
 |---|---|
-| 10-11 | 10x |
-| 12-13 | 11x |
-| 14+ | 12x |
+| 10-11 | 7x |
+| 12+ | 7x |
 
 ### Conviction-Scaled Margin
 
@@ -114,15 +150,21 @@ DSL exit is handled by the plugin runtime via `recipe.yaml`. The `position_track
 - `openclaw senpi dsl positions` — list all DSL-tracked positions
 - `openclaw senpi dsl inspect <ASSET>` — full position details
 
-## Risk Management
+## Why SOL-Only at 7x Leverage
+
+---
+
+## Risk
 
 | Rule | Value |
 |---|---|
-| Max positions | 1 |
-| Phase 1 floor | 2.5% notional (~25% ROE at 10x) |
-| Drawdown halt | 25% from peak |
+| Max positions | 1 (SOL only) |
+| Max leverage | 7x |
+| Phase 1 retrace | 0.08 |
 | Daily loss limit | 10% |
 | Cooldown | 120 min after 3 consecutive losses |
+
+---
 
 ## Recipe Setup
 
@@ -169,7 +211,7 @@ If bootstrap exists, still verify recipe and scanner cron on every session start
 
 ## Notification Policy
 
-**ONLY alert:** Position OPENED (direction, leverage, score, reasons), position CLOSED (DSL or thesis exit), risk guardian triggered, critical error.
+**ONLY alert:** Position OPENED (direction, leverage, score, reasons), position CLOSED (DSL exit with P&L), risk guardian triggered, critical error.
 **NEVER alert:** Scanner found no thesis, thesis re-eval passed, any reasoning.
 
 ---
@@ -190,9 +232,9 @@ If bootstrap exists, still verify recipe and scanner cron on every session start
 
 | File | Purpose |
 |---|---|
-| `scripts/kodiak-scanner.py` | SOL thesis builder + re-evaluator + stalk/reload |
-| `scripts/kodiak_config.py` | Shared config, MCP helpers, state I/O |
-| `config/kodiak-config.json` | All configurable variables |
+| `scripts/kodiak-scanner.py` | SOL thesis builder + stalk/reload |
+| `scripts/kodiak_config.py` | Config helper (MCP, state, cooldowns) |
+| `config/kodiak-config.json` | Wallet, strategy ID, configurable variables |
 | `recipe.yaml` | Trading recipe for plugin runtime (DSL exit + position tracker) |
 
 ---

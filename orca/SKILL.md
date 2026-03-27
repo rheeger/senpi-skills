@@ -1,10 +1,11 @@
 ---
 name: orca-strategy
 description: >-
-  ORCA v1.2 — Hardened dual-mode emerging movers scanner with Fox's live
-  trading lessons applied. Stalker minScore raised to 7, minTotalClimb to 8.
-  Stalker consecutive-loss streak gate: 3 losses in a row raises minScore to 9
-  until a win resets. XYZ banned. Leverage 7-10x.
+  ORCA v1.3 — Dual-mode scanner (Stalker + Striker). The clean experiment:
+  does Stalker add value on top of Striker? Roach = Striker only (+8.2%).
+  Orca v1.3 = both modes with hardened infrastructure. Hunter removed (0 trades).
+  Pyramiding removed. Thesis exit removed. DSL manages all exits.
+  Max 8 entries/day to prevent fee bleed.
   DSL exit managed by plugin runtime via recipe.yaml.
 license: MIT
 metadata:
@@ -18,63 +19,73 @@ metadata:
     - senpi-trading-runtime
 ---
 
-# 🐋 ORCA v1.2 — Hardened Dual-Mode Scanner + Fox's Lessons
+# 🐋 ORCA v1.3 — Dual-Mode Scanner (Stalker + Striker)
 
-Orca v1.1.1's proven core with targeted fixes from Fox's live trade data.
+The experiment: does Stalker add value, or is Striker-only the answer?
 
 ---
 
-## ⛔ CRITICAL AGENT RULES — READ BEFORE ANYTHING ELSE
+## ⛔ CRITICAL AGENT RULES
 
 ### RULE 1: Install path is `/data/workspace/skills/orca-strategy/`
 
-The skill MUST be installed to exactly this path. A prior agent installed to `~/.openclaw/skills/` which broke scanner state tracking and led to 22 open positions.
+### RULE 2: THE SCANNER DOES NOT EXIT POSITIONS
 
-### RULE 2: MAX 3 POSITIONS — check before EVERY entry
+### RULE 3: MAX 3 POSITIONS at a time
 
-Before opening ANY position, call `strategy_get_clearinghouse_state` and count open positions. If positions >= 3, SKIP. No exceptions.
+### RULE 4: MAX 8 ENTRIES PER DAY — non-negotiable
 
-### RULE 3: Scanner output is AUTHORITATIVE — never override from memory
+v1.1 was doing 30 trades/day and bleeding $80+/day in fees despite positive
+gross P&L. 8 entries × ~$4 fees = $32/day max fee exposure.
 
-If the scanner says `minLeverage: 7`, you use 7. Not 5 from your MEMORY.md. The scanner is the single source of truth.
-
-### RULE 4: Verify recipe is installed on every session start
+### RULE 5: Verify recipe is installed on every session start
 
 Run `openclaw senpi trading-recipe list`. Recipe must be listed. The position tracker and DSL exit are handled by the plugin runtime.
 
-### RULE 5: Never retry timed-out position creation
+### RULE 6: Never retry timed-out position creation
 
 If `create_position` times out, check clearinghouse state. If position exists, the position tracker will pick it up automatically. If not, wait for next scan.
 
-### RULE 6: Never modify your own configuration
+### RULE 7: Never modify your own configuration
 
 Do not adjust leverage, margin, entry caps, or scoring thresholds.
 
-### RULE 7: Record Stalker results for streak tracking
+### RULE 8: Record Stalker results for streak tracking
 
 After every Stalker position closes, call `record_stalker_result(tc, is_win)` from orca_config.py. The scanner uses this to detect losing streaks and temporarily raise the entry bar.
 
----
-
-## What v1.2 Changes (Fox's Live Trade Data)
-
-Fox v1.0 ran the Orca scanner for 5+ days. Analysis of 20 closed positions revealed:
-
-**The problem:** 17 of 20 trades were Stalker entries at score 6-7. Win rate: 17.6%. Net P&L: -$91.32. The "weak peak bleed" pattern — trades open, bump +0.5% into profit, stall, then DSL cuts them for $3-$10 losses.
-
-**The fixes:**
-
-| Change | v1.1.1 | v1.2 | Why |
-|---|---|---|---|
-| Stalker minScore | 6 | 7 | Score 6 entries were 100% losers (AVAX, PAXG) |
-| Stalker minTotalClimb | 5 | 8 | Weak +5/+6 climbs were noise, not accumulation |
-| Stalker streak gate | (none) | 3 consecutive losses → minScore raised to 9 | Prevents "death by a thousand cuts" bleed |
-
-**What's unchanged:** Striker logic, DSL tiers, XYZ ban, leverage caps, max positions, cooldowns.
+### RULE 9: 120-minute per-asset cooldown
 
 ---
 
-## Dual-Mode Entry
+## Experiment Design
+
+| Agent | Strategy | What It Tests |
+|---|---|---|
+| Roach | Striker only | Pure explosion signals |
+| Orca v1.3 | Stalker + Striker | Does accumulation detection add value? |
+
+If v1.3 outperforms Roach, Stalker stays in the architecture.
+If Roach wins, Stalker is removed permanently from all skills.
+
+---
+
+## What Changed
+
+| v1.2 | v1.3 |
+|---|---|
+| Crons kept dying silently | Hardened setup with recipe verification |
+| State files in wrong directory | Single canonical state dir |
+| Self-healing loop creating more bugs | No self-healing — if state breaks, report it |
+| Hunter mode (0 trades) | Removed |
+| Pyramiding (never triggered) | Removed |
+| No entry cap (30 trades/day) | 8 entries/day max |
+| 10x leverage | 7x leverage |
+| Thesis exit active | Removed — DSL manages all exits |
+
+---
+
+## Entry Modes
 
 ### MODE A — STALKER (Accumulation) — Score >= 7
 - SM rank climbing steadily over 3+ consecutive scans
@@ -150,21 +161,21 @@ On EVERY session start, check `config/bootstrap-complete.json`. If missing:
 6. Verify recipe installed: `openclaw senpi trading-recipe list`
 7. Create scanner cron (90s, main)
 8. Write `config/bootstrap-complete.json`
-9. Send: "🐋 ORCA v1.2 online. Fox's lessons applied. Stalker minScore 7, climb 8+, streak gate active. Silence = no conviction."
+9. Send: "🐋 ORCA v1.3 online. Stalker + Striker experiment. Max 8 entries/day. DSL managed by plugin runtime. Silence = no conviction."
 
 If bootstrap exists, still verify recipe and scanner cron on every session start.
 
 ---
 
-## Risk Management
+## Risk
 
 | Rule | Value | Why |
 |---|---|---|
 | Max positions | 3 | Concentration > diversification |
-| Max entries/day | 6 | Fewer trades wins |
-| Leverage | 7-10x | Sub-7x can't overcome fees; 15x blows up |
+| Max entries/day | 8 | Prevents fee bleed |
+| Leverage | 7x | Sub-7x can't overcome fees; 15x blows up |
 | Daily loss limit | 10% | Proven across 30 agents |
-| Per-asset cooldown | 2 hours | PAXG double-entry lesson |
+| Per-asset cooldown | 120 min | PAXG double-entry lesson |
 | XYZ equities | Banned | Net negative across every agent |
 | Stalker streak gate | 3 consecutive Stalker losses → minScore 9 | Prevents weak-peak bleed |
 
@@ -192,4 +203,3 @@ If bootstrap exists, still verify recipe and scanner cron on every session start
 ## License
 
 MIT — Built by Senpi (https://senpi.ai).
-Source: https://github.com/Senpi-ai/senpi-skills

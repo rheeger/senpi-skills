@@ -1,78 +1,30 @@
-# 🐻 KODIAK v1.0 — SOL Alpha Hunter
+# 🐻 KODIAK v2.0 — SOL Alpha Hunter
 
-Part of the [Senpi Trading Skills Zoo](https://github.com/Senpi-ai/senpi-skills).
+Part of the [Senpi Trading Skills](https://github.com/Senpi-ai/senpi-skills).
 
-## What KODIAK Does
+## Thesis
 
-KODIAK is a single-asset alpha hunter for **SOL** on Hyperliquid. It uses every available signal source (SM positioning, funding, OI, 4-timeframe trend, volume, BTC correlation) to build a conviction thesis, then trades it with 7-12x leverage and DSL High Water trailing stops.
+SOL-only lifecycle hunter. Three modes: HUNT (scan for entry) → RIDE (DSL trails) → STALK (watch for reload). Based on Grizzly's BTC lifecycle, adapted for SOL's volatility.
 
-Based on GRIZZLY v2.0's three-mode lifecycle, adapted for SOL's volatility profile.
+## v2.0 Highlights
 
-## Three-Mode Lifecycle
+- **+$134 on a single SOL SHORT** — DSL trailed to Tier 4, locked 85% of peak
+- Thesis exit removed — DSL manages all exits
+- DSL state includes wallet + size (fixes the bug that left positions unprotected)
+- Leverage capped at 7x (was 10-12x)
+- Retrace widened to 0.08 (positions hold through normal SOL oscillation)
 
-```
-HUNTING ──> enter ──> RIDING ──> DSL closes ──> STALKING
-   ^                    |                          |
-   |                    v                          v
-   |              thesis breaks              reload OR kill
-   |              (reset to HUNT)           (reload=RIDE, kill=HUNT)
-   +───────────────────────────────────────────────+
-```
+## Key Settings
 
-- **HUNTING:** Scan every 3 min. Score 10+ across all signals to enter.
-- **RIDING:** Position open. DSL trails. Thesis re-evaluated every scan.
-- **STALKING:** DSL took profit. Watch for reload on dip, or kill if thesis dies.
-
-## Quick Start
-
-1. Deploy `config/kodiak-config.json` to your Senpi agent
-2. Deploy `scripts/kodiak-scanner.py` and `scripts/kodiak_config.py`
-3. Create scanner cron (3 min, isolated) and DSL cron (3 min, isolated)
-4. Fund with $1,000 on the Senpi Predators leaderboard
-
-## Directory Structure
-
-```
-kodiak-v1.0/
-|-- README.md
-|-- SKILL.md
-|-- config/
-|   +-- kodiak-config.json
-+-- scripts/
-    |-- kodiak-scanner.py
-    +-- kodiak_config.py
-```
-
-## Key Config Differences from GRIZZLY (BTC)
-
-| Setting | GRIZZLY (BTC) | KODIAK (SOL) |
-|---|---|---|
-| Asset | BTC | SOL |
-| Correlation | ETH | BTC |
-| Leverage | 12-20x | 7-12x |
-| Margin base | 30% | 20% |
-| DSL floor | 3.5% notional | 2.5% notional |
-| Stagnation TP | 12% ROE / 90 min | 10% ROE / 75 min |
-
-## Entry Requirements (all must pass)
-
-| Gate | Requirement |
+| Setting | Value |
 |---|---|
-| 4h trend | Bullish or bearish structure (required) |
-| 1h trend | Must agree with 4h (required) |
-| 15m momentum | Must confirm direction (required) |
-| SM positioning | Hard block if opposing |
-| Score | >= 10 combined |
+| Asset | SOL only |
+| Leverage | 7x max |
+| Max positions | 1 |
+| Entry score | 10+ |
+| DSL retrace | 0.08 |
+| Trailing tiers | 7%/40%, 12%/55%, 15%/75%, 20%/85% |
 
 ## License
 
-MIT — see root repo LICENSE.
-
-## Changelog
-
-### v1.1.1
-- Fixed DSL field names: `phase1MaxMinutes` (was `hardTimeoutMinutes`), `deadWeightCutMin` (was `deadWeightCutMinutes`)
-- `highWaterPrice` initialized as `null` (was `0`) — lets dsl-v5.py set from actual entry price on first tick
-- Removed static `absoluteFloor` price values — dsl-v5.py now calculates dynamically from `absoluteFloorRoe`
-- Leverage capped at 10x, cosmetic BTC→SOL string fixes
-- Requires dsl-v5.py with Patch 1 (dynamic absoluteFloorRoe calculator) and Patch 2 (highWaterPrice null handling)
+MIT — Copyright 2026 Senpi (https://senpi.ai)

@@ -1,4 +1,4 @@
-"""ORCA Strategy — Shared config, MCP helpers, state I/O.
+"""JAGUAR Strategy v1.0 — Shared config, MCP helpers, state I/O.
 Self-contained — does not depend on wolf_config."""
 # Copyright 2026 Senpi (https://senpi.ai)
 # Licensed under MIT
@@ -15,10 +15,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 WORKSPACE = os.environ.get("OPENCLAW_WORKSPACE", "/data/workspace")
-SKILL_DIR = Path(WORKSPACE) / "skills" / "orca-strategy"
-CONFIG_PATH = SKILL_DIR / "config" / "orca-config.json"
+SKILL_DIR = Path(WORKSPACE) / "skills" / "jaguar-strategy"
+CONFIG_PATH = SKILL_DIR / "config" / "jaguar-config.json"
 STATE_DIR = SKILL_DIR / "state"
-HISTORY_FILE = os.path.join(WORKSPACE, "orca-emerging-history.json")
+HISTORY_FILE = os.path.join(WORKSPACE, "jaguar-emerging-history.json")
 COOLDOWN_FILE = STATE_DIR / "asset-cooldowns.json"
 
 STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -54,8 +54,8 @@ def load_config():
 
 
 def get_wallet_and_strategy():
-    wallet = os.environ.get("ORCA_WALLET", "")
-    strategy_id = os.environ.get("ORCA_STRATEGY_ID", "")
+    wallet = os.environ.get("JAGUAR_WALLET", "")
+    strategy_id = os.environ.get("JAGUAR_STRATEGY_ID", "")
     if not wallet or not strategy_id:
         config = load_config()
         wallet = wallet or config.get("wallet", "")
@@ -77,6 +77,22 @@ def save_state(data, filename="state.json"):
     atomic_write(str(STATE_DIR / filename), data)
 
 
+def list_active_states():
+    """Return list of active DSL state files (positions being managed)."""
+    states = []
+    for f in STATE_DIR.glob("*.json"):
+        if f.name in ("trade-counter.json", "asset-cooldowns.json", "pyramid-tracker.json"):
+            continue
+        try:
+            with open(f) as fh:
+                data = json.load(fh)
+            if data.get("active", False):
+                states.append({"file": f.name, "asset": data.get("asset", ""), "data": data})
+        except (json.JSONDecodeError, IOError):
+            pass
+    return states
+
+
 # ─── Trade Counter ───────────────────────────────────────────
 
 def load_trade_counter():
@@ -85,8 +101,7 @@ def load_trade_counter():
     default = {
         "date": today, "entries": 0, "realizedPnl": 0,
         "gate": "OPEN", "gateReason": None, "cooldownUntil": None,
-        "lastResults": [],
-        "stalkerResults": [],  # v1.2: track Stalker W/L for streak detection
+        "lastResults": []
     }
     if path.exists():
         try:
@@ -99,7 +114,6 @@ def load_trade_counter():
                 tc["gate"] = "OPEN"
                 tc["gateReason"] = None
                 tc["cooldownUntil"] = None
-                # NOTE: stalkerResults persists across days (streak spans sessions)
             for k, v in default.items():
                 if k not in tc:
                     tc[k] = v
@@ -112,15 +126,6 @@ def load_trade_counter():
 def save_trade_counter(tc):
     tc["updatedAt"] = now_iso()
     atomic_write(str(STATE_DIR / "trade-counter.json"), tc)
-
-
-def record_stalker_result(tc, is_win):
-    """v1.2: Track Stalker trade results for streak detection.
-    If a win, reset the streak. Keep last 10 results."""
-    results = tc.get("stalkerResults", [])
-    results.append("W" if is_win else "L")
-    tc["stalkerResults"] = results[-10:]
-    save_trade_counter(tc)
 
 
 # ─── Asset Cooldowns ─────────────────────────────────────────
@@ -158,6 +163,48 @@ def set_asset_cooldown(token, reason="phase1_exit"):
         "setAt": now_iso(),
     }
     save_cooldowns(cooldowns)
+
+
+# ─── Pyramid Tracker ─────────────────────────────────────────
+
+def load_pyramid_tracker():
+    path = STATE_DIR / "pyramid-tracker.json"
+    if path.exists():
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {}
+
+
+def save_pyramid_tracker(tracker):
+    atomic_write(str(STATE_DIR / "pyramid-tracker.json"), tracker)
+
+
+def has_pyramided(token):
+    """Check if a position has already been pyramided (max 1 per position)."""
+    tracker = load_pyramid_tracker()
+    return token in tracker
+
+
+def record_pyramid(token, margin, score):
+    """Record that a pyramid was added to a position."""
+    tracker = load_pyramid_tracker()
+    tracker[token] = {
+        "pyramidedAt": now_iso(),
+        "margin": margin,
+        "score": score,
+    }
+    save_pyramid_tracker(tracker)
+
+
+def clear_pyramid(token):
+    """Clear pyramid record when position is closed."""
+    tracker = load_pyramid_tracker()
+    if token in tracker:
+        del tracker[token]
+        save_pyramid_tracker(tracker)
 
 
 # ─── Scanner History ─────────────────────────────────────────
@@ -234,13 +281,26 @@ def get_positions(wallet):
             szi = float(pos.get("szi", 0))
             if szi == 0:
                 continue
+            entry_px = float(pos.get("entryPx", 0))
+            mark_px = float(pos.get("markPx", pos.get("liquidationPx", 0)))
+            margin_used = float(pos.get("marginUsed", 0))
+            leverage = float(pos.get("leverage", {}).get("value", 10) if isinstance(pos.get("leverage"), dict) else pos.get("leverage", 10))
+            roe = 0
+            if entry_px > 0 and mark_px > 0:
+                if szi > 0:
+                    roe = ((mark_px - entry_px) / entry_px) * leverage * 100
+                else:
+                    roe = ((entry_px - mark_px) / entry_px) * leverage * 100
             positions.append({
                 "coin": pos.get("coin", ""),
                 "direction": "LONG" if szi > 0 else "SHORT",
                 "upnl": float(pos.get("unrealizedPnl", 0)),
-                "margin": float(pos.get("marginUsed", 0)),
-                "entryPrice": float(pos.get("entryPx", 0)),
+                "margin": margin_used,
+                "entryPrice": entry_px,
+                "markPrice": mark_px,
                 "size": abs(szi),
+                "leverage": leverage,
+                "roe": round(roe, 2),
             })
     return account_value, positions
 
