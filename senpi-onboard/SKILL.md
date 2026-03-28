@@ -111,28 +111,27 @@ Set `MCPORTER_AVAILABLE=true` once installed and proceed.
 
 Ask the user which identity type to use. Try each option in order:
 
-1. **Option A -- Telegram** (preferred): Collect the username and numeric user ID separately (see below).
+1. **Option A -- Telegram user ID** (preferred): Ask for the numeric Telegram user ID (see below).
 2. **Option B -- User-provided wallet**: Must be `0x`-prefixed, exactly 42 hex characters. Validate before proceeding.
 3. **Option C -- Agent-generated wallet** (fallback when user has neither).
 
-#### Option A: Collect Telegram identity
+#### Option A: Collect Telegram user ID
 
-Ask the user for their Telegram username. Strip the `@` prefix if present:
+When the user chooses Telegram, present these instructions before asking for input:
 
-```bash
-TELEGRAM_USERNAME="username"  # without @, used for display
-```
-
-Then ask for their **numeric Telegram user ID**. Explain that this is a number, not their username:
-
-> "I also need your **numeric Telegram user ID** (e.g. `8362644815`). This is different from your username. To find it, open Telegram and message [@userinfobot](https://t.me/userinfobot) — it will instantly reply with your numeric ID."
+> **To find your Telegram user ID:**
+> 1. Open Telegram and search for **@userinfobot**
+> 2. Start a chat and send any message (e.g. `/start`)
+> 3. It will reply instantly with your numeric user ID (e.g. `8362644815`)
+>
+> Please enter your numeric Telegram user ID:
 
 ```bash
 IDENTITY_TYPE="TELEGRAM"
 IDENTITY_VALUE="8362644815"  # numeric Telegram user ID (digits only)
 ```
 
-Validate that `IDENTITY_VALUE` contains only digits. If it contains any non-digit characters (letters, `@`, etc.), reject it and re-prompt with the same @userinfobot instructions.
+Validate that `IDENTITY_VALUE` contains only digits. If it contains any non-digit characters (letters, `@`, spaces, etc.), reject it and re-prompt with the same instructions above.
 
 #### Option B: Set variables
 
@@ -201,7 +200,6 @@ Notify the user that a wallet was generated and saved to `~/.config/senpi/wallet
 Before Step 2, confirm these are set:
 - `IDENTITY_TYPE` -- `"WALLET"` or `"TELEGRAM"`
 - `IDENTITY_VALUE` -- wallet address (with `0x`) or Telegram numeric user ID (digits only)
-- `TELEGRAM_USERNAME` -- Telegram username without `@` (only set when `IDENTITY_TYPE` is `TELEGRAM`)
 - `WALLET_GENERATED` -- `true` if Option C was used, unset otherwise
 
 **Persist progress for resume:** Update `~/.config/senpi/state.json`: set `onboarding.step` to `REFERRAL`, and if available set `onboarding.identityType`, `onboarding.subject`, `onboarding.walletGenerated` from current variables. Use read-modify-write so other fields are preserved.
@@ -233,7 +231,7 @@ RESPONSE=$(curl -s -X POST https://moxie-backend.prod.senpi.ai/graphql \
       "input": {
         "from": "'"${IDENTITY_TYPE}"'",
         "subject": "'"${IDENTITY_VALUE}"'",
-        '"$([ "$IDENTITY_TYPE" = "TELEGRAM" ] && echo "\"userName\": \"${TELEGRAM_USERNAME}\",")"'
+        '"$([ "$IDENTITY_TYPE" = "TELEGRAM" ] && echo "\"userName\": \"${IDENTITY_VALUE}\",")"'
         "referralCode": "'"${REFERRAL_CODE}"'",
         "apiKeyName": "agent-'"$(date +%s)"'"
       }
@@ -241,7 +239,7 @@ RESPONSE=$(curl -s -X POST https://moxie-backend.prod.senpi.ai/graphql \
   }')
 ```
 
-**Note for TELEGRAM identity:** Include the additional `"userName"` field set to `TELEGRAM_USERNAME` (the display username) in the input. `subject` must be set to `IDENTITY_VALUE` (the numeric user ID).
+**Note for TELEGRAM identity:** Include the additional `"userName"` field set to `IDENTITY_VALUE` (the numeric user ID) in the input.
 
 **Persist progress for resume:** Update `~/.config/senpi/state.json`: set `onboarding.step` to `PARSE`. Use read-modify-write.
 
