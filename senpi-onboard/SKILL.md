@@ -117,21 +117,7 @@ Ask the user which identity type to use. Try each option in order:
 
 #### Option A: Collect Telegram user ID
 
-When the user chooses Telegram, present these instructions before asking for input:
-
-> **To find your Telegram user ID:**
-> 1. Open Telegram and search for **@userinfobot**
-> 2. Start a chat and send any message (e.g. `/start`)
-> 3. It will reply instantly with your numeric user ID (e.g. `8362644815`)
->
-> Please enter your numeric Telegram user ID:
-
-```bash
-IDENTITY_TYPE="TELEGRAM"
-IDENTITY_VALUE="8362644815"  # numeric Telegram user ID (digits only)
-```
-
-Validate that `IDENTITY_VALUE` contains only digits. If it contains any non-digit characters (letters, `@`, spaces, etc.), reject it and re-prompt with the same instructions above.
+See [references/telegram-identity.md](references/telegram-identity.md) for user-facing instructions and validation rules.
 
 #### Option B: Set variables
 
