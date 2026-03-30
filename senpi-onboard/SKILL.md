@@ -124,6 +124,7 @@ USER_MD="${OPENCLAW_WORKSPACE_DIR}/USER.md"
 if [ -f "$USER_MD" ]; then
   TELEGRAM_USER_ID=$(awk '/^## Telegram/{f=1; next} f && /^## /{f=0} f && /- Chat ID:/{print $NF; exit}' "$USER_MD")
   TELEGRAM_USERNAME=$(awk '/^## Telegram/{f=1; next} f && /^## /{f=0} f && /- Username:/{print $NF; exit}' "$USER_MD")
+  TELEGRAM_USERNAME="${TELEGRAM_USERNAME#@}" # normalize for API userName field
 fi
 ```
 
@@ -134,7 +135,7 @@ IDENTITY_TYPE="TELEGRAM"
 IDENTITY_VALUE="$TELEGRAM_USER_ID"
 ```
 
-If USER.md is missing or either field is absent/invalid, fall back to the manual prompt: see [references/telegram-identity.md](references/telegram-identity.md) for user-facing instructions and validation rules. Also set `TELEGRAM_USERNAME` from the user's input if prompted manually.
+If USER.md is missing or either field is absent/invalid, fall back to the manual prompt: see [references/telegram-identity.md](references/telegram-identity.md) for user-facing instructions and validation rules. Also set `TELEGRAM_USERNAME` from the user's input if prompted manually, then normalize it before API use with `TELEGRAM_USERNAME="${TELEGRAM_USERNAME#@}"`.
 
 #### Option B: Set variables
 
@@ -242,7 +243,7 @@ RESPONSE=$(curl -s -X POST https://moxie-backend.prod.senpi.ai/graphql \
   }')
 ```
 
-**Note for TELEGRAM identity:** Include the additional `"userName"` field set to `TELEGRAM_USERNAME` (the Telegram username from USER.md or user input) in the input.
+**Note for TELEGRAM identity:** Include the additional `"userName"` field set to normalized `TELEGRAM_USERNAME` (Telegram username without a leading `@`, from USER.md or user input) in the input.
 
 **Persist progress for resume:** Update `~/.config/senpi/state.json`: set `onboarding.step` to `PARSE`. Use read-modify-write.
 
