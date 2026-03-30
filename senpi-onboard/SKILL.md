@@ -109,11 +109,11 @@ Set `MCPORTER_AVAILABLE=true` once installed and proceed.
 
 ### Step 1: Collect Identity
 
-Ask the user which identity type to use. Try each option in order:
+Present all three options to the user and wait for them to choose:
 
-1. **Option A -- Telegram user ID** (preferred): Read from `${OPENCLAW_WORKSPACE_DIR}/USER.md` if available, otherwise ask the user.
+1. **Option A -- Telegram user ID**: The skill will read your Telegram identity from USER.md automatically.
 2. **Option B -- User-provided wallet**: Must be `0x`-prefixed, exactly 42 hex characters. Validate before proceeding.
-3. **Option C -- Agent-generated wallet** (fallback when user has neither).
+3. **Option C -- Agent-generated wallet** (only if you have neither).
 
 #### Option A: Collect Telegram user ID
 
