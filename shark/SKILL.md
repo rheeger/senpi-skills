@@ -121,9 +121,10 @@ On EVERY session start, check `config/bootstrap-complete.json`. If missing:
 4. Set Telegram in runtime.yaml: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/shark/runtime.yaml`
 5. Install runtime: `openclaw senpi runtime create --path /data/workspace/skills/shark/runtime.yaml`
 6. Verify runtime installed: `openclaw senpi runtime list`
-7. Create scanner cron (5 min, main)
-8. Write `config/bootstrap-complete.json`
-9. Send: "🦈 SHARK v3.0 online. SM Conviction + Liquidation Cascade Hunter. 4-gate entry, score 8+. DSL managed by plugin runtime. Silence = no conviction."
+7. Remove old DSL cron (if upgrading): run `openclaw crons list`, delete any cron containing `dsl-v5.py` via `openclaw crons delete <id>`
+8. Create scanner cron (5 min, main)
+9. Write `config/bootstrap-complete.json`
+10. Send: "🦈 SHARK v3.0 online. SM Conviction + Liquidation Cascade Hunter. 4-gate entry, score 8+. DSL managed by plugin runtime. Silence = no conviction."
 
 If bootstrap exists, still verify runtime and scanner cron on every session start.
 

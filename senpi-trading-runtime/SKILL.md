@@ -238,3 +238,5 @@ For full DSL configuration with all fields, time-based cuts, close reasons, and 
 - [YAML Schema Reference](references/yaml-schema.md) — All runtime YAML fields and DSL preset options
 - [DSL Configuration Reference](references/dsl-configuration.md) — Full DSL exit engine: phases, tiers, time cuts, close reasons, events
 - [Strategy Examples](references/strategy-examples.md) — Ready-to-use YAML examples with different DSL tuning profiles
+- [Migration from DSL Cron](references/migration-from-dsl-cron.md) — Upgrade from old `dsl-v5.py` cron to plugin runtime
+- [Runtime Template](references/runtime-template.yaml) — Starter runtime.yaml with field mapping comments
