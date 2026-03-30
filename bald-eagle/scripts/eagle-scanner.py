@@ -14,7 +14,7 @@ v2.0 fixes:
 - Leverage capped at 7x (was 20x)
 - Spread gate: rejects assets with > 0.1% spread
 - Max 3 entries/day, 120 min cooldown
-- Exit management handled by plugin runtime (recipe.yaml)
+- Exit management handled by plugin runtime (runtime.yaml)
 
 SM signal: leaderboard_get_markets filtered for dex="xyz".
 

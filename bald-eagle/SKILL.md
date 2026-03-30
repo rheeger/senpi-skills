@@ -6,7 +6,7 @@ description: >-
   and select equities (TSLA, NVDA). Spread gate rejects illiquid assets.
   Leverage capped at 7x (v1.0 used 20x and got liquidated).
   DSL manages all exits. No thesis exit.
-  DSL exit managed by plugin runtime via recipe.yaml.
+  DSL exit managed by plugin runtime via runtime.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
@@ -37,9 +37,9 @@ SNDK is the only hard ban.
 
 ### RULE 4: MAX 3 POSITIONS at a time
 
-### RULE 5: Verify recipe is installed on every session start
+### RULE 5: Verify runtime is installed on every session start
 
-Run `openclaw senpi trading-recipe list`. Recipe must be listed. The position tracker and DSL exit are handled by the plugin runtime.
+Run `openclaw senpi runtime list`. Runtime must be listed. The position tracker and DSL exit are handled by the plugin runtime.
 
 ### RULE 6: Never retry timed-out position creation
 
@@ -89,7 +89,7 @@ If `create_position` times out, check clearinghouse state. If position exists, t
 
 ## Exit Management
 
-DSL exit is handled by the plugin runtime via `recipe.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `recipe.yaml` for configuration details.
+DSL exit is handled by the plugin runtime via `runtime.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `runtime.yaml` for configuration details.
 
 **Monitor positions:**
 - `openclaw senpi dsl positions` — list all DSL-tracked positions
@@ -97,28 +97,28 @@ DSL exit is handled by the plugin runtime via `recipe.yaml`. The `position_track
 
 ---
 
-## Recipe Setup
+## Runtime Setup
 
-**Step 1:** Set your strategy wallet address in the recipe:
+**Step 1:** Set your strategy wallet address in runtime.yaml:
 ```bash
-sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/bald-eagle-strategy/recipe.yaml
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/bald-eagle-strategy/runtime.yaml
 ```
 Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
 
 **Step 2:** Set telegram chat ID for notifications:
 ```bash
-sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/bald-eagle-strategy/recipe.yaml
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/bald-eagle-strategy/runtime.yaml
 ```
 Replace `<CHAT_ID>` with the actual Telegram chat ID.
 
-**Step 3:** Install the trading recipe:
+**Step 3:** Install the runtime:
 ```bash
-openclaw senpi trading-recipe create --path /data/workspace/skills/bald-eagle-strategy/recipe.yaml
+openclaw senpi runtime create --path /data/workspace/skills/bald-eagle-strategy/runtime.yaml
 ```
 
 **Step 4:** Verify:
 ```bash
-openclaw senpi trading-recipe list
+openclaw senpi runtime list
 ```
 
 ---
@@ -126,18 +126,18 @@ openclaw senpi trading-recipe list
 ## Bootstrap Gate
 
 On EVERY session start, check `config/bootstrap-complete.json`. If missing:
-1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for recipe management and DSL position inspection.
+1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for runtime management and DSL position inspection.
 2. Verify Senpi MCP
-3. Set wallet in recipe: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/bald-eagle-strategy/recipe.yaml`
-4. Set telegram in recipe: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/bald-eagle-strategy/recipe.yaml`
-5. Install recipe: `openclaw senpi trading-recipe create --path /data/workspace/skills/bald-eagle-strategy/recipe.yaml`
-6. Verify recipe installed: `openclaw senpi trading-recipe list`
+3. Set wallet in runtime.yaml: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/bald-eagle-strategy/runtime.yaml`
+4. Set Telegram in runtime.yaml: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/bald-eagle-strategy/runtime.yaml`
+5. Install runtime: `openclaw senpi runtime create --path /data/workspace/skills/bald-eagle-strategy/runtime.yaml`
+6. Verify runtime installed: `openclaw senpi runtime list`
 7. Remove old DSL cron (if upgrading): run `openclaw crons list`, delete any cron containing `dsl-v5.py` via `openclaw crons delete <id>`
 8. Create scanner cron (5 min, main)
 9. Write `config/bootstrap-complete.json`
 10. Send: "🦅 BALD EAGLE v3.0 online. XYZ Alpha Hunter with spread gate. DSL managed by plugin runtime. Silence = no alpha."
 
-If bootstrap exists, still verify recipe and scanner cron on every session start.
+If bootstrap exists, still verify runtime and scanner cron on every session start.
 
 ---
 
@@ -162,7 +162,7 @@ If bootstrap exists, still verify recipe and scanner cron on every session start
 | `scripts/eagle-scanner.py` | XYZ SM scanner with spread gate + conviction scoring |
 | `scripts/eagle_config.py` | Config helper (MCP, state, market hours, cooldowns) |
 | `config/bald-eagle-config.json` | Wallet, strategy ID |
-| `recipe.yaml` | Trading recipe for plugin runtime (DSL exit + position tracker) |
+| `runtime.yaml` | Runtime config for plugin (DSL exit + position tracker) |
 
 ---
 

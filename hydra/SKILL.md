@@ -7,7 +7,7 @@ description: >-
   and manages positions with trailing stops. Includes independent
   monitor watchdog (3rd cron) for account health, signal reversal detection,
   and force-close capabilities. XYZ banned. Leverage capped at 10x.
-  DSL exit managed by plugin runtime via recipe.yaml.
+  DSL exit managed by plugin runtime via runtime.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
@@ -39,9 +39,9 @@ Before opening ANY position, call `strategy_get_clearinghouse_state` and count o
 
 If the scanner says leverage 5x, you use 5x. Not 10x from memory. Not 50x from "what worked before." The scanner calculates leverage dynamically based on conviction tier and asset max leverage, capped at 10x. The scanner is the single source of truth.
 
-### RULE 4: Verify recipe is installed on every session start
+### RULE 4: Verify runtime is installed on every session start
 
-Run `openclaw senpi trading-recipe list`. Recipe must be listed. The position tracker and DSL exit are handled by the plugin runtime.
+Run `openclaw senpi runtime list`. Runtime must be listed. The position tracker and DSL exit are handled by the plugin runtime.
 
 ### RULE 5: Never retry timed-out position creation
 
@@ -111,7 +111,7 @@ Base margin = wallet × 15%. Per-asset cap 25%. Total deployed cap 55%.
 
 ## Exit Management
 
-DSL exit is handled by the plugin runtime via `recipe.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `recipe.yaml` for configuration details.
+DSL exit is handled by the plugin runtime via `runtime.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `runtime.yaml` for configuration details.
 
 **Monitor positions:**
 - `openclaw senpi dsl positions` — list all DSL-tracked positions
@@ -138,28 +138,28 @@ Per-tier win/loss stats tracked in runtime.json. If a tier's win rate drops belo
 
 ---
 
-## Recipe Setup
+## Runtime Setup
 
-**Step 1:** Set your strategy wallet address in the recipe:
+**Step 1:** Set your strategy wallet address in runtime.yaml:
 ```bash
-sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/hydra/recipe.yaml
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/hydra/runtime.yaml
 ```
 Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
 
 **Step 2:** Set telegram chat ID for notifications:
 ```bash
-sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/hydra/recipe.yaml
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/hydra/runtime.yaml
 ```
 Replace `<CHAT_ID>` with the actual Telegram chat ID.
 
-**Step 3:** Install the trading recipe:
+**Step 3:** Install the runtime:
 ```bash
-openclaw senpi trading-recipe create --path /data/workspace/skills/hydra/recipe.yaml
+openclaw senpi runtime create --path /data/workspace/skills/hydra/runtime.yaml
 ```
 
 **Step 4:** Verify:
 ```bash
-openclaw senpi trading-recipe list
+openclaw senpi runtime list
 ```
 
 ---
@@ -167,19 +167,19 @@ openclaw senpi trading-recipe list
 ## Bootstrap Gate
 
 On EVERY session start, check `config/bootstrap-complete.json`. If missing:
-1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for recipe management and DSL position inspection.
+1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for runtime management and DSL position inspection.
 2. Verify Senpi MCP
-3. Set wallet in recipe: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/hydra/recipe.yaml`
-4. Set telegram in recipe: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/hydra/recipe.yaml`
-5. Install recipe: `openclaw senpi trading-recipe create --path /data/workspace/skills/hydra/recipe.yaml`
-6. Verify recipe installed: `openclaw senpi trading-recipe list`
+3. Set wallet in runtime.yaml: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/hydra/runtime.yaml`
+4. Set Telegram in runtime.yaml: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/hydra/runtime.yaml`
+5. Install runtime: `openclaw senpi runtime create --path /data/workspace/skills/hydra/runtime.yaml`
+6. Verify runtime installed: `openclaw senpi runtime list`
 7. Remove old DSL cron (if upgrading): run `openclaw crons list`, delete any cron containing `dsl-v5.py` via `openclaw crons delete <id>`
 8. Create scanner cron (5 min, main)
 8. Create monitor cron (5 min, isolated)
 9. Write `config/bootstrap-complete.json`
 10. Send: "🐉 HYDRA v2.0 online. 6-source squeeze scanner + monitor watchdog. FDD primary gate. DSL managed by plugin runtime. Silence = no squeeze."
 
-If bootstrap exists, still verify recipe and scanner cron on every session start.
+If bootstrap exists, still verify runtime and scanner cron on every session start.
 
 ---
 
@@ -229,7 +229,7 @@ If bootstrap exists, still verify recipe and scanner cron on every session start
 | `scripts/hydra-monitor.py` | Independent watchdog (account health, reversal, loss limits) |
 | `scripts/hydra_config.py` | Config helper (mcporter CLI, clearinghouse parsing, cooldowns, OI history) |
 | `config/hydra-config.json` | All configurable parameters |
-| `recipe.yaml` | Trading recipe for plugin runtime (DSL exit + position tracker) |
+| `runtime.yaml` | Runtime config for plugin (DSL exit + position tracker) |
 
 ---
 

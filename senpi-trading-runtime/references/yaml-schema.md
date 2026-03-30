@@ -1,6 +1,6 @@
-# Trading Recipe YAML Schema Reference
+# Runtime YAML Schema Reference
 
-Complete field reference for the trading recipe YAML. Environment variable substitution: `${VAR}` and `${VAR:-default}` resolved at load time.
+Complete field reference for the runtime YAML configuration. Environment variable substitution: `${VAR}` and `${VAR:-default}` resolved at load time.
 
 ---
 
@@ -19,7 +19,7 @@ Complete field reference for the trading recipe YAML. Environment variable subst
 
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
-| `name` | string | Yes | Recipe name (min 1 char). |
+| `name` | string | Yes | Runtime name (min 1 char). |
 | `version` | string | No | Version identifier. |
 | `description` | string | No | Human-readable description. |
 | `strategies` | object | Yes | Keyed strategy configs (non-empty). |

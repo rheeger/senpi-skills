@@ -24,7 +24,7 @@ The DSL (Dynamic Stop-Loss) manages exit logic for open perpetual positions. It 
 
 ## Exit block
 
-Configured under the `exit` key in the recipe YAML.
+Configured under the `exit` key in the runtime YAML.
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|

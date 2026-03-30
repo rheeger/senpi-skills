@@ -13,7 +13,7 @@ v2.0 changes:
 - Hunter REMOVED (0 trades across all testing)
 - Pyramiding REMOVED (never triggered, adds complexity)
 - Leverage reduced to 7x (v1.0 at 10x, HYPE moved 4.2% in 10 min = -42% ROE)
-- Exit management handled by plugin runtime (recipe.yaml)
+- Exit management handled by plugin runtime (runtime.yaml)
 
 The Striker logic is identical to Orca/Roach: FIRST_JUMP from #25+,
 rank jump 15+, volume 1.5x, score 9+, 4+ reasons. Only the most

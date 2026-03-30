@@ -6,7 +6,7 @@ description: >-
   HUNTING (scan for entry) → RIDING (DSL trails) → STALKING (watch for reload on dip).
   After DSL takes profit, watches for fresh momentum impulse while confirming macro thesis
   is intact. If thesis dies, resets. If dip reloads, re-enters.
-  DSL exit managed by plugin runtime via recipe.yaml.
+  DSL exit managed by plugin runtime via runtime.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
@@ -25,9 +25,9 @@ GRIZZLY stares at BTC and nothing else. Every signal source available — smart 
 
 ## CRITICAL AGENT RULES — READ BEFORE ANYTHING ELSE
 
-### RULE 1: Verify recipe is installed on every session start
+### RULE 1: Verify runtime is installed on every session start
 
-Run `openclaw senpi trading-recipe list`. Recipe must be listed. The position tracker and DSL exit are handled by the plugin runtime.
+Run `openclaw senpi runtime list`. Runtime must be listed. The position tracker and DSL exit are handled by the plugin runtime.
 
 ### RULE 2: Never retry timed-out position creation
 
@@ -142,7 +142,7 @@ If ANY of these break — thesis exit. The agent closes because the reason it en
 
 ## Exit Management
 
-DSL exit is handled by the plugin runtime via `recipe.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `recipe.yaml` for configuration details.
+DSL exit is handled by the plugin runtime via `runtime.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `runtime.yaml` for configuration details.
 
 **Monitor positions:**
 - `openclaw senpi dsl positions` — list all DSL-tracked positions
@@ -159,28 +159,28 @@ DSL exit is handled by the plugin runtime via `recipe.yaml`. The `position_track
 | Daily loss limit | 10% | |
 | Cooldown | 120 min after 3 consecutive losses | Long — BTC conviction trades shouldn't chain-fail |
 
-## Recipe Setup
+## Runtime Setup
 
-**Step 1:** Set your strategy wallet address in the recipe:
+**Step 1:** Set your strategy wallet address in runtime.yaml:
 ```bash
-sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/grizzly-strategy/recipe.yaml
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/grizzly-strategy/runtime.yaml
 ```
 Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
 
 **Step 2:** Set telegram chat ID for notifications:
 ```bash
-sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/grizzly-strategy/recipe.yaml
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/grizzly-strategy/runtime.yaml
 ```
 Replace `<CHAT_ID>` with the actual Telegram chat ID.
 
-**Step 3:** Install the trading recipe:
+**Step 3:** Install the runtime:
 ```bash
-openclaw senpi trading-recipe create --path /data/workspace/skills/grizzly-strategy/recipe.yaml
+openclaw senpi runtime create --path /data/workspace/skills/grizzly-strategy/runtime.yaml
 ```
 
 **Step 4:** Verify:
 ```bash
-openclaw senpi trading-recipe list
+openclaw senpi runtime list
 ```
 
 ## Crons
@@ -194,16 +194,16 @@ openclaw senpi trading-recipe list
 On EVERY session, check `config/bootstrap-complete.json`. If missing:
 1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md`
 2. Verify Senpi MCP
-3. Set wallet in recipe: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/grizzly-strategy/recipe.yaml`
-4. Set telegram in recipe: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/grizzly-strategy/recipe.yaml`
-5. Install recipe: `openclaw senpi trading-recipe create --path /data/workspace/skills/grizzly-strategy/recipe.yaml`
-6. Verify recipe installed: `openclaw senpi trading-recipe list`
+3. Set wallet in runtime.yaml: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/grizzly-strategy/runtime.yaml`
+4. Set Telegram in runtime.yaml: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/grizzly-strategy/runtime.yaml`
+5. Install runtime: `openclaw senpi runtime create --path /data/workspace/skills/grizzly-strategy/runtime.yaml`
+6. Verify runtime installed: `openclaw senpi runtime list`
 7. Remove old DSL cron (if upgrading): run `openclaw crons list`, delete any cron containing `dsl-v5.py` via `openclaw crons delete <id>`
 8. Create scanner cron (3 min, isolated)
 9. Write `config/bootstrap-complete.json`
 10. Send: "GRIZZLY is online. Watching BTC. Silence = no conviction."
 
-If bootstrap exists, still verify recipe and scanner cron on every session start.
+If bootstrap exists, still verify runtime and scanner cron on every session start.
 
 ## Notification Policy
 
@@ -230,7 +230,7 @@ All crons isolated. `NO_REPLY` for idle cycles. No rogue processes.
 | `scripts/grizzly-scanner.py` | BTC thesis builder + re-evaluator |
 | `scripts/grizzly_config.py` | Shared config, MCP helpers, state I/O |
 | `config/grizzly-config.json` | All configurable variables |
-| `recipe.yaml` | Trading recipe for plugin runtime (DSL exit + position tracker) |
+| `runtime.yaml` | Runtime config for plugin (DSL exit + position tracker) |
 
 ## License
 
@@ -240,6 +240,6 @@ Source: https://github.com/Senpi-ai/senpi-skills
 ## Changelog
 
 ### v2.1.1
-- DSL exit migrated to plugin runtime via recipe.yaml
+- DSL exit migrated to plugin runtime via runtime.yaml
 - Scanner DSL code removed (position_tracker handles position detection)
 - Leverage capped at 10x (was 15-20x)
