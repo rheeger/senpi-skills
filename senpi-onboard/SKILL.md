@@ -204,6 +204,7 @@ Before Step 2, confirm these are set:
 - `IDENTITY_TYPE` -- `"WALLET"` or `"TELEGRAM"`
 - `IDENTITY_VALUE` -- wallet address (with `0x`) or Telegram numeric user ID (digits only)
 - `WALLET_GENERATED` -- `true` if Option C was used, unset otherwise
+- `TELEGRAM_USERNAME` -- required and non-empty when `IDENTITY_TYPE="TELEGRAM"` (unset otherwise)
 
 **Persist progress for resume:** Update `~/.config/senpi/state.json`: set `onboarding.step` to `REFERRAL`, and if available set `onboarding.identityType`, `onboarding.subject`, `onboarding.walletGenerated` from current variables. Use read-modify-write so other fields are preserved.
 
@@ -226,6 +227,11 @@ If empty and user hasn't provided one, that's fine -- it's optional. Do not prom
 Execute the `CreateAgentStubAccount` GraphQL mutation. This is a **public endpoint** -- no auth required.
 
 ```bash
+if [ "$IDENTITY_TYPE" = "TELEGRAM" ] && [ -z "${TELEGRAM_USERNAME:-}" ]; then
+  echo "TELEGRAM_USERNAME must be set when IDENTITY_TYPE=TELEGRAM" >&2
+  exit 1
+fi
+
 RESPONSE=$(curl -s -X POST https://moxie-backend.prod.senpi.ai/graphql \
   -H "Content-Type: application/json" \
   -d '{
