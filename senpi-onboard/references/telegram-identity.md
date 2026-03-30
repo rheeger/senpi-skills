@@ -1,5 +1,7 @@
 # Telegram Identity Reference
 
+> **Note:** These instructions are only needed as a fallback when `${OPENCLAW_WORKSPACE_DIR}/USER.md` is unavailable or missing the `## Telegram` section. In normal OpenClaw usage, the Telegram user ID and username are read automatically.
+
 ## Finding Your Numeric Telegram User ID
 
 Present these instructions to the user before prompting for input:
@@ -17,5 +19,6 @@ Present these instructions to the user before prompting for input:
 
 ```bash
 IDENTITY_TYPE="TELEGRAM"
-IDENTITY_VALUE="8362644815"  # numeric Telegram user ID (digits only)
+IDENTITY_VALUE="8362644815"   # numeric Telegram user ID (digits only)
+TELEGRAM_USERNAME="@username" # Telegram username (ask the user, e.g. "@johndoe")
 ```
