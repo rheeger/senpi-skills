@@ -12,7 +12,7 @@ Pipeline:
 2. discovery_get_trader_state → check their live positions
 3. Score the vulnerability: leverage × bleeding × cluster × SM × funding
 4. If score >= 6 and SM gate passes → enter opposite direction
-5. Exit management handled by plugin runtime (recipe.yaml)
+5. Exit management handled by plugin runtime (runtime.yaml)
 
 Runs every 5 minutes.
 """

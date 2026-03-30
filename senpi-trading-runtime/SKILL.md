@@ -1,6 +1,6 @@
 ---
 name: senpi-trading-runtime
-description: "Configure, deploy, and manage trading recipes in the Senpi Trading Runtime OpenClaw plugin for automated on-chain position tracking with DSL trailing stop-loss protection. Use when a user needs to create or modify trading recipe YAML files, configure DSL (Dynamic Stop-Loss) exit engine parameters (phases, tiers, time-based cuts), set up the position_tracker scanner to monitor a wallet's positions on Hyperliquid, install/list/delete recipes via CLI, or inspect DSL-tracked positions. Triggers on mentions of senpi, trading recipe, DSL exit, stop-loss tiers, position tracker, trailing stop, openclaw senpi, dsl_preset, or strategy YAML configuration."
+description: "Configure, deploy, and manage Senpi Trading Runtime (OpenClaw plugin @senpi-ai/runtime) for automated on-chain position tracking with DSL trailing stop-loss protection. Use when a user needs to create or modify runtime YAML files, configure DSL (Dynamic Stop-Loss) exit engine parameters (phases, tiers, time-based cuts), set up the position_tracker scanner to monitor a wallet's positions on Hyperliquid, install/list/delete runtimes via CLI, or inspect DSL-tracked positions. Triggers on mentions of senpi, Senpi runtime, DSL exit, stop-loss tiers, position tracker, trailing stop, openclaw senpi, dsl_preset, or strategy YAML configuration."
 ---
 
 # Senpi Trading Runtime — OpenClaw Plugin
@@ -21,23 +21,28 @@ On-chain position tracker with automated DSL (Dynamic Stop-Loss) exit engine. Mo
 
 All commands require the OpenClaw gateway running (`openclaw gateway run`).
 
-### Recipe management
+Use `openclaw senpi --cheatsheet` to print the full plugin command cheatsheet to stdout.
+
+### Runtime management
 
 ```bash
-# Create a recipe from YAML file
-openclaw senpi trading-recipe create --path ./my-strategy.yaml
+# Create a runtime from YAML file
+openclaw senpi runtime create --path ./my-strategy.yaml
+openclaw senpi runtime create -p ./my-strategy.yaml          # short form
 
 # Create with inline YAML content
-openclaw senpi trading-recipe create --content "<yaml>"
+openclaw senpi runtime create --content "<yaml>"
+openclaw senpi runtime create -c "<yaml>"                    # short form
 
 # Create with custom ID
-openclaw senpi trading-recipe create --path ./my-strategy.yaml --recipe-id my-name
+openclaw senpi runtime create --path ./my-strategy.yaml --runtime-id my-name
 
-# List installed recipes (id, source, status)
-openclaw senpi trading-recipe list
+# List installed runtimes (id, wallet, source, status)
+openclaw senpi runtime list
 
-# Delete a recipe
-openclaw senpi trading-recipe delete <recipe_id>
+# Delete a runtime
+openclaw senpi runtime delete <runtime_id>                   # positional id
+openclaw senpi runtime delete --id <runtime_id>              # named flag
 ```
 
 ### DSL position inspection
@@ -45,55 +50,95 @@ openclaw senpi trading-recipe delete <recipe_id>
 ```bash
 # All active DSL-tracked positions
 openclaw senpi dsl positions
-openclaw senpi dsl positions --recipe <id>
-openclaw senpi dsl positions --address <0x...>
+openclaw senpi dsl positions -r <id>                         # filter by runtime id
+openclaw senpi dsl positions -a <addr>                       # filter by wallet address
 openclaw senpi dsl positions --json
 
 # Inspect one position (full DslState)
 openclaw senpi dsl inspect <ASSET>
-openclaw senpi dsl inspect SOL --recipe <id>
+openclaw senpi dsl inspect SOL -r <id>
+openclaw senpi dsl inspect SOL -a <addr>
 openclaw senpi dsl inspect BTC --json
 
-# Archived (closed) positions
+# Archived (closed) positions — reason, ROE, phase, tier
 openclaw senpi dsl closes
-openclaw senpi dsl closes --limit 20 --json
+openclaw senpi dsl closes -r <id>
+openclaw senpi dsl closes -a <addr>
+openclaw senpi dsl closes -l <n>
+openclaw senpi dsl closes --json
 ```
 
-### In-shell reference
+### Runtime diagnostics
 
 ```bash
-openclaw senpi guide              # Overview and quick command list
-openclaw senpi guide dsl          # DSL exit engine reference
-openclaw senpi guide examples     # Print minimal strategy YAML
-openclaw senpi guide schema       # Full YAML schema
+openclaw senpi status                    # lightweight health summary (all runtimes)
+openclaw senpi status -r <id>
+openclaw senpi status --json
+
+openclaw senpi state                     # full operational state (all runtimes)
+openclaw senpi state -r <id>
+openclaw senpi state --json
 ```
 
-### Configuration
+### In-shell reference (`senpi guide`)
 
 ```bash
-openclaw senpi config set-chat-id <chatId>           # Telegram notifications
-openclaw senpi config set-senpi-jwt-token <token>     # Senpi MCP auth
-openclaw senpi config set-state-dir <dir>             # State directory
-openclaw senpi config get <key>
-openclaw senpi config list
+openclaw senpi guide                 # overview + quick command list
+openclaw senpi guide scanners        # scanner types and config fields
+openclaw senpi guide actions         # action types and decision modes
+openclaw senpi guide dsl             # DSL exit engine: phases, tiers, time cuts
+openclaw senpi guide examples        # print minimal strategy YAML to stdout
+openclaw senpi guide schema          # full YAML schema field reference
+openclaw senpi guide version         # plugin version and changelog URL
+```
+
+### CLI preferences (`senpi config`)
+
+Persists to `~/.openclaw/senpi-cli.json`. Restart gateway to apply.
+
+```bash
+openclaw senpi config set-chat-id <chatId>
+openclaw senpi config set-senpi-jwt-token <token>
+openclaw senpi config set-state-dir <dir>
+openclaw senpi config get <key>      # telegram-chat-id | senpi-jwt-token | state-dir
+openclaw senpi config list           # secrets masked
 openclaw senpi config unset <key>
 openclaw senpi config reset
 ```
 
 ### Gateway RPC (advanced)
 
+**Common calls:**
+
 ```bash
+openclaw gateway call senpi.installRuntime --params '{"runtimeYamlContent":"..."}'
+openclaw gateway call senpi.listRuntimes --json --params '{}'
+openclaw gateway call senpi.deleteRuntime --params '{"id":"my-runtime"}'
 openclaw gateway call senpi.listDslPositions --json --params '{}'
 openclaw gateway call senpi.getDslPositionState --json --params '{"asset":"SOL"}'
 openclaw gateway call senpi.listDslArchives --json --params '{"limit":20}'
-openclaw gateway call senpi.installRecipe --params '{"tradingRecipeYamlContent":"..."}'
-openclaw gateway call senpi.listRecipes --json --params '{}'
-openclaw gateway call senpi.deleteRecipe --params '{"id":"my-recipe"}'
+openclaw gateway call senpi.getHealthStatus --json --params '{}'
+openclaw gateway call senpi.getSystemState --json --params '{}'
 ```
 
-## Trading Recipe YAML
+**Methods summary**
 
-The recipe YAML drives all behavior. Top-level keys: `name`, `strategies`, `scanners`, `actions`, `exit`, `notifications`.
+| Method | Params | Success response |
+|--------|--------|------------------|
+| `senpi.installRuntime` | `runtimeYamlContent` or `runtimeYamlPath` | Runtime installed |
+| `senpi.listRuntimes` | — | List of runtimes |
+| `senpi.deleteRuntime` | `id` or address | Deleted |
+| `senpi.listDslPositions` | `runtimeId?` | Active positions |
+| `senpi.getDslPositionState` | `asset`, `runtimeId?` | Single position state |
+| `senpi.listDslArchives` | `runtimeId?`, `address?`, `limit?` | `closes[]` (asset, direction, entryPrice, lastPrice, currentROE, closeReason, closedAt, phase, …) |
+| `senpi.getHealthStatus` | `runtimeId?` (string) | `status` or `statuses[]` (health, components.scanners, components.dsl) |
+| `senpi.getSystemState` | `runtimeId?` (string) | `state` or `states[]` (health, stateDir, scanner/DSL components) |
+
+Close reasons for `listDslArchives`: `dsl_breach`, `hard_timeout`, `weak_peak_cut`, `dead_weight_cut`, `exchange_sl_hit`, `manual`.
+
+## Runtime YAML
+
+The runtime YAML drives all behavior. Top-level keys: `name`, `strategies`, `scanners`, `actions`, `exit`, `notifications`.
 
 ```yaml
 name: my-tracker
@@ -190,6 +235,6 @@ For full DSL configuration with all fields, time-based cuts, close reasons, and 
 
 ## References
 
-- [YAML Schema Reference](references/yaml-schema.md) — All recipe fields and DSL preset options
+- [YAML Schema Reference](references/yaml-schema.md) — All runtime YAML fields and DSL preset options
 - [DSL Configuration Reference](references/dsl-configuration.md) — Full DSL exit engine: phases, tiers, time cuts, close reasons, events
-- [Strategy Examples](references/strategy-examples.md) — Ready-to-use YAML recipes with different DSL tuning profiles
+- [Strategy Examples](references/strategy-examples.md) — Ready-to-use YAML examples with different DSL tuning profiles

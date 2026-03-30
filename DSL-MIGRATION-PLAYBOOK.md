@@ -6,11 +6,11 @@
 
 ---
 
-## Step 1: Extract DSL config into recipe.yaml
+## Step 1: Extract DSL config into runtime.yaml
 
 Read the skill's scanner `.py` file and find: `DSL_TIERS`, `CONVICTION_TIERS`, `STAGNATION_TP`, `build_dsl_state_template()`.
 
-Create `{skill}/recipe.yaml` with the full trading recipe:
+Create `{skill}/runtime.yaml` with the runtime config:
 
 ```yaml
 name: {skill}-tracker
@@ -107,30 +107,30 @@ metadata:
 Exit Management section:
 ```markdown
 ## Exit Management
-DSL exit is handled by the plugin runtime via `recipe.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain.
+DSL exit is handled by the plugin runtime via `runtime.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain.
 
 **Monitor positions:**
 - `openclaw senpi dsl positions` — list all DSL-tracked positions
 - `openclaw senpi dsl inspect <ASSET>` — full position details
 ```
 
-Recipe Setup section:
+Runtime Setup section:
 ```markdown
-## Recipe Setup
+## Runtime Setup
 
-**Step 1:** Set your strategy wallet address in the recipe:
+**Step 1:** Set your strategy wallet address in runtime.yaml:
 ```bash
-sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/{skill}-strategy/recipe.yaml
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/{skill}-strategy/runtime.yaml
 ```
 
-**Step 2:** Install the trading recipe:
+**Step 2:** Install the runtime:
 ```bash
-openclaw senpi trading-recipe create --path /data/workspace/skills/{skill}-strategy/recipe.yaml
+openclaw senpi runtime create --path /data/workspace/skills/{skill}-strategy/runtime.yaml
 ```
 
 **Step 3:** Verify:
 ```bash
-openclaw senpi trading-recipe list
+openclaw senpi runtime list
 ```
 ```
 
@@ -141,13 +141,13 @@ Bootstrap Gate (insert as first step):
 
 Agent rule update:
 ```
-Verify recipe is installed on every session start.
-Run `openclaw senpi trading-recipe list`. Recipe must be listed.
+Verify runtime is installed on every session start.
+Run `openclaw senpi runtime list`. Runtime must be listed.
 ```
 
 Files table — add:
 ```
-| recipe.yaml | Trading recipe for plugin runtime (DSL exit + position tracker) |
+| runtime.yaml | Runtime config for plugin (DSL exit + position tracker) |
 ```
 
 ---
@@ -164,7 +164,7 @@ python3 -c "import json; json.load(open('{skill}/config/{skill}-config.json'))"
 # YAML syntax + required keys
 python3 -c "
 import yaml
-with open('{skill}/recipe.yaml') as f:
+with open('{skill}/runtime.yaml') as f:
     data = yaml.safe_load(f)
 for k in ['name','strategies','scanners','actions','exit','notifications']:
     assert k in data, f'missing {k}'
@@ -183,9 +183,9 @@ grep -rn 'DSL_TIERS\|CONVICTION_TIERS\|STAGNATION_TP\|build_dsl_state_template\|
 |---|---|---|
 | DSL execution | dsl-v5.py every 3 min | Plugin monitor every 30s |
 | Position detection | Agent writes state file | position_tracker auto-detects on-chain |
-| Phase 1 timeouts | Conviction-scaled per score | Fixed values from recipe.yaml |
+| Phase 1 timeouts | Conviction-scaled per score | Fixed values from runtime.yaml |
 | Phase 2 | Cron breach counting | Exchange-SL driven |
-| Install | 2 crons (scanner + DSL) | 1 recipe install + 1 scanner cron |
+| Install | 2 crons (scanner + DSL) | 1 runtime install + 1 scanner cron |
 
 ---
 
@@ -193,9 +193,9 @@ grep -rn 'DSL_TIERS\|CONVICTION_TIERS\|STAGNATION_TP\|build_dsl_state_template\|
 
 | File | Action |
 |---|---|
-| `recipe.yaml` | Created |
+| `runtime.yaml` | Created |
 | `scripts/{skill}-scanner.py` | DSL code removed |
 | `config/{skill}-config.json` | `"dsl"` section removed |
 | `SKILL.md` | Updated for plugin workflow |
-| `dsl.yaml` | Deleted (replaced by recipe.yaml) |
+| `dsl.yaml` | Deleted (replaced by runtime.yaml) |
 | `dsl-implementation.md` | Deleted |

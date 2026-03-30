@@ -14,7 +14,7 @@ the whole pipeline broke silently. v2.0 runs everything in one script:
 3. CONFIRM: price momentum → is 4H/1H aligned with SM direction?
 4. STRUCTURE: funding + OI context → is the move structurally supported?
 
-When ALL 4 gates pass → enter. Plugin runtime manages exits via recipe.yaml.
+When ALL 4 gates pass → enter. Plugin runtime manages exits via runtime.yaml.
 Scanner does NOT thesis-exit open positions.
 
 Key changes from v1.0:

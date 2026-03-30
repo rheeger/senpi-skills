@@ -1,6 +1,6 @@
-# Strategy Recipe Examples
+# Strategy YAML examples
 
-Ready-to-use YAML recipes for the position tracker with different DSL tuning profiles.
+Ready-to-use YAML examples for the position tracker with different DSL tuning profiles.
 
 ---
 

@@ -161,4 +161,4 @@ See [references/lessons.md](references/lessons.md) for what works, what doesn't,
 
 ## API Reference
 
-See [references/api-tools.md](references/api-tools.md) for the key Senpi tools used by this recipe.
+See [references/api-tools.md](references/api-tools.md) for the key Senpi tools used by this skill.

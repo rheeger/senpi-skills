@@ -6,7 +6,7 @@ description: >-
   positions, and counter-trades them when they're bleeding at high leverage.
   If a cluster of degens goes max-leverage long on a coin and starts losing,
   LEMON shorts it — betting on their inevitable liquidation cascade.
-  DSL exit managed by plugin runtime via recipe.yaml.
+  DSL exit managed by plugin runtime via runtime.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
@@ -42,9 +42,9 @@ Check clearinghouse before every entry. If positions >= 2, skip.
 Leverage, margin, direction, coin — use exactly what the scanner says.
 Do not override from memory or "improve" the parameters.
 
-### RULE 5: Verify recipe is installed on every session start
+### RULE 5: Verify runtime is installed on every session start
 
-Run `openclaw senpi trading-recipe list`. Recipe must be listed. The position tracker and DSL exit are handled by the plugin runtime.
+Run `openclaw senpi runtime list`. Runtime must be listed. The position tracker and DSL exit are handled by the plugin runtime.
 
 ### RULE 6: Never retry timed-out position creation
 
@@ -160,7 +160,7 @@ use, and that's why they blow up.
 
 ## Exit Management
 
-DSL exit is handled by the plugin runtime via `recipe.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `recipe.yaml` for configuration details.
+DSL exit is handled by the plugin runtime via `runtime.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `runtime.yaml` for configuration details.
 
 **Monitor positions:**
 - `openclaw senpi dsl positions` — list all DSL-tracked positions
@@ -192,28 +192,28 @@ DSL exit is handled by the plugin runtime via `recipe.yaml`. The `position_track
 
 ---
 
-## Recipe Setup
+## Runtime Setup
 
-**Step 1:** Set your strategy wallet address in the recipe:
+**Step 1:** Set your strategy wallet address in runtime.yaml:
 ```bash
-sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/lemon-strategy/recipe.yaml
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/lemon-strategy/runtime.yaml
 ```
 Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
 
 **Step 2:** Set telegram chat ID for notifications:
 ```bash
-sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/lemon-strategy/recipe.yaml
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/lemon-strategy/runtime.yaml
 ```
 Replace `<CHAT_ID>` with the actual Telegram chat ID.
 
-**Step 3:** Install the trading recipe:
+**Step 3:** Install the runtime:
 ```bash
-openclaw senpi trading-recipe create --path /data/workspace/skills/lemon-strategy/recipe.yaml
+openclaw senpi runtime create --path /data/workspace/skills/lemon-strategy/runtime.yaml
 ```
 
 **Step 4:** Verify:
 ```bash
-openclaw senpi trading-recipe list
+openclaw senpi runtime list
 ```
 
 ---
@@ -244,12 +244,12 @@ state/
 ## Bootstrap Gate
 
 On EVERY session start, check `config/bootstrap-complete.json`. If missing:
-1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for recipe management and DSL position inspection.
+1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for runtime management and DSL position inspection.
 2. Verify Senpi MCP
-3. Set wallet in recipe: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/lemon-strategy/recipe.yaml`
-4. Set telegram in recipe: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/lemon-strategy/recipe.yaml`
-5. Install recipe: `openclaw senpi trading-recipe create --path /data/workspace/skills/lemon-strategy/recipe.yaml`
-6. Verify recipe installed: `openclaw senpi trading-recipe list`
+3. Set wallet in runtime.yaml: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/lemon-strategy/runtime.yaml`
+4. Set Telegram in runtime.yaml: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/lemon-strategy/runtime.yaml`
+5. Install runtime: `openclaw senpi runtime create --path /data/workspace/skills/lemon-strategy/runtime.yaml`
+6. Verify runtime installed: `openclaw senpi runtime list`
 7. Remove old DSL cron (if upgrading): run `openclaw crons list`, delete any cron containing `dsl-v5.py` via `openclaw crons delete <id>`
 8. Create scanner cron (5 min, main)
 9. Write `config/bootstrap-complete.json`
@@ -301,7 +301,7 @@ The complete skill is in `lemon-v1.0.tar.gz`. Extract to `/data/workspace/skills
 | `scripts/lemon-scanner.py` | Degen finder + vulnerability scan + conviction scoring + entry signal |
 | `scripts/lemon_config.py` | Config helper (MCP calls, state I/O, cooldowns, trade counter) |
 | `config/lemon-config.json` | Wallet, strategy ID, configurable thresholds (agent fills in wallet/strategyId) |
-| `recipe.yaml` | Trading recipe for plugin runtime (DSL exit + position tracker) |
+| `runtime.yaml` | Runtime config for plugin (DSL exit + position tracker) |
 
 ---
 
@@ -310,10 +310,10 @@ The complete skill is in `lemon-v1.0.tar.gz`. Extract to `/data/workspace/skills
 1. Extract `lemon-v1.0.tar.gz` to `/data/workspace/skills/lemon-strategy/`
 2. Create a strategy vault and fund it with $1,000
 3. Update `config/lemon-config.json` with the wallet address and strategy ID
-4. Set wallet in recipe: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/lemon-strategy/recipe.yaml`
-5. Set telegram in recipe: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/lemon-strategy/recipe.yaml`
-6. Install recipe: `openclaw senpi trading-recipe create --path /data/workspace/skills/lemon-strategy/recipe.yaml`
-7. Verify recipe: `openclaw senpi trading-recipe list`
+4. Set wallet in runtime.yaml: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/lemon-strategy/runtime.yaml`
+5. Set Telegram in runtime.yaml: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/lemon-strategy/runtime.yaml`
+6. Install runtime: `openclaw senpi runtime create --path /data/workspace/skills/lemon-strategy/runtime.yaml`
+7. Verify runtime: `openclaw senpi runtime list`
 8. Create scanner cron (5 min, main): `python3 /data/workspace/skills/lemon-strategy/scripts/lemon-scanner.py`
 9. Verify scanner cron running with `openclaw crons list`
 10. After first position opens, verify DSL is tracking via `openclaw senpi dsl positions`
