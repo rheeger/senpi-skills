@@ -28,21 +28,51 @@ Check if `runtime.yaml` exists in your skill directory.
 **If it doesn't exist**:
 
 1. Check GitHub for the latest: `https://github.com/Senpi-ai/senpi-skills/tree/main/{skill}/runtime.yaml`
-2. If not on GitHub, use the template: copy [runtime-template.yaml](runtime-template.yaml) to your skill directory as `runtime.yaml`
+2. If not on GitHub, copy the template: `cp /data/workspace/skills/senpi-trading-runtime/references/runtime-template.yaml /data/workspace/skills/{skill}/runtime.yaml`
+3. Update `name:` and `description:` to match your skill
 
-**After copying, you MUST update the `dsl_preset` values** to match your skill's original Python DSL config. The template has placeholder values — read your scanner `.py` and map:
+**Then extract your skill's actual DSL values from its scanner .py:**
 
-| Python (scanner .py) | YAML (runtime.yaml) |
+**Do NOT copy values from another skill's runtime.yaml — each skill has unique DSL tuning.**
+
+Run these commands to find the original values:
+
+```bash
+# Find retrace threshold (decimal → multiply by 100 for YAML)
+grep "retraceThreshold" /data/workspace/skills/{skill}/scripts/*scanner*.py
+
+# Find breaches required
+grep "consecutiveBreachesRequired" /data/workspace/skills/{skill}/scripts/*scanner*.py
+
+# Find absolute floor (negative number → use as positive in YAML max_loss_pct)
+grep "absoluteFloorRoe" /data/workspace/skills/{skill}/scripts/*scanner*.py
+
+# Find timeouts
+grep -E "hardTimeoutMin|phase1MaxMinutes" /data/workspace/skills/{skill}/scripts/*scanner*.py
+grep -E "weakPeakCutMin|weakPeakCutMinutes" /data/workspace/skills/{skill}/scripts/*scanner*.py
+grep "deadWeightCutMin" /data/workspace/skills/{skill}/scripts/*scanner*.py
+
+# Find tier definitions (triggerPct + lockHwPct pairs)
+grep "triggerPct" /data/workspace/skills/{skill}/scripts/*scanner*.py
+```
+
+**How to use the grep results:**
+
+| Grep finds | Write in runtime.yaml |
 |---|---|
-| `retraceThreshold: 0.03` | `retrace_threshold: 3` (multiply by 100) |
-| `consecutiveBreachesRequired: 3` | `consecutive_breaches_required: 3` |
-| `absoluteFloorRoe: -18` | `max_loss_pct: 18` (positive) |
-| `hardTimeoutMin: 25` | `hard_timeout.interval_in_minutes: 25` |
-| `weakPeakCutMin: 12` | `weak_peak_cut.interval_in_minutes: 12` |
-| `deadWeightCutMin: 8` | `dead_weight_cut.interval_in_minutes: 8` |
-| `DSL_TIERS [{triggerPct: 7, lockHwPct: 40}]` | `phase2.tiers [{trigger_pct: 7, lock_hw_pct: 40}]` |
+| `"retraceThreshold": 0.03` | `retrace_threshold: 3` (value × 100) |
+| `"consecutiveBreachesRequired": 3` | `consecutive_breaches_required: 3` (same) |
+| `"absoluteFloorRoe": -20` | `max_loss_pct: 20.0` (drop the minus) |
+| `"hardTimeoutMin": 30` or `"phase1MaxMinutes": 30` | `hard_timeout: interval_in_minutes: 30` |
+| `"weakPeakCutMin": 15` or `"weakPeakCutMinutes": 15` | `weak_peak_cut: interval_in_minutes: 15` |
+| `"deadWeightCutMin": 10` | `dead_weight_cut: interval_in_minutes: 10` |
+| `"triggerPct": 7, "lockHwPct": 40` | `- { trigger_pct: 7, lock_hw_pct: 40 }` |
 
-Also update `name:` and `description:` to match your skill.
+**If the scanner has multiple conviction tiers** (score-based `if/elif` or `CONVICTION_TIERS` array), use the **first/lowest tier** (tightest defaults). Example: if there are tiers for score<9, score>=9, score>=12 — use the score<9 values.
+
+**If the scanner has `DSL_CONFIG` dict** instead of separate constants, read values from that dict's `phase1` sub-object and `tiers` array.
+
+**Copy ALL tier rows** — skills may have 4, 5, or 6 tiers. Do not use a standard 4-tier set if the skill has more.
 
 ---
 
