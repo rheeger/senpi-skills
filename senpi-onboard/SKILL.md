@@ -122,8 +122,8 @@ When the user chooses Option A, first attempt to read from `${OPENCLAW_WORKSPACE
 ```bash
 USER_MD="${OPENCLAW_WORKSPACE_DIR}/USER.md"
 if [ -f "$USER_MD" ]; then
-  TELEGRAM_USER_ID=$(awk '/## Telegram/{f=1} f && /- Chat ID:/{print $NF; exit}' "$USER_MD")
-  TELEGRAM_USERNAME=$(awk '/## Telegram/{f=1} f && /- Username:/{print $NF; exit}' "$USER_MD")
+  TELEGRAM_USER_ID=$(awk '/^## Telegram/{f=1; next} f && /^## /{f=0} f && /- Chat ID:/{print $NF; exit}' "$USER_MD")
+  TELEGRAM_USERNAME=$(awk '/^## Telegram/{f=1; next} f && /^## /{f=0} f && /- Username:/{print $NF; exit}' "$USER_MD")
 fi
 ```
 
