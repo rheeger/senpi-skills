@@ -1,11 +1,18 @@
 ---
 name: senpi-trading-runtime
-description: "Configure, deploy, and manage Senpi Trading Runtime (OpenClaw plugin @senpi-ai/runtime) for automated on-chain position tracking with DSL trailing stop-loss protection. Use when a user needs to create or modify runtime YAML files, configure DSL (Dynamic Stop-Loss) exit engine parameters (phases, tiers, time-based cuts), set up the position_tracker scanner to monitor a wallet's positions on Hyperliquid, install/list/delete runtimes via CLI, or inspect DSL-tracked positions. Triggers on mentions of senpi, Senpi runtime, DSL exit, stop-loss tiers, position tracker, trailing stop, openclaw senpi, dsl_preset, or strategy YAML configuration."
+description: >-
+  Configure, deploy, and manage Senpi Trading Runtime (OpenClaw plugin @senpi-ai/runtime) for automated on-chain position tracking with DSL trailing stop-loss protection. Use when a user needs to create or modify runtime YAML files, configure DSL (Dynamic Stop-Loss) exit engine parameters (phases, tiers, time-based cuts), set up the position_tracker scanner to monitor a wallet's positions on Hyperliquid, install/list/delete runtimes via CLI, or inspect DSL-tracked positions. The runtime does NOT create strategy wallets; create/get the strategy wallet via Senpi MCP first, then link that existing wallet in runtime YAML. Triggers on mentions of senpi, Senpi runtime, DSL exit, stop-loss tiers, position tracker, trailing stop, openclaw senpi, dsl_preset, or strategy YAML configuration."
+license: Apache-2.0
+metadata:
+  author: Senpi
+  version: "1.0"
+  platform: senpi
+  exchange: hyperliquid
 ---
 
 # Senpi Trading Runtime — OpenClaw Plugin
 
-On-chain position tracker with automated DSL (Dynamic Stop-Loss) exit engine. Monitors a wallet's positions on Hyperliquid for lifecycle events (open, close, edit, flip) and applies two-phase trailing stop-loss protection to all positions.
+On-chain position tracker with automated DSL (Dynamic Stop-Loss) exit engine. Monitors a wallet's positions on Hyperliquid for lifecycle events (open, close, edit, flip) and applies two-phase trailing stop-loss protection to all positions. It links to an existing strategy wallet address and does not create wallets.
 
 ## Core Concepts
 
@@ -13,9 +20,17 @@ On-chain position tracker with automated DSL (Dynamic Stop-Loss) exit engine. Mo
 
 1. **Position Tracker** (`position_tracker` scanner) polls the wallet on-chain, detecting opens, closes, increases, decreases, and flips.
 2. **DSL exit engine** monitors tracked positions on a timer, computing trailing stop-loss floors across two phases.
-3. **Strategy** = a wallet address. The wallet address is the strategy identifier everywhere.
+3. **Strategy (in runtime)** = link to an existing wallet address. The wallet address is the strategy identifier everywhere, but wallet creation happens via Senpi MCP (not the runtime).
 
 **Key insight:** The position tracker enables DSL protection for ALL positions of a strategy address — including those opened manually on the exchange or by other tools.
+
+### Wallet lifecycle (required order)
+
+1. Create strategy wallet address via Senpi MCP calls (or confirm it already exists).
+2. Put that wallet address into runtime YAML (`strategies.<name>.wallet` / `${WALLET_ADDRESS}`).
+3. Install/create runtime. This links the runtime to the existing wallet for monitoring and exits.
+
+Never treat `openclaw senpi runtime create` as wallet creation.
 
 ## CLI Commands
 
@@ -24,6 +39,8 @@ All commands require the OpenClaw gateway running (`openclaw gateway run`).
 Use `openclaw senpi --cheatsheet` to print the full plugin command cheatsheet to stdout.
 
 ### Runtime management
+
+Prerequisite: strategy wallet address already exists (created/fetched via Senpi MCP).
 
 ```bash
 # Create a runtime from YAML file
@@ -228,7 +245,7 @@ For full DSL configuration with all fields, time-based cuts, close reasons, and 
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
-| `WALLET_ADDRESS` | Yes | Strategy wallet address (used in YAML via `${WALLET_ADDRESS}`). |
+| `WALLET_ADDRESS` | Yes | Existing strategy wallet address from Senpi MCP (used in YAML via `${WALLET_ADDRESS}`). |
 | `SENPI_API_KEY` | For live MCP | Senpi MCP authentication. |
 | `TELEGRAM_CHAT_ID` | No | Telegram chat ID for notifications. |
 | `DSL_STATE_DIR` | No | Override DSL state file directory. |
