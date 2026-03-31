@@ -6,14 +6,16 @@ description: >-
   raised from 0.001 to 0.003 and the weak +1 tier (CONTRIB_POSITIVE) eliminated.
   Only genuine SM acceleration earns contribution points. Stalker minScore 7,
   minTotalClimb 8, tighter Phase 1 for low-score entries, consecutive-loss
-  streak gate. XYZ banned. Leverage 7-10x. DSL state template in scanner output.
+  streak gate. XYZ banned. Leverage 7-10x. DSL exit managed by plugin runtime via runtime.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
-  version: "3.0"
+  version: "4.0"
   platform: senpi
   exchange: hyperliquid
   config_source: mantis-v2-plus-contrib-threshold-experiment
+  requires:
+    - senpi-trading-runtime
 ---
 
 # 🦗 MANTIS v3.0 — Dual-Mode Scanner + Contribution Threshold Experiment
@@ -36,23 +38,19 @@ Before opening ANY position, call `strategy_get_clearinghouse_state` and count o
 
 The scanner is the single source of truth for all trading parameters.
 
-### RULE 4: Verify BOTH crons on every session start
+### RULE 4: Verify runtime is installed on every session start
 
-Run `openclaw crons list`. Scanner cron and DSL cron must both be `status: ok`.
+Run `openclaw senpi runtime list`. Runtime must be listed. The position tracker and DSL exit are handled by the plugin runtime.
 
-### RULE 5: Write dslState directly — do not construct manually
-
-Write the scanner's `dslState` block DIRECTLY to `state/{TOKEN}.json`. Do not modify.
-
-### RULE 6: Never retry timed-out position creation
+### RULE 5: Never retry timed-out position creation
 
 If `create_position` times out, check clearinghouse state first.
 
-### RULE 7: Never modify your own configuration
+### RULE 6: Never modify your own configuration
 
-No adjustments to leverage, margin, scoring, DSL, or any parameter.
+No adjustments to leverage, margin, scoring, or any parameter.
 
-### RULE 8: Record Stalker results for streak tracking
+### RULE 7: Record Stalker results for streak tracking
 
 After every Stalker position closes, call `record_stalker_result(tc, is_win)`.
 
@@ -91,65 +89,50 @@ After every Stalker position closes, call `record_stalker_result(tc, is_win)`.
 
 ---
 
-## MANDATORY: DSL High Water Mode
+## Exit Management
 
-```json
-{
-  "lockMode": "pct_of_high_water",
-  "phase2TriggerRoe": 7,
-  "tiers": [
-    {"triggerPct": 7,  "lockHwPct": 40, "consecutiveBreachesRequired": 3},
-    {"triggerPct": 12, "lockHwPct": 55, "consecutiveBreachesRequired": 2},
-    {"triggerPct": 15, "lockHwPct": 75, "consecutiveBreachesRequired": 2},
-    {"triggerPct": 20, "lockHwPct": 85, "consecutiveBreachesRequired": 1}
-  ]
-}
-```
-
-### Phase 1 (Conviction-Scaled)
-
-| Score | Absolute Floor | Hard Timeout | Weak Peak | Dead Weight |
-|---|---|---|---|---|
-| 6-7 | -18% ROE | 25 min | 12 min | 8 min |
-| 8-9 | -25% ROE | 45 min | 20 min | 15 min |
-| 10+ | -30% ROE | 60 min | 30 min | 20 min |
-
-### Stagnation TP (MANDATORY)
-
-If ROE >= 10% and high water hasn't moved for 45 minutes, take profit.
-
----
-
-## Scanner Output — DSL State Template
-
-Each signal includes a `dslState` block. Write this directly as the state file.
+DSL exit is handled by the plugin runtime via `runtime.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `runtime.yaml` for configuration details.
 
 **Entry flow:**
-1. Scanner outputs signal with `dslState` block
+1. Scanner outputs signal
 2. Verify positions < 3
 3. Verify exchange max leverage >= 7
 4. Call `create_position`
-5. Write `state/{TOKEN}.json` with exact `signal.dslState` plus `entryPrice`, `leverage`, `createdAt`
-6. Send ONE notification: position opened
-7. DSL cron picks up the state file
+5. Send ONE notification: position opened
+6. `position_tracker` detects the new position automatically
+7. Plugin DSL monitor applies trailing stop-loss protection
+
+**Monitor positions:**
+- `openclaw senpi dsl positions` — list all DSL-tracked positions
+- `openclaw senpi dsl inspect <ASSET>` — full position details
 
 **On position close:**
 8. Call `record_stalker_result(tc, is_win)` if Stalker entry
 
 ---
 
-## Cron Setup
+## Runtime Setup
 
-**EXACT commands — copy-paste. Do not modify.**
+**Step 1:** Set your strategy wallet address in runtime.yaml:
+```bash
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/mantis-strategy/runtime.yaml
+```
+Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
 
-Scanner cron (90 seconds, main session):
+**Step 2:** Set telegram chat ID for notifications:
+```bash
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/mantis-strategy/runtime.yaml
 ```
-python3 /data/workspace/skills/mantis-strategy/scripts/mantis-scanner.py
+Replace `<CHAT_ID>` with the actual Telegram chat ID.
+
+**Step 3:** Install the runtime:
+```bash
+openclaw senpi runtime create --path /data/workspace/skills/mantis-strategy/runtime.yaml
 ```
 
-DSL cron (3 minutes, isolated session):
-```
-python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-dir /data/workspace/skills/mantis-strategy/state
+**Step 4:** Verify:
+```bash
+openclaw senpi runtime list
 ```
 
 ---
@@ -157,11 +140,18 @@ python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-d
 ## Bootstrap Gate
 
 On EVERY session start, check `config/bootstrap-complete.json`. If missing:
-1. Verify Senpi MCP
-2. Create scanner cron (90s, main) and DSL cron (3 min, isolated)
-3. Verify BOTH crons `status: ok`
-4. Write `config/bootstrap-complete.json`
-5. Send: "🦗 MANTIS v3.0 online. Contrib threshold 0.003, no weak tier. Silence = no conviction."
+1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for runtime management and DSL position inspection.
+2. Verify Senpi MCP
+3. Set wallet in runtime.yaml: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/mantis-strategy/runtime.yaml`
+4. Set Telegram in runtime.yaml: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/mantis-strategy/runtime.yaml`
+5. Install runtime: `openclaw senpi runtime create --path /data/workspace/skills/mantis-strategy/runtime.yaml`
+6. Verify runtime installed: `openclaw senpi runtime list`
+7. Remove old DSL cron (if upgrading): run `openclaw crons list`, delete any cron containing `dsl-v5.py` via `openclaw crons delete <id>`
+8. Create scanner cron (90s, main)
+9. Write `config/bootstrap-complete.json`
+10. Send: "🦗 MANTIS v3.0 online. Contrib threshold 0.003, no weak tier. Silence = no conviction."
+
+If bootstrap exists, still verify runtime and scanner cron on every session start.
 
 ---
 
@@ -174,7 +164,6 @@ On EVERY session start, check `config/bootstrap-complete.json`. If missing:
 | Leverage | 7-10x |
 | Daily loss limit | 10% |
 | Per-asset cooldown | 2 hours |
-| Stagnation TP | 10% ROE / 45 min |
 | XYZ equities | Banned |
 | Contrib accel threshold | 0.003 (experiment, was 0.001) |
 | Stalker streak gate | 3 losses → minScore 9 |
@@ -185,7 +174,7 @@ On EVERY session start, check `config/bootstrap-complete.json`. If missing:
 
 **ONLY alert:** Position OPENED, position CLOSED (P&L + reason), streak gate activated/deactivated, critical error.
 
-**NEVER alert:** Scanner found nothing, DSL routine, any reasoning.
+**NEVER alert:** Scanner found nothing, any reasoning.
 
 ---
 
@@ -196,6 +185,7 @@ On EVERY session start, check `config/bootstrap-complete.json`. If missing:
 | `scripts/mantis-scanner.py` | Dual-mode scanner with contrib threshold experiment |
 | `scripts/mantis_config.py` | Config helper with stalkerResults tracking |
 | `config/mantis-config.json` | Config with Mantis v3.0 thresholds |
+| `runtime.yaml` | Runtime config for plugin (DSL exit + position tracker) |
 
 ---
 

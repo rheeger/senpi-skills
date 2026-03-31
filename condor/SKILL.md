@@ -5,16 +5,19 @@ description: >-
   (HUNTING → RIDING → STALKING → RELOAD) across BTC, ETH, SOL, and HYPE.
   Evaluates all four every scan, commits to the single strongest thesis.
   One position at a time. Maximum conviction. Always in the best trade.
+  DSL exit managed by plugin runtime via runtime.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
-  version: "1.0.1"
+  version: "2.0"
   platform: senpi
   exchange: hyperliquid
   based_on: grizzly-v2.1
+  requires:
+    - senpi-trading-runtime
 ---
 
-# 🦅 CONDOR v1.0.1 — Multi-Asset Alpha Hunter
+# CONDOR v1.0.1 — Multi-Asset Alpha Hunter
 
 Four assets. One position. Always the strongest thesis.
 
@@ -23,6 +26,30 @@ Four assets. One position. Always the strongest thesis.
 Polar (+28%, ETH only), Wolverine (+0%, HYPE only), and Grizzly (BTC only) each proved that the three-mode lifecycle works on single assets. But they sit idle when their asset isn't moving. Polar waited through thousands of scans while HYPE ran 40%.
 
 Condor watches BTC, ETH, SOL, and HYPE simultaneously. Every 3 minutes, it scores all four and commits to the single highest-conviction thesis. When that thesis dies, it evaluates all four again. Always in the best trade available.
+
+## CRITICAL AGENT RULES — READ BEFORE ANYTHING ELSE
+
+### RULE 1: MAX 1 POSITION — check before EVERY entry
+
+Before opening ANY position, call `strategy_get_clearinghouse_state` and count open positions. If positions >= 1, SKIP. No exceptions.
+
+### RULE 2: Scanner output is AUTHORITATIVE — never override from memory
+
+If the scanner says a value, you use it. The scanner is the single source of truth.
+
+### RULE 3: Verify runtime is installed on every session start
+
+Run `openclaw senpi runtime list`. Runtime must be listed. The position tracker and DSL exit are handled by the plugin runtime.
+
+### RULE 4: Never retry timed-out position creation
+
+If `create_position` times out, check clearinghouse state. If position exists, the position tracker will pick it up automatically. If not, wait for next scan.
+
+### RULE 5: Never modify your own configuration
+
+Do not adjust leverage, margin, entry caps, or scoring thresholds.
+
+---
 
 ## Three-Mode Lifecycle (Same as Grizzly)
 
@@ -43,13 +70,13 @@ Condor watches BTC, ETH, SOL, and HYPE simultaneously. Every 3 minutes, it score
 
 HYPE's BTC correlation is never a block or thesis exit signal. When BTC confirms HYPE, it's a +2 score bonus. When BTC diverges, it's ignored. The other three assets require correlation confirmation.
 
-## DSL (Same Orca v1.1 Pattern)
+## Exit Management
 
-Scanner outputs `dslState` per signal. Agent writes it directly as the state file. No dsl-profile.json merging.
+DSL exit is handled by the plugin runtime via `runtime.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `runtime.yaml` for configuration details.
 
-- Phase 1: consecutiveBreachesRequired 3, dead weight 15/20/30 min by score
-- Phase 2: 7/12/15/20% tiers, 40/55/75/85% locks
-- Stagnation TP: 10% ROE / 45 min
+**Monitor positions:**
+- `openclaw senpi dsl positions` — list all DSL-tracked positions
+- `openclaw senpi dsl inspect <ASSET>` — full position details
 
 ## Conviction-Scaled Margin
 
@@ -68,12 +95,51 @@ At 10x leverage and 45% margin on a $1,000 account, that's $4,500 notional. On a
 
 **ONLY alert:** Position OPENED (asset, direction, score, all 4 asset scores), position CLOSED, thesis exit, risk guardian. **NEVER:** Scanner found nothing, STALKING status, HUNTING status.
 
-## Cron Architecture
+## Runtime Setup
+
+**Step 1:** Set your strategy wallet address in runtime.yaml:
+```bash
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/condor-strategy/runtime.yaml
+```
+Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
+
+**Step 2:** Set telegram chat ID for notifications:
+```bash
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/condor-strategy/runtime.yaml
+```
+Replace `<CHAT_ID>` with the actual Telegram chat ID.
+
+**Step 3:** Install the runtime:
+```bash
+openclaw senpi runtime create --path /data/workspace/skills/condor-strategy/runtime.yaml
+```
+
+**Step 4:** Verify:
+```bash
+openclaw senpi runtime list
+```
+
+## Crons
 
 | Cron | Interval | Session |
 |---|---|---|
 | Scanner | 3 min | main |
-| DSL | 3 min | isolated |
+
+## Bootstrap Gate
+
+On EVERY session start, check `config/bootstrap-complete.json`. If missing:
+1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md`
+2. Verify Senpi MCP
+3. Set wallet in runtime.yaml: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/condor-strategy/runtime.yaml`
+4. Set Telegram in runtime.yaml: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/condor-strategy/runtime.yaml`
+5. Install runtime: `openclaw senpi runtime create --path /data/workspace/skills/condor-strategy/runtime.yaml`
+6. Verify runtime installed: `openclaw senpi runtime list`
+7. Remove old DSL cron (if upgrading): run `openclaw crons list`, delete any cron containing `dsl-v5.py` via `openclaw crons delete <id>`
+8. Create scanner cron (3 min, main)
+9. Write `config/bootstrap-complete.json`
+10. Send: "CONDOR v1.0.1 online. Watching BTC, ETH, SOL, HYPE. Silence = no conviction."
+
+If bootstrap exists, still verify runtime and scanner cron on every session start.
 
 ## Files
 
@@ -82,6 +148,7 @@ At 10x leverage and 45% margin on a $1,000 account, that's $4,500 notional. On a
 | `scripts/condor-scanner.py` | Multi-asset lifecycle scanner |
 | `scripts/condor_config.py` | Self-contained config helper |
 | `config/condor-config.json` | All parameters |
+| `runtime.yaml` | Runtime config for plugin (DSL exit + position tracker) |
 
 ## License
 

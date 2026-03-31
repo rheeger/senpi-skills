@@ -7,27 +7,30 @@ description: >-
   Scanner decides entries (score 8+, 4H/1H aligned, SM consensus). DSL manages
   all exits (wide Phase 1 for HYPE volatility, trailing tiers starting at +15% ROE).
   Leverage lowered to 7x. Max 4 entries/day. 3-hour cooldown between entries.
+  DSL exit managed by plugin runtime via runtime.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
-  version: "2.0"
+  version: "3.0"
   platform: senpi
   exchange: hyperliquid
+  requires:
+    - senpi-trading-runtime
 ---
 
-# 🦡 WOLVERINE v2.0 — HYPE Alpha Hunter
+# WOLVERINE v2.0 — HYPE Alpha Hunter
 
 Scanner enters. DSL exits. The scanner NEVER re-evaluates open positions.
 
 ---
 
-## ⛔ CRITICAL AGENT RULES
+## CRITICAL AGENT RULES
 
 ### RULE 1: Install path is `/data/workspace/skills/wolverine-strategy/`
 
-### RULE 2: THE SCANNER DOES NOT EXIT POSITIONS
+### RULE 2: THE SCANNER DOES NOT EXIT POSITIONS — DSL-ONLY EXITS
 
-This is the single most important rule. When the scanner output contains `"_v2_no_thesis_exit": true` and the note says "DSL manages exit. Scanner does NOT re-evaluate," that means **DO NOT close, modify, or re-evaluate the open position for any reason.** The DSL cron is the ONLY mechanism that can close positions.
+This is the single most important rule. When the scanner output contains `"_v2_no_thesis_exit": true` and the note says "DSL manages exit. Scanner does NOT re-evaluate," that means **DO NOT close, modify, or re-evaluate the open position for any reason.** The plugin DSL is the ONLY mechanism that can close positions.
 
 v1.1 lost -22.7% because the scanner kept killing positions via "thesis exit" — 25 of 27 trades were chopped by the scanner before DSL could manage them. On HYPE, which wicks 5-10% ROE routinely, the scanner saw every wick as "thesis invalidation" and cut winners that would have run to +30%.
 
@@ -41,19 +44,15 @@ Only one HYPE position at a time. Check clearinghouse before every entry.
 
 Leverage, margin, direction — use exactly what the scanner says.
 
-### RULE 5: Write dslState directly — include wallet address
+### RULE 5: Verify runtime is installed on every session start
 
-Write the scanner's `dslState` block directly to the state file. It already contains `wallet` and `strategyWalletAddress`. Do NOT strip these fields.
+Run `openclaw senpi runtime list`. Runtime must be listed. The position tracker auto-detects position opens/closes on-chain and DSL exit is handled by the plugin runtime.
 
-### RULE 6: Verify BOTH crons on every session start
+### RULE 6: Never modify parameters
 
-Scanner cron (3 min) and DSL cron (3 min) must both be running.
+### RULE 7: 3-hour cooldown between entries
 
-### RULE 7: Never modify parameters
-
-### RULE 8: 3-hour cooldown between entries
-
-After any position close (DSL floor, timeout, trailing stop, stagnation TP), wait 3 hours before the next entry. This prevents revenge trading after a loss.
+After any position close (DSL floor, timeout, trailing stop), wait 3 hours before the next entry. This prevents revenge trading after a loss.
 
 ---
 
@@ -86,41 +85,38 @@ HYPE moves 2-4% routinely. At 7x leverage, that's 14-28% ROE. The edge is:
 
 ---
 
-## DSL Configuration (Wide for HYPE)
+## Exit Management
 
-### Phase 1 (Entry Protection)
-| Parameter | Value | Why |
-|---|---|---|
-| Absolute floor | -20% ROE | At 7x, allows ~2.85% adverse price move |
-| Hard timeout | 120 min | 2 hours to develop thesis |
-| Weak peak cut | 60 min | 1 hour at weak profit before cutting |
-| Dead weight cut | 45 min | 45 min flat before cutting |
-| Consecutive breaches | 3 | Survives single wicks |
+DSL exit is handled by the plugin runtime via `runtime.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `runtime.yaml` for configuration details.
 
-### Phase 2 (Profit Trailing)
-| Trigger ROE | Lock % of Peak | Breaches | Note |
-|---|---|---|---|
-| +15% | 30% | 3 | Initial pop — wide room |
-| +25% | 50% | 2 | Quarter-way up, lock half |
-| +40% | 65% | 1 | Solid profit |
-| +60% | 75% | 1 | Deep run |
-| +80% | 85% | 1 | Infinite trail |
-
-### Stagnation TP
-If ROE >= 15% and high water hasn't moved for 60 minutes, take profit.
+**Monitor positions:**
+- `openclaw senpi dsl positions` — list all DSL-tracked positions
+- `openclaw senpi dsl inspect <ASSET>` — full position details
 
 ---
 
-## Cron Setup
+## Runtime Setup
 
-Scanner cron (3 minutes, main session):
+**Step 1:** Set your strategy wallet address in runtime.yaml:
+```bash
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/wolverine-strategy/runtime.yaml
 ```
-python3 /data/workspace/skills/wolverine-strategy/scripts/wolverine-scanner.py
+Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
+
+**Step 2:** Set telegram chat ID for notifications:
+```bash
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/wolverine-strategy/runtime.yaml
+```
+Replace `<CHAT_ID>` with the actual Telegram chat ID.
+
+**Step 3:** Install the runtime:
+```bash
+openclaw senpi runtime create --path /data/workspace/skills/wolverine-strategy/runtime.yaml
 ```
 
-DSL cron (3 minutes, isolated session):
-```
-python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-dir /data/workspace/skills/wolverine-strategy/state
+**Step 4:** Verify:
+```bash
+openclaw senpi runtime list
 ```
 
 ---
@@ -128,11 +124,18 @@ python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-d
 ## Bootstrap Gate
 
 On EVERY session start, check `config/bootstrap-complete.json`. If missing:
-1. Verify Senpi MCP
-2. Create scanner cron (3 min, main) and DSL cron (3 min, isolated)
-3. Verify BOTH crons `status: ok`
-4. Write `config/bootstrap-complete.json`
-5. Send: "🦡 WOLVERINE v2.0 online. HYPE hunter. Entry-only scanner. DSL manages all exits. Waiting for score 8+ setup."
+1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for runtime management and DSL position inspection.
+2. Verify Senpi MCP
+3. Set wallet in runtime.yaml: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/wolverine-strategy/runtime.yaml`
+4. Set Telegram in runtime.yaml: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/wolverine-strategy/runtime.yaml`
+5. Install runtime: `openclaw senpi runtime create --path /data/workspace/skills/wolverine-strategy/runtime.yaml`
+6. Verify runtime installed: `openclaw senpi runtime list`
+7. Remove old DSL cron (if upgrading): run `openclaw crons list`, delete any cron containing `dsl-v5.py` via `openclaw crons delete <id>`
+8. Create scanner cron (3 min, main)
+9. Write `config/bootstrap-complete.json`
+10. Send: "WOLVERINE v2.0 online. HYPE hunter. Entry-only scanner. Plugin DSL manages all exits. Waiting for score 8+ setup."
+
+If bootstrap exists, still verify runtime and scanner cron on every session start.
 
 ---
 
@@ -140,7 +143,7 @@ On EVERY session start, check `config/bootstrap-complete.json`. If missing:
 
 **ONLY alert:** Position OPENED (direction, score, reasons, leverage), Position CLOSED BY DSL (P&L, close reason, duration), critical error.
 
-**NEVER alert:** Scanner found no signal, scanner sees open position and is not re-evaluating, DSL routine checks, any reasoning about whether to exit an open position.
+**NEVER alert:** Scanner found no signal, scanner sees open position and is not re-evaluating, any reasoning about whether to exit an open position.
 
 ---
 
@@ -153,7 +156,6 @@ On EVERY session start, check `config/bootstrap-complete.json`. If missing:
 | Win rate | ~35-40% |
 | Avg winner | +15% to +30% ROE |
 | Avg loser | -10% to -20% ROE (Phase 1 cuts) |
-| Net edge | Winners 2-3x larger than losers |
 
 **Long periods of silence are expected.** HYPE must have SM consensus, 4H/1H alignment, contribution acceleration, AND score 8+ to enter. That's rare. The patience IS the edge.
 
@@ -166,6 +168,7 @@ On EVERY session start, check `config/bootstrap-complete.json`. If missing:
 | `scripts/wolverine-scanner.py` | Entry-only scanner. NO thesis exit. |
 | `scripts/wolverine_config.py` | Config helper |
 | `config/wolverine-config.json` | All parameters |
+| `runtime.yaml` | Runtime config for plugin (DSL exit + position tracker) |
 
 ---
 

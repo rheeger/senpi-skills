@@ -18,27 +18,6 @@
     "marginPctHighConviction": 0.30,
     "maxPositions": 1
   },
-  "dsl": {
-    "_note": "Wide settings for HYPE volatility. DSL is the ONLY exit mechanism.",
-    "lockMode": "pct_of_high_water",
-    "phase2TriggerRoe": 15,
-    "phase1": {
-      "retraceThreshold": 0.25,
-      "consecutiveBreachesRequired": 3,
-      "phase1MaxMinutes": 120,
-      "weakPeakCutMinutes": 60,
-      "deadWeightCutMin": 45,
-      "absoluteFloorRoe": -20
-    },
-    "trailingTiers": [
-      {"triggerPct": 15, "lockHwPct": 30, "consecutiveBreachesRequired": 3},
-      {"triggerPct": 25, "lockHwPct": 50, "consecutiveBreachesRequired": 2},
-      {"triggerPct": 40, "lockHwPct": 65, "consecutiveBreachesRequired": 1},
-      {"triggerPct": 60, "lockHwPct": 75, "consecutiveBreachesRequired": 1},
-      {"triggerPct": 80, "lockHwPct": 85, "consecutiveBreachesRequired": 1}
-    ],
-    "stagnationTp": {"enabled": true, "roeMin": 15, "hwStaleMin": 60}
-  },
   "risk": {
     "maxDailyLossPct": 10,
     "xyzBanned": true

@@ -515,62 +515,10 @@ def evaluate_reload(exit_state, entry_cfg):
         return False, reload_checks
 
 
-# ─── Hardcoded Constants & DSL State Builder ─────────────────
+# ─── Hardcoded Constants ──────────────────────────────────────
 
 MAX_LEVERAGE = 7          # Reduced from 10x — SOL at 10x is too volatile
 MIN_LEVERAGE = 5
-
-KODIAK_DSL_TIERS = [
-    {"triggerPct": 7,  "lockHwPct": 40, "consecutiveBreachesRequired": 3},
-    {"triggerPct": 12, "lockHwPct": 55, "consecutiveBreachesRequired": 2},
-    {"triggerPct": 15, "lockHwPct": 75, "consecutiveBreachesRequired": 2},
-    {"triggerPct": 20, "lockHwPct": 85, "consecutiveBreachesRequired": 1},
-]
-
-KODIAK_CONVICTION_TIERS = [
-    {"minScore": 8,  "absoluteFloorRoe": -25, "hardTimeoutMin": 45, "weakPeakCutMin": 20, "deadWeightCutMin": 15},
-    {"minScore": 10, "absoluteFloorRoe": -30, "hardTimeoutMin": 60, "weakPeakCutMin": 30, "deadWeightCutMin": 20},
-    {"minScore": 12, "absoluteFloorRoe": -35, "hardTimeoutMin": 90, "weakPeakCutMin": 45, "deadWeightCutMin": 30},
-]
-
-KODIAK_STAGNATION_TP = {"enabled": True, "roeMin": 10, "hwStaleMin": 45}
-
-
-def build_dsl_state_template(direction, score, wallet, strategy_id):
-    """Build exact DSL state file for a Kodiak SOL position.
-    v2.0: includes wallet, strategyWalletAddress, strategyId, size placeholder."""
-    tier = KODIAK_CONVICTION_TIERS[0]
-    for ct in KODIAK_CONVICTION_TIERS:
-        if score >= ct["minScore"]:
-            tier = ct
-    return {
-        "active": True, "asset": "SOL", "direction": direction, "score": score,
-        "phase": 1, "highWaterPrice": None, "highWaterRoe": None,
-        "currentTierIndex": -1, "consecutiveBreaches": 0,
-        # CRITICAL: wallet fields prevent DSL Bug #1/#3
-        "wallet": wallet,
-        "strategyWalletAddress": wallet,
-        "strategyId": strategy_id,
-        # Size must be set by agent from clearinghouse after entry fills
-        "size": None,
-        "lockMode": "pct_of_high_water", "phase2TriggerRoe": 7,
-        "phase1": {
-            "enabled": True, "retraceThreshold": 0.08, "consecutiveBreachesRequired": 3,
-            "phase1MaxMinutes": tier["hardTimeoutMin"],
-            "weakPeakCutMinutes": tier["weakPeakCutMin"],
-            "deadWeightCutMin": tier["deadWeightCutMin"],
-            "absoluteFloorRoe": tier["absoluteFloorRoe"],
-            "weakPeakCut": {"enabled": True, "intervalInMinutes": tier["weakPeakCutMin"], "minValue": 3.0},
-        },
-        "phase2": {"enabled": True, "retraceThreshold": 0.015, "consecutiveBreachesRequired": 2},
-        "tiers": KODIAK_DSL_TIERS,
-        "stagnationTp": KODIAK_STAGNATION_TP,
-        "execution": {"phase1SlOrderType": "MARKET", "phase2SlOrderType": "MARKET", "breachCloseOrderType": "MARKET"},
-        "_v2_no_thesis_exit": True,
-        "_kodiak_version": "2.0",
-        "_note": "DSL manages ALL exits. Scanner does NOT re-evaluate. "
-                 "Agent MUST set 'size' from clearinghouse after entry.",
-    }
 
 
 # ─── Main ─────────────────────────────────────────────────────
@@ -664,7 +612,6 @@ def run():
                         "margin": margin,
                         "orderType": config.get("execution", {}).get("entryOrderType", "FEE_OPTIMIZED_LIMIT"),
                     },
-                    "dslState": build_dsl_state_template(direction, 10, wallet, strategy_id),
                     "reasons": reasons,
                     "note": f"STALKING → RELOAD: fresh impulse confirmed, re-entering SOL {direction}",
                 })
@@ -752,13 +699,9 @@ def run():
             "margin": margin,
             "orderType": config.get("execution", {}).get("entryOrderType", "FEE_OPTIMIZED_LIMIT"),
         },
-        "dslState": build_dsl_state_template(thesis["direction"], thesis["score"], wallet, strategy_id),
         "constraints": {
             "minLeverage": MIN_LEVERAGE,
             "maxLeverage": MAX_LEVERAGE,
-            "stagnationTp": KODIAK_STAGNATION_TP,
-            "dslTiers": KODIAK_DSL_TIERS,
-            "_dslNote": "Use dslState as the DSL state file. Do NOT merge with dsl-profile.json.",
         },
     })
 

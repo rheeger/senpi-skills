@@ -4,21 +4,16 @@
 # Licensed under MIT
 """JAGUAR v2.0 — Striker-Only. No Stalker. No Hunter. No Pyramid.
 
-v1.0 post-mortem: 5 trades, -$293, 4 of 5 had broken DSL.
+v1.0 post-mortem: 5 trades, -$293, 4 of 5 losses.
 - Stalker: 3 trades, 1 win, -$95 net. Score 6-7 entries were garbage.
-- Striker: 2 trades, 0 wins, -$173 net. BUT both had broken DSL.
-  HYPE (score 11) hit DSL floor correctly at -42% in 10 min (DSL worked = clean loss).
-  SOL (score 10) ran 628 min naked because DSL state missing 'size' field.
-  With working DSL, SOL would have timed out at 60 min for ~$25 loss, not $138.
-- Hunter: 0 trades.
+- Striker: 2 trades, 0 wins, -$173 net.
 
 v2.0 changes:
 - Stalker REMOVED (Roach experiment proved Striker-only wins)
 - Hunter REMOVED (0 trades across all testing)
 - Pyramiding REMOVED (never triggered, adds complexity)
-- DSL state now includes wallet, strategyWalletAddress, strategyId, size
 - Leverage reduced to 7x (v1.0 at 10x, HYPE moved 4.2% in 10 min = -42% ROE)
-- Phase 1 floor widened: -20% ROE at 7x = 2.86% price move (survivable)
+- Exit management handled by plugin runtime (runtime.yaml)
 
 The Striker logic is identical to Orca/Roach: FIRST_JUMP from #25+,
 rank jump 15+, volume 1.5x, score 9+, 4+ reasons. Only the most
@@ -55,32 +50,6 @@ STRIKER_MIN_REASONS = 4
 STRIKER_MIN_RANK_JUMP = 15
 STRIKER_MIN_PREV_RANK = 25          # Must come from outside top 25
 STRIKER_MIN_VOLUME_RATIO = 1.5
-
-# DSL v1.1.1 configuration
-DSL_CONFIG = {
-    "lockMode": "pct_of_high_water",
-    "phase2TriggerRoe": 7,
-    "phase1": {
-        "consecutiveBreachesRequired": 3,
-        "phase1MaxMinutes": 45,
-        "weakPeakCutMinutes": 25,
-        "deadWeightCutMin": 12,
-        "absoluteFloorRoe": -20,       # At 7x: 2.86% price move
-        "retraceThreshold": 0.20,
-    },
-    "tiers": [
-        {"triggerPct": 7, "lockHwPct": 40, "consecutiveBreachesRequired": 3},
-        {"triggerPct": 12, "lockHwPct": 55, "consecutiveBreachesRequired": 2},
-        {"triggerPct": 15, "lockHwPct": 75, "consecutiveBreachesRequired": 2},
-        {"triggerPct": 20, "lockHwPct": 85, "consecutiveBreachesRequired": 1},
-    ],
-    "stagnationTp": {"enabled": True, "roeMin": 10, "hwStaleMin": 45},
-    "execution": {
-        "phase1SlOrderType": "MARKET",
-        "phase2SlOrderType": "MARKET",
-        "breachCloseOrderType": "MARKET",
-    },
-}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -265,56 +234,6 @@ def detect_striker_signals(current_scan, history):
     return signals
 
 
-# ═══════════════════════════════════════════════════════════════
-# DSL STATE BUILDER (v1.1.1 — INCLUDES WALLET AND SIZE)
-# ═══════════════════════════════════════════════════════════════
-
-def build_dsl_state(signal, wallet, strategy_id):
-    """Build COMPLETE DSL state. Includes wallet, strategyId, size placeholder.
-    Agent MUST update 'size' from clearinghouse after position opens."""
-
-    return {
-        "active": True,
-        "asset": signal.get("token", ""),
-        "direction": signal.get("direction", ""),
-        "mode": "STRIKER",
-        "score": signal.get("score", 9),
-        "phase": 1,
-        "highWaterPrice": None,
-        "highWaterRoe": None,
-        "currentTierIndex": -1,
-        "consecutiveBreaches": 0,
-        # CRITICAL: wallet fields prevent DSL Bug #1/#3
-        "wallet": wallet,
-        "strategyWalletAddress": wallet,
-        "strategyId": strategy_id,
-        # Size must be set by agent from clearinghouse after entry fills
-        "size": None,
-        "lockMode": DSL_CONFIG["lockMode"],
-        "phase2TriggerRoe": DSL_CONFIG["phase2TriggerRoe"],
-        "phase1": {
-            "enabled": True,
-            "retraceThreshold": DSL_CONFIG["phase1"]["retraceThreshold"],
-            "consecutiveBreachesRequired": DSL_CONFIG["phase1"]["consecutiveBreachesRequired"],
-            "phase1MaxMinutes": DSL_CONFIG["phase1"]["phase1MaxMinutes"],
-            "weakPeakCutMinutes": DSL_CONFIG["phase1"]["weakPeakCutMinutes"],
-            "deadWeightCutMin": DSL_CONFIG["phase1"]["deadWeightCutMin"],
-            "absoluteFloorRoe": DSL_CONFIG["phase1"]["absoluteFloorRoe"],
-            "weakPeakCut": {
-                "enabled": True,
-                "intervalInMinutes": DSL_CONFIG["phase1"]["weakPeakCutMinutes"],
-                "minValue": 3.0,
-            },
-        },
-        "tiers": DSL_CONFIG["tiers"],
-        "stagnationTp": DSL_CONFIG["stagnationTp"],
-        "execution": DSL_CONFIG["execution"],
-        "_v2_no_thesis_exit": True,
-        "_jaguar_version": "2.0",
-        "_note": "DSL manages ALL exits. Scanner does NOT re-evaluate. "
-                 "Agent MUST set 'size' from clearinghouse after entry fills.",
-    }
-
 
 # ═══════════════════════════════════════════════════════════════
 # SCAN HISTORY
@@ -427,12 +346,10 @@ def run():
     our_positions = [p for p in positions if not p.get("coin", "").lower().startswith("xyz")]
 
     if len(our_positions) >= MAX_POSITIONS:
-        # Positions active. DSL manages exits. Scanner does NOT re-evaluate.
         cfg.output({
             "status": "ok",
             "heartbeat": "NO_REPLY",
-            "note": f"{len(our_positions)} positions active. DSL manages exit.",
-            "_v2_no_thesis_exit": True,
+            "note": f"{len(our_positions)} positions active.",
         })
         return
 
@@ -489,8 +406,6 @@ def run():
         margin = round(account_value * 0.20, 2)  # 20% of account
         leverage = DEFAULT_LEVERAGE
 
-        dsl_state = build_dsl_state(signal, wallet, strategy_id)
-
         tc["entries"] = tc.get("entries", 0) + 1
         save_trade_counter(tc)
 
@@ -514,16 +429,12 @@ def run():
                 "margin": margin,
                 "orderType": "FEE_OPTIMIZED_LIMIT",
             },
-            "dslState": dsl_state,
             "constraints": {
                 "maxPositions": MAX_POSITIONS,
                 "maxLeverage": MAX_LEVERAGE,
                 "maxDailyEntries": MAX_DAILY_ENTRIES,
                 "cooldownMinutes": COOLDOWN_MINUTES,
                 "xyzBanned": XYZ_BANNED,
-                "_v2_no_thesis_exit": True,
-                "_note": "DSL manages ALL exits. Do NOT re-evaluate open positions. "
-                         "Agent MUST set dslState.size from clearinghouse after entry fills.",
             },
         })
         return

@@ -5,13 +5,16 @@ description: >-
   (SM, funding, OI, 4TF trend, volume, ETH correlation). Three-mode lifecycle:
   HUNTING (scan for entry) → RIDING (DSL trails) → STALKING (watch for reload on dip).
   After DSL takes profit, watches for fresh momentum impulse while confirming macro thesis
-  is intact. If thesis dies, resets. If dip reloads, re-enters. DSL High Water Mode (mandatory).
+  is intact. If thesis dies, resets. If dip reloads, re-enters.
+  DSL exit managed by plugin runtime via runtime.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
-  version: "2.1.1"
+  version: "3.0"
   platform: senpi
   exchange: hyperliquid
+  requires:
+    - senpi-trading-runtime
 ---
 
 # GRIZZLY v2.0 — BTC Alpha Hunter with Position Lifecycle
@@ -19,6 +22,22 @@ metadata:
 One asset. Every signal. Maximum conviction. Now with reload-on-dip.
 
 GRIZZLY stares at BTC and nothing else. Every signal source available — smart money positioning, funding rate, open interest, 4-timeframe trend structure, volume, ETH correlation — feeds into a single thesis: is there a high-conviction BTC trade right now?
+
+## CRITICAL AGENT RULES — READ BEFORE ANYTHING ELSE
+
+### RULE 1: Verify runtime is installed on every session start
+
+Run `openclaw senpi runtime list`. Runtime must be listed. The position tracker and DSL exit are handled by the plugin runtime.
+
+### RULE 2: Never retry timed-out position creation
+
+If `create_position` times out, check clearinghouse state. If position exists, the position tracker will pick it up automatically. If not, wait for next scan.
+
+### RULE 3: Never modify your own configuration
+
+Do not adjust leverage, margin, entry caps, or scoring thresholds.
+
+---
 
 ## What's New in v2.0: The Three-Mode Lifecycle
 
@@ -32,7 +51,7 @@ Normal behavior. Scan BTC every 3 minutes. All signals must align (4h trend, 1h 
 
 ### MODE 2 — RIDING
 
-Active position. DSL High Water trails it. Thesis re-evaluation every scan. If thesis breaks (4h trend flips, SM flips, funding extreme, volume dies, ETH diverges) → thesis exit and reset to MODE 1 (thesis is dead, don't stalk). If DSL closes the position → switch to MODE 3.
+Active position. DSL trails it. Thesis re-evaluation every scan. If thesis breaks (4h trend flips, SM flips, funding extreme, volume dies, ETH diverges) — thesis exit and reset to MODE 1 (thesis is dead, don't stalk). If DSL closes the position — switch to MODE 3.
 
 ### MODE 3 — STALKING
 
@@ -47,7 +66,7 @@ DSL locked profits. The trend may not be over. Watch for a reload opportunity. E
 6. SM still aligned in the exit direction
 7. 4h trend structure still intact
 
-If ALL pass → RELOAD. Re-enter same direction, same leverage. Switch to MODE 2.
+If ALL pass — RELOAD. Re-enter same direction, same leverage. Switch to MODE 2.
 
 **Kill conditions (ANY triggers reset to MODE 1):**
 - 4h trend reversed
@@ -56,35 +75,9 @@ If ALL pass → RELOAD. Re-enter same direction, same leverage. Switch to MODE 2
 - Stalking for more than 6 hours with no reload
 - Funding spiked above 100% annualized
 
-The loop: HUNTING → RIDING → STALKING → RELOAD → RIDING → STALKING → ... until a kill condition fires → HUNTING.
+The loop: HUNTING — RIDING — STALKING — RELOAD — RIDING — STALKING — ... until a kill condition fires — HUNTING.
 
 **maxPositions: 1.** GRIZZLY holds one BTC position at a time. All capital, all attention, one trade.
-
-## MANDATORY: DSL High Water Mode
-
-**GRIZZLY MUST use DSL High Water Mode. This is not optional. Do not substitute standard DSL tiers.**
-
-Spec: https://github.com/Senpi-ai/senpi-skills/blob/main/dsl-dynamic-stop-loss/dsl-high-water-spec%201.0.md
-
-When creating DSL state files for any GRIZZLY position, you MUST include:
-
-```json
-{
-  "lockMode": "pct_of_high_water",
-  "phase2TriggerRoe": 5,
-  "tiers": [
-    {"triggerPct": 5,  "lockHwPct": 20, "consecutiveBreachesRequired": 3},
-    {"triggerPct": 10, "lockHwPct": 40, "consecutiveBreachesRequired": 3},
-    {"triggerPct": 15, "lockHwPct": 60, "consecutiveBreachesRequired": 2},
-    {"triggerPct": 20, "lockHwPct": 75, "consecutiveBreachesRequired": 1},
-    {"triggerPct": 30, "lockHwPct": 85, "consecutiveBreachesRequired": 1}
-  ]
-}
-```
-
-**If `tiers` or `lockMode` is missing from the state file, the DSL engine falls back to flat 1.5% retrace and High Water Mode is silently disabled. Always verify the state file contains these fields after creation.**
-
-**FALLBACK (until DSL engine supports `pct_of_high_water`):** Use the `tiersLegacyFallback` array from `grizzly-config.json` — wide fixed tiers going up to +100% ROE. Switch to High Water tiers the moment the engine supports them.
 
 ## Why BTC-Only at High Leverage
 
@@ -100,7 +93,7 @@ High leverage amplifies the edge. At 15x, a 2% BTC move = 30% ROE. At 20x, it's 
 
 ## How GRIZZLY Trades
 
-### Entry (score ≥ 10 required)
+### Entry (score >= 10 required)
 
 Every 3 minutes, the scanner evaluates BTC across all signal sources:
 
@@ -145,25 +138,15 @@ GRIZZLY re-evaluates the thesis every scan. The position holds as long as:
 - Volume hasn't dried up for 3+ hours
 - ETH isn't strongly diverging from BTC
 
-If ANY of these break → thesis exit. The agent closes because the reason it entered is dead.
+If ANY of these break — thesis exit. The agent closes because the reason it entered is dead.
 
-### Exit (DSL High Water — BTC-specific tiers)
+## Exit Management
 
-BTC pulls back 3-5% ROE regularly during trends. The tiers are designed for this:
+DSL exit is handled by the plugin runtime via `runtime.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `runtime.yaml` for configuration details.
 
-| Tier | Trigger ROE | Lock (% of HW) | Breaches | Notes |
-|---|---|---|---|---|
-| 1 | 5% | 20% | 3 | Very light — BTC pullbacks are normal |
-| 2 | 10% | 40% | 3 | Patient — let the trend develop |
-| 3 | 15% | 60% | 2 | Tightening |
-| 4 | 20% | 75% | 1 | Strong protection |
-| 5 | 30%+ | 85% | 1 | Infinite trail — no ceiling |
-
-At 15x leverage: BTC +2% price = +30% ROE → stop at +25.5% ROE (85% of 30).
-At 20x leverage: BTC +3% price = +60% ROE → stop at +51% ROE (85% of 60).
-
-Phase 1: conviction-scaled floors. Score 10 = -50% ROE max loss. Score 12+ = unrestricted. No time exits.
-Stagnation TP: 12% ROE stale for 90 minutes → close. BTC trends consolidate longer than alts.
+**Monitor positions:**
+- `openclaw senpi dsl positions` — list all DSL-tracked positions
+- `openclaw senpi dsl inspect <ASSET>` — full position details
 
 ## Risk Management
 
@@ -175,30 +158,58 @@ Stagnation TP: 12% ROE stale for 90 minutes → close. BTC trends consolidate lo
 | G2 drawdown halt | 25% from peak | Halt all trading |
 | Daily loss limit | 10% | |
 | Cooldown | 120 min after 3 consecutive losses | Long — BTC conviction trades shouldn't chain-fail |
-| Stagnation TP | 12% ROE stale 90 min | BTC needs patience |
 
-## Cron Architecture
+## Runtime Setup
+
+**Step 1:** Set your strategy wallet address in runtime.yaml:
+```bash
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/grizzly-strategy/runtime.yaml
+```
+Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
+
+**Step 2:** Set telegram chat ID for notifications:
+```bash
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/grizzly-strategy/runtime.yaml
+```
+Replace `<CHAT_ID>` with the actual Telegram chat ID.
+
+**Step 3:** Install the runtime:
+```bash
+openclaw senpi runtime create --path /data/workspace/skills/grizzly-strategy/runtime.yaml
+```
+
+**Step 4:** Verify:
+```bash
+openclaw senpi runtime list
+```
+
+## Crons
 
 | Cron | Interval | Session | Purpose |
 |---|---|---|---|
 | Scanner | 3 min | isolated | Thesis builder (if flat) + thesis re-evaluator (if holding) |
-| DSL v5 | 3 min | isolated | High Water Mode trailing stops |
-
-Both MUST be isolated sessions with `agentTurn`. Use `NO_REPLY` for idle cycles.
-
-## Notification Policy
-
-**ONLY alert:** BTC position OPENED (direction, leverage, score, thesis reasons), position CLOSED (DSL or thesis exit with reason), risk guardian triggered, critical error.
-**NEVER alert:** Scanner found no thesis, thesis re-evaluation passed, DSL routine check, any reasoning.
-All crons isolated. `NO_REPLY` for idle cycles. No rogue processes.
 
 ## Bootstrap Gate
 
 On EVERY session, check `config/bootstrap-complete.json`. If missing:
-1. Verify Senpi MCP
-2. Create scanner cron (3 min, isolated) and DSL cron (3 min, isolated)
-3. Write `config/bootstrap-complete.json`
-4. Send: "🐻 GRIZZLY is online. Watching BTC. DSL High Water Mode active. Silence = no conviction."
+1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md`
+2. Verify Senpi MCP
+3. Set wallet in runtime.yaml: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/grizzly-strategy/runtime.yaml`
+4. Set Telegram in runtime.yaml: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/grizzly-strategy/runtime.yaml`
+5. Install runtime: `openclaw senpi runtime create --path /data/workspace/skills/grizzly-strategy/runtime.yaml`
+6. Verify runtime installed: `openclaw senpi runtime list`
+7. Remove old DSL cron (if upgrading): run `openclaw crons list`, delete any cron containing `dsl-v5.py` via `openclaw crons delete <id>`
+8. Create scanner cron (3 min, isolated)
+9. Write `config/bootstrap-complete.json`
+10. Send: "GRIZZLY is online. Watching BTC. Silence = no conviction."
+
+If bootstrap exists, still verify runtime and scanner cron on every session start.
+
+## Notification Policy
+
+**ONLY alert:** BTC position OPENED (direction, leverage, score, thesis reasons), position CLOSED (DSL or thesis exit with reason), risk guardian triggered, critical error.
+**NEVER alert:** Scanner found no thesis, thesis re-evaluation passed, any reasoning.
+All crons isolated. `NO_REPLY` for idle cycles. No rogue processes.
 
 ## Expected Behavior
 
@@ -218,18 +229,17 @@ On EVERY session, check `config/bootstrap-complete.json`. If missing:
 |---|---|
 | `scripts/grizzly-scanner.py` | BTC thesis builder + re-evaluator |
 | `scripts/grizzly_config.py` | Shared config, MCP helpers, state I/O |
-| `config/grizzly-config.json` | All configurable variables with DSL High Water tiers + legacy fallback |
-| DSL v5 (shared skill) | Trailing stop engine — MUST be configured with High Water Mode |
+| `config/grizzly-config.json` | All configurable variables |
+| `runtime.yaml` | Runtime config for plugin (DSL exit + position tracker) |
 
 ## License
 
-MIT — Built by Senpi (https://senpi.ai). 
+MIT — Built by Senpi (https://senpi.ai).
 Source: https://github.com/Senpi-ai/senpi-skills
 
 ## Changelog
 
 ### v2.1.1
-- Fixed DSL field names: `phase1MaxMinutes` (was `hardTimeoutMinutes`), `deadWeightCutMin` (was `deadWeightCutMinutes`)
-- `highWaterPrice` initialized as `null` (was `0`) — lets dsl-v5.py set from actual entry price on first tick
-- Removed static `absoluteFloor` price values — dsl-v5.py now calculates dynamically from `absoluteFloorRoe`
-- Requires dsl-v5.py with Patch 1 (dynamic absoluteFloorRoe calculator) and Patch 2 (highWaterPrice null handling)
+- DSL exit migrated to plugin runtime via runtime.yaml
+- Scanner DSL code removed (position_tracker handles position detection)
+- Leverage capped at 10x (was 15-20x)

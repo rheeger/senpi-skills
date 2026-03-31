@@ -53,22 +53,6 @@ BONUS_ONLY_CORRELATION = {"HYPE"}
 MAX_LEVERAGE = 10
 MIN_LEVERAGE = 7
 
-CONDOR_DSL_TIERS = [
-    {"triggerPct": 7,  "lockHwPct": 40, "consecutiveBreachesRequired": 3},
-    {"triggerPct": 12, "lockHwPct": 55, "consecutiveBreachesRequired": 2},
-    {"triggerPct": 15, "lockHwPct": 75, "consecutiveBreachesRequired": 2},
-    {"triggerPct": 20, "lockHwPct": 85, "consecutiveBreachesRequired": 1},
-]
-
-CONDOR_CONVICTION_TIERS = [
-    {"minScore": 8,  "absoluteFloorRoe": -25, "hardTimeoutMin": 45, "weakPeakCutMin": 20, "deadWeightCutMin": 15},
-    {"minScore": 10, "absoluteFloorRoe": -30, "hardTimeoutMin": 60, "weakPeakCutMin": 30, "deadWeightCutMin": 20},
-    {"minScore": 12, "absoluteFloorRoe": -35, "hardTimeoutMin": 90, "weakPeakCutMin": 45, "deadWeightCutMin": 30},
-]
-
-CONDOR_STAGNATION_TP = {"enabled": True, "roeMin": 10, "hwStaleMin": 45}
-
-
 # ─── Technical Helpers ────────────────────────────────────────
 
 def price_momentum(candles, n_bars=1):
@@ -435,44 +419,6 @@ def evaluate_reload(exit_state, entry_cfg):
     return (not fails), reload_checks
 
 
-# ─── DSL State Builder ───────────────────────────────────────
-
-def build_dsl_state_template(asset, direction, score):
-    tier = CONDOR_CONVICTION_TIERS[0]
-    for ct in CONDOR_CONVICTION_TIERS:
-        if score >= ct["minScore"]:
-            tier = ct
-
-    return {
-        "active": True,
-        "asset": asset,
-        "direction": direction,
-        "score": score,
-        "phase": 1,
-        "highWaterPrice": None,
-        "highWaterRoe": None,
-        "currentTierIndex": -1,
-        "consecutiveBreaches": 0,
-        "lockMode": "pct_of_high_water",
-        "phase2TriggerRoe": 7,
-        "phase1": {
-            "enabled": True,
-            "retraceThreshold": 0.03,
-            "consecutiveBreachesRequired": 3,
-            "phase1MaxMinutes": tier["hardTimeoutMin"],
-            "weakPeakCutMinutes": tier["weakPeakCutMin"],
-            "deadWeightCutMin": tier["deadWeightCutMin"],
-            "absoluteFloorRoe": tier["absoluteFloorRoe"],
-            "weakPeakCut": {"enabled": True, "intervalInMinutes": tier["weakPeakCutMin"], "minValue": 3.0},
-        },
-        "phase2": {"enabled": True, "retraceThreshold": 0.015, "consecutiveBreachesRequired": 2},
-        "tiers": CONDOR_DSL_TIERS,
-        "stagnationTp": CONDOR_STAGNATION_TP,
-        "execution": {"phase1SlOrderType": "MARKET", "phase2SlOrderType": "MARKET", "breachCloseOrderType": "MARKET"},
-        "_condor_version": "1.0.1",
-    }
-
-
 # ─── Main ─────────────────────────────────────────────────────
 
 def run():
@@ -565,7 +511,6 @@ def run():
                         "leverage": leverage, "margin": margin,
                         "orderType": config.get("execution", {}).get("entryOrderType", "FEE_OPTIMIZED_LIMIT"),
                     },
-                    "dslState": build_dsl_state_template(asset, direction, 10),
                     "reasons": reasons,
                     "note": f"STALKING → RELOAD: re-entering {asset} {direction}",
                 })
@@ -638,12 +583,9 @@ def run():
             "leverage": leverage, "margin": margin,
             "orderType": config.get("execution", {}).get("entryOrderType", "FEE_OPTIMIZED_LIMIT"),
         },
-        "dslState": build_dsl_state_template(best["asset"], best["direction"], best["score"]),
         "constraints": {
             "minLeverage": MIN_LEVERAGE,
             "maxLeverage": MAX_LEVERAGE,
-            "stagnationTp": CONDOR_STAGNATION_TP,
-            "dslTiers": CONDOR_DSL_TIERS,
         },
         "allTheses": [{"asset": t["asset"], "score": t["score"], "direction": t["direction"]} for t in theses],
         "note": f"HUNTING → ENTER: {best['asset']} {best['direction']} score {best['score']} (best of {len(theses)} candidates)",

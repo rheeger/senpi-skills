@@ -12,7 +12,6 @@ If v1.3 beats Roach, Stalker has value. If Roach still wins, Stalker dies.
 
 v1.2 had broken infrastructure (crons dying, state files in wrong dirs,
 self-healing loops that made things worse). v1.3 fixes all of that:
-- DSL state includes wallet, strategyWalletAddress, strategyId, size placeholder
 - No thesis exit (scanner does NOT re-evaluate open positions)
 - No Hunter mode (0 trades across all testing)
 - No pyramiding (never triggered, adds complexity)
@@ -58,26 +57,6 @@ STRIKER_MIN_REASONS = 4
 STRIKER_MIN_RANK_JUMP = 15
 STRIKER_MIN_PREV_RANK = 25
 STRIKER_MIN_VOLUME_RATIO = 1.5
-
-# DSL v1.1.1 conviction tiers
-CONVICTION_TIERS = [
-    {"minScore": 6, "absoluteFloorRoe": -18, "hardTimeoutMin": 25,
-     "weakPeakCutMin": 12, "deadWeightCutMin": 8},
-    {"minScore": 8, "absoluteFloorRoe": -25, "hardTimeoutMin": 45,
-     "weakPeakCutMin": 20, "deadWeightCutMin": 15},
-    {"minScore": 10, "absoluteFloorRoe": -30, "hardTimeoutMin": 60,
-     "weakPeakCutMin": 30, "deadWeightCutMin": 20},
-]
-
-DSL_TIERS = [
-    {"triggerPct": 7, "lockHwPct": 40, "consecutiveBreachesRequired": 3},
-    {"triggerPct": 12, "lockHwPct": 55, "consecutiveBreachesRequired": 2},
-    {"triggerPct": 15, "lockHwPct": 75, "consecutiveBreachesRequired": 2},
-    {"triggerPct": 20, "lockHwPct": 85, "consecutiveBreachesRequired": 1},
-]
-
-STAGNATION_TP = {"enabled": True, "roeMin": 10, "hwStaleMin": 45}
-
 
 # ═══════════════════════════════════════════════════════════════
 # HELPERS
@@ -401,64 +380,6 @@ def detect_striker_signals(current_scan, history):
 
 
 # ═══════════════════════════════════════════════════════════════
-# DSL STATE BUILDER (v1.1.1 — conviction-tiered)
-# ═══════════════════════════════════════════════════════════════
-
-def build_dsl_state(signal, wallet, strategy_id):
-    """Build complete DSL state with conviction-based Phase 1 settings."""
-    score = signal.get("score", 6)
-
-    tier = CONVICTION_TIERS[0]
-    for ct in CONVICTION_TIERS:
-        if score >= ct["minScore"]:
-            tier = ct
-
-    return {
-        "active": True,
-        "asset": signal.get("token", ""),
-        "direction": signal.get("direction", ""),
-        "mode": signal.get("mode", "STALKER"),
-        "score": score,
-        "phase": 1,
-        "highWaterPrice": None,
-        "highWaterRoe": None,
-        "currentTierIndex": -1,
-        "consecutiveBreaches": 0,
-        "wallet": wallet,
-        "strategyWalletAddress": wallet,
-        "strategyId": strategy_id,
-        "size": None,  # Agent MUST set from clearinghouse after entry
-        "lockMode": "pct_of_high_water",
-        "phase2TriggerRoe": 7,
-        "phase1": {
-            "enabled": True,
-            "retraceThreshold": 0.03,
-            "consecutiveBreachesRequired": 3,
-            "phase1MaxMinutes": tier["hardTimeoutMin"],
-            "weakPeakCutMinutes": tier["weakPeakCutMin"],
-            "deadWeightCutMin": tier["deadWeightCutMin"],
-            "absoluteFloorRoe": tier["absoluteFloorRoe"],
-            "weakPeakCut": {
-                "enabled": True,
-                "intervalInMinutes": tier["weakPeakCutMin"],
-                "minValue": 3.0,
-            },
-        },
-        "tiers": DSL_TIERS,
-        "stagnationTp": STAGNATION_TP,
-        "execution": {
-            "phase1SlOrderType": "MARKET",
-            "phase2SlOrderType": "MARKET",
-            "breachCloseOrderType": "MARKET",
-        },
-        "_v2_no_thesis_exit": True,
-        "_orca_version": "1.3",
-        "_note": "DSL manages ALL exits. Scanner does NOT re-evaluate open positions. "
-                 "Agent MUST set 'size' from clearinghouse after entry.",
-    }
-
-
-# ═══════════════════════════════════════════════════════════════
 # SCAN HISTORY
 # ═══════════════════════════════════════════════════════════════
 
@@ -534,8 +455,7 @@ def run():
 
     if len(positions) >= MAX_POSITIONS:
         cfg.output({"status": "ok", "heartbeat": "NO_REPLY",
-                    "note": f"{len(positions)} positions active. DSL manages exit.",
-                    "_v2_no_thesis_exit": True})
+                    "note": f"{len(positions)} positions active. Max reached."})
         return
 
     # ── Trade counter ─────────────────────────────────────────
@@ -596,10 +516,6 @@ def run():
                             f"Stalker: {len(stalker_signals)}, Striker: {len(striker_signals)}"})
         return
 
-    # ── Build output with DSL state ───────────────────────────
-    for sig in filtered:
-        sig["dslState"] = build_dsl_state(sig, wallet, strategy_id)
-
     tc["entries"] = tc.get("entries", 0) + len(filtered)
     save_trade_counter(tc)
 
@@ -628,7 +544,6 @@ def run():
                 "margin": margin_per,
                 "orderType": "FEE_OPTIMIZED_LIMIT",
             },
-            "dslState": s["dslState"],
         } for s in filtered],
         "constraints": {
             "maxPositions": MAX_POSITIONS,
@@ -640,8 +555,7 @@ def run():
                 "stalker": STALKER_MIN_SCORE,
                 "striker": STRIKER_MIN_SCORE,
             },
-            "_v2_no_thesis_exit": True,
-            "_note": "DSL manages ALL exits. Agent MUST set dslState.size from clearinghouse after entry.",
+            "_note": "These constraints are HARDCODED in the scanner. Do not override.",
         },
     })
 

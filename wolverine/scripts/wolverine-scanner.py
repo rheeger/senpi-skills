@@ -60,39 +60,6 @@ REQUIRE_4H_1H_ALIGNMENT = True     # Both timeframes must agree on direction
 # XYZ ban
 XYZ_BANNED = True
 
-# DSL configuration — wide for HYPE's volatility
-# Scanner generates these in the DSL state file. DSL manages ALL exits.
-DSL_CONFIG = {
-    "lockMode": "pct_of_high_water",
-    "phase2TriggerRoe": 15,        # Don't start trailing until +15% ROE
-    "phase1": {
-        "consecutiveBreachesRequired": 3,
-        "phase1MaxMinutes": 120,    # 2 hours — give HYPE time to move
-        "weakPeakCutMinutes": 60,   # 1 hour weak peak tolerance
-        "deadWeightCutMin": 45,     # 45 min dead weight
-        "absoluteFloorRoe": -20,    # Wide floor — 20% loss at 7x = 2.85% price move
-        "retraceThreshold": 0.25,   # 25% retrace from entry peak
-    },
-    "tiers": [
-        {"triggerPct": 15, "lockHwPct": 30, "consecutiveBreachesRequired": 3},
-        {"triggerPct": 25, "lockHwPct": 50, "consecutiveBreachesRequired": 2},
-        {"triggerPct": 40, "lockHwPct": 65, "consecutiveBreachesRequired": 1},
-        {"triggerPct": 60, "lockHwPct": 75, "consecutiveBreachesRequired": 1},
-        {"triggerPct": 80, "lockHwPct": 85, "consecutiveBreachesRequired": 1},
-    ],
-    "stagnationTp": {"enabled": True, "roeMin": 15, "hwStaleMin": 60},
-    "execution": {
-        "phase1SlOrderType": "MARKET",
-        "phase2SlOrderType": "MARKET",
-        "breachCloseOrderType": "MARKET",
-    },
-}
-
-# Conviction tiers for Phase 1 timing
-CONVICTION_TIERS = [
-    {"minScore": 8,  "absoluteFloorRoe": -20, "phase1MaxMinutes": 120, "weakPeakCutMin": 60, "deadWeightCutMin": 45},
-    {"minScore": 10, "absoluteFloorRoe": -25, "phase1MaxMinutes": 180, "weakPeakCutMin": 90, "deadWeightCutMin": 60},
-]
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -221,68 +188,6 @@ def score_hype_signal(markets_data):
     return score, direction, reasons
 
 
-# ═══════════════════════════════════════════════════════════════
-# DSL STATE BUILDER
-# ═══════════════════════════════════════════════════════════════
-
-def build_dsl_state(direction, score, leverage):
-    """Build COMPLETE DSL state. Scanner generates, agent writes directly.
-    NO thesis exit. DSL is the ONLY exit mechanism."""
-
-    # Select conviction tier for Phase 1 timing
-    tier = CONVICTION_TIERS[0]  # default
-    for t in CONVICTION_TIERS:
-        if score >= t["minScore"]:
-            tier = t
-
-    wallet, strategy_id = cfg.get_wallet_and_strategy()
-
-    return {
-        "active": True,
-        "asset": ASSET,
-        "direction": direction,
-        "score": score,
-        "phase": 1,
-        "highWaterPrice": None,
-        "highWaterRoe": None,
-        "currentTierIndex": -1,
-        "consecutiveBreaches": 0,
-        # Wallet info — prevents DSL Bug #1
-        "wallet": wallet,
-        "strategyWalletAddress": wallet,
-        "strategyId": strategy_id,
-        # Phase 1
-        "lockMode": DSL_CONFIG["lockMode"],
-        "phase2TriggerRoe": DSL_CONFIG["phase2TriggerRoe"],
-        "phase1": {
-            "enabled": True,
-            "retraceThreshold": DSL_CONFIG["phase1"]["retraceThreshold"],
-            "consecutiveBreachesRequired": DSL_CONFIG["phase1"]["consecutiveBreachesRequired"],
-            "phase1MaxMinutes": tier["phase1MaxMinutes"],
-            "weakPeakCutMinutes": tier["weakPeakCutMin"],
-            "deadWeightCutMin": tier["deadWeightCutMin"],
-            "absoluteFloorRoe": tier["absoluteFloorRoe"],
-            "weakPeakCut": {
-                "enabled": True,
-                "intervalInMinutes": tier["weakPeakCutMin"],
-                "minValue": 3.0,
-            },
-        },
-        # Phase 2
-        "phase2": {
-            "enabled": True,
-            "retraceThreshold": 0.015,
-            "consecutiveBreachesRequired": 2,
-        },
-        # Trailing tiers — wide for HYPE
-        "tiers": DSL_CONFIG["tiers"],
-        "stagnationTp": DSL_CONFIG["stagnationTp"],
-        "execution": DSL_CONFIG["execution"],
-        # v2.0 flag — tells the agent NOT to thesis-exit
-        "_v2_no_thesis_exit": True,
-        "_note": "DSL manages ALL exits. Scanner does NOT re-evaluate open positions.",
-    }
-
 
 # ═══════════════════════════════════════════════════════════════
 # MAIN SCANNER
@@ -360,8 +265,6 @@ def run():
     leverage = DEFAULT_LEVERAGE
     margin_pct = 0.30 if score >= 10 else 0.20  # 30% at high conviction, 20% at base
 
-    dsl_state = build_dsl_state(direction, score, leverage)
-
     # Update trade counter
     tc["entries"] = tc.get("entries", 0) + 1
     cfg.save_trade_counter(tc)
@@ -382,7 +285,6 @@ def run():
             "marginPercent": margin_pct * 100,
             "orderType": "FEE_OPTIMIZED_LIMIT",
         },
-        "dslState": dsl_state,
         "constraints": {
             "maxPositions": MAX_POSITIONS,
             "maxLeverage": MAX_LEVERAGE,

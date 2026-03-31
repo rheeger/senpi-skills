@@ -1,20 +1,23 @@
 ---
 name: bald-eagle-strategy
 description: >-
-  BALD EAGLE v2.0 — XYZ Alpha Hunter. Trades high-liquidity XYZ assets on
+  BALD EAGLE v3.0 — XYZ Alpha Hunter. Trades high-liquidity XYZ assets on
   Hyperliquid: commodities (GOLD, SILVER, CL, BRENTOIL), indices (SP500, XYZ100),
   and select equities (TSLA, NVDA). Spread gate rejects illiquid assets.
   Leverage capped at 7x (v1.0 used 20x and got liquidated).
   DSL manages all exits. No thesis exit.
+  DSL exit managed by plugin runtime via runtime.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
-  version: "2.0"
+  version: "3.0"
   platform: senpi
   exchange: hyperliquid
+  requires:
+    - senpi-trading-runtime
 ---
 
-# 🦅 BALD EAGLE v2.0 — XYZ Alpha Hunter
+# 🦅 BALD EAGLE v3.0 — XYZ Alpha Hunter
 
 The only Senpi agent trading commodities, indices, and equities on Hyperliquid.
 
@@ -34,9 +37,13 @@ SNDK is the only hard ban.
 
 ### RULE 4: MAX 3 POSITIONS at a time
 
-### RULE 5: Write dslState directly — MUST update 'size' from clearinghouse
+### RULE 5: Verify runtime is installed on every session start
 
-### RULE 6: Verify BOTH crons on every session start
+Run `openclaw senpi runtime list`. Runtime must be listed. The position tracker and DSL exit are handled by the plugin runtime.
+
+### RULE 6: Never retry timed-out position creation
+
+If `create_position` times out, check clearinghouse state. If position exists, the position tracker will pick it up automatically. If not, wait for next scan.
 
 ### RULE 7: Never modify parameters. Never increase leverage above 7x.
 
@@ -80,30 +87,57 @@ SNDK is the only hard ban.
 
 ---
 
-## Cron Setup
+## Exit Management
 
-Scanner (5 min, main):
+DSL exit is handled by the plugin runtime via `runtime.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `runtime.yaml` for configuration details.
+
+**Monitor positions:**
+- `openclaw senpi dsl positions` — list all DSL-tracked positions
+- `openclaw senpi dsl inspect <ASSET>` — full position details
+
+---
+
+## Runtime Setup
+
+**Step 1:** Set your strategy wallet address in runtime.yaml:
+```bash
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/bald-eagle-strategy/runtime.yaml
 ```
-python3 /data/workspace/skills/bald-eagle-strategy/scripts/eagle-scanner.py
+Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
+
+**Step 2:** Set telegram chat ID for notifications:
+```bash
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/bald-eagle-strategy/runtime.yaml
+```
+Replace `<CHAT_ID>` with the actual Telegram chat ID.
+
+**Step 3:** Install the runtime:
+```bash
+openclaw senpi runtime create --path /data/workspace/skills/bald-eagle-strategy/runtime.yaml
 ```
 
-DSL (3 min, isolated):
-```
-python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-dir /data/workspace/skills/bald-eagle-strategy/state
+**Step 4:** Verify:
+```bash
+openclaw senpi runtime list
 ```
 
 ---
 
-## DSL Configuration
+## Bootstrap Gate
 
-| Parameter | Value |
-|---|---|
-| Phase 1 floor | -15% ROE (at 7x = 2.14% price) |
-| Phase 1 timeout | 45 min |
-| Phase 1 retrace | 0.08 (8% ROE) |
-| Dead weight cut | 12 min |
-| Weak peak cut | 20 min |
-| Trailing tiers | 7%/40%, 12%/55%, 20%/70%, 30%/80% |
+On EVERY session start, check `config/bootstrap-complete.json`. If missing:
+1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for runtime management and DSL position inspection.
+2. Verify Senpi MCP
+3. Set wallet in runtime.yaml: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/bald-eagle-strategy/runtime.yaml`
+4. Set Telegram in runtime.yaml: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/bald-eagle-strategy/runtime.yaml`
+5. Install runtime: `openclaw senpi runtime create --path /data/workspace/skills/bald-eagle-strategy/runtime.yaml`
+6. Verify runtime installed: `openclaw senpi runtime list`
+7. Remove old DSL cron (if upgrading): run `openclaw crons list`, delete any cron containing `dsl-v5.py` via `openclaw crons delete <id>`
+8. Create scanner cron (5 min, main)
+9. Write `config/bootstrap-complete.json`
+10. Send: "🦅 BALD EAGLE v3.0 online. XYZ Alpha Hunter with spread gate. DSL managed by plugin runtime. Silence = no alpha."
+
+If bootstrap exists, still verify runtime and scanner cron on every session start.
 
 ---
 
@@ -128,6 +162,7 @@ python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-d
 | `scripts/eagle-scanner.py` | XYZ SM scanner with spread gate + conviction scoring |
 | `scripts/eagle_config.py` | Config helper (MCP, state, market hours, cooldowns) |
 | `config/bald-eagle-config.json` | Wallet, strategy ID |
+| `runtime.yaml` | Runtime config for plugin (DSL exit + position tracker) |
 
 ---
 

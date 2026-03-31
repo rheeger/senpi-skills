@@ -5,14 +5,17 @@ description: >-
   (SM, funding, OI, 4TF trend, volume, BTC correlation). Three-mode lifecycle:
   HUNTING (scan for entry) / RIDING (DSL trails) / STALKING (watch for reload on dip).
   After DSL takes profit, watches for fresh momentum impulse while confirming macro thesis
-  is intact. If thesis dies, resets. If dip reloads, re-enters. DSL High Water Mode (mandatory).
+  is intact. If thesis dies, resets. If dip reloads, re-enters.
+  DSL exit managed by plugin runtime via runtime.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
-  version: "1.0"
+  version: "2.0"
   platform: senpi
   exchange: hyperliquid
   base_skill: grizzly-v2.0
+  requires:
+    - senpi-trading-runtime
 ---
 
 # POLAR v1.0 — ETH Alpha Hunter with Position Lifecycle
@@ -23,6 +26,28 @@ POLAR stares at ETH and nothing else. Every signal source available — smart mo
 
 Based on GRIZZLY v2.0's three-mode lifecycle, adapted for ETH's volatility profile.
 
+---
+
+## CRITICAL AGENT RULES — READ BEFORE ANYTHING ELSE
+
+### RULE 1: Verify runtime is installed on every session start
+
+Run `openclaw senpi runtime list`. Runtime must be listed. The position tracker and DSL exit are handled by the plugin runtime.
+
+### RULE 2: MAX 1 POSITION — check before EVERY entry
+
+Before opening ANY position, call `strategy_get_clearinghouse_state` and count open positions. If positions >= 1, SKIP. No exceptions.
+
+### RULE 3: Scanner output is AUTHORITATIVE — never override from memory
+
+If the scanner says a value, you use it. The scanner is the single source of truth.
+
+### RULE 4: Never modify your own configuration
+
+Do not adjust leverage, margin, entry caps, or scoring thresholds.
+
+---
+
 ## The Three-Mode Lifecycle
 
 ### MODE 1 — HUNTING (default)
@@ -31,7 +56,7 @@ Scan ETH every 3 minutes. All signals must align (4h trend, 1h momentum, SM, fun
 
 ### MODE 2 — RIDING
 
-Active position. DSL High Water trails it. Thesis re-evaluation every scan. If thesis breaks (4h trend flips, SM flips, funding extreme, volume dies, BTC diverges) -> thesis exit and reset to MODE 1. If DSL closes the position -> switch to MODE 3.
+Active position. Plugin DSL trails it. Thesis re-evaluation every scan. If thesis breaks (4h trend flips, SM flips, funding extreme, volume dies, BTC diverges) -> thesis exit and reset to MODE 1. If plugin DSL closes the position -> switch to MODE 3.
 
 ### MODE 3 — STALKING
 
@@ -56,14 +81,6 @@ If ALL pass -> RELOAD. Re-enter same direction, same leverage. Switch to MODE 2.
 - Funding spiked above 100% annualized
 
 **maxPositions: 1.** POLAR holds one ETH position at a time.
-
-## MANDATORY: DSL High Water Mode
-
-**POLAR MUST use DSL High Water Mode. This is not optional.**
-
-Spec: https://github.com/Senpi-ai/senpi-skills/blob/main/dsl-dynamic-stop-loss/dsl-high-water-spec%201.0.md
-
-DSL tiers in `polar-config.json`. Arm DSL immediately after every entry fill. Zero naked positions.
 
 ## Why ETH-Only at 10-15x Leverage
 
@@ -111,6 +128,44 @@ Maximum score: ~18. Minimum to enter: 10.
 | 12-13 | 31% |
 | 14+ | 37% |
 
+---
+
+## Exit Management
+
+DSL exit is handled by the plugin runtime via `runtime.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `runtime.yaml` for configuration details.
+
+**Monitor positions:**
+- `openclaw senpi dsl positions` — list all DSL-tracked positions
+- `openclaw senpi dsl inspect <ASSET>` — full position details
+
+---
+
+## Runtime Setup
+
+**Step 1:** Set your strategy wallet address in runtime.yaml:
+```bash
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/polar-strategy/runtime.yaml
+```
+Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
+
+**Step 2:** Set telegram chat ID for notifications:
+```bash
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/polar-strategy/runtime.yaml
+```
+Replace `<CHAT_ID>` with the actual Telegram chat ID.
+
+**Step 3:** Install the runtime:
+```bash
+openclaw senpi runtime create --path /data/workspace/skills/polar-strategy/runtime.yaml
+```
+
+**Step 4:** Verify:
+```bash
+openclaw senpi runtime list
+```
+
+---
+
 ## Risk Management
 
 | Rule | Value |
@@ -120,29 +175,33 @@ Maximum score: ~18. Minimum to enter: 10.
 | Drawdown halt | 25% from peak |
 | Daily loss limit | 10% |
 | Cooldown | 120 min after 3 consecutive losses |
-| Stagnation TP | 12% ROE stale 90 min |
 
-## Cron Architecture
-
-| Cron | Interval | Session | Purpose |
-|---|---|---|---|
-| Scanner | 3 min | isolated | Thesis builder + re-evaluator + stalk/reload |
-| DSL v5 | 3 min | isolated | High Water Mode trailing stops |
-
-Both MUST be isolated sessions with `agentTurn`. Use `NO_REPLY` for idle cycles.
+---
 
 ## Notification Policy
 
 **ONLY alert:** Position OPENED (direction, leverage, score, reasons), position CLOSED (DSL or thesis exit), risk guardian triggered, critical error.
-**NEVER alert:** Scanner found no thesis, thesis re-eval passed, DSL routine, any reasoning.
+**NEVER alert:** Scanner found no thesis, thesis re-eval passed, any reasoning.
+
+---
 
 ## Bootstrap Gate
 
-On EVERY session, check `config/bootstrap-complete.json`. If missing:
-1. Verify Senpi MCP
-2. Create scanner cron (3 min, isolated) and DSL cron (3 min, isolated)
-3. Write `config/bootstrap-complete.json`
-4. Send: "🐻‍❄️ POLAR is online. Watching ETH. DSL High Water Mode active. Silence = no conviction."
+On EVERY session start, check `config/bootstrap-complete.json`. If missing:
+1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for runtime management and DSL position inspection.
+2. Verify Senpi MCP
+3. Set wallet in runtime.yaml: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/polar-strategy/runtime.yaml`
+4. Set Telegram in runtime.yaml: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/polar-strategy/runtime.yaml`
+5. Install runtime: `openclaw senpi runtime create --path /data/workspace/skills/polar-strategy/runtime.yaml`
+6. Verify runtime installed: `openclaw senpi runtime list`
+7. Remove old DSL cron (if upgrading): run `openclaw crons list`, delete any cron containing `dsl-v5.py` via `openclaw crons delete <id>`
+8. Create scanner cron (3 min, isolated)
+9. Write `config/bootstrap-complete.json`
+10. Send: "POLAR is online. Watching ETH. Plugin DSL active. Silence = no conviction."
+
+If bootstrap exists, still verify runtime and scanner cron on every session start.
+
+---
 
 ## Expected Behavior
 
@@ -154,13 +213,18 @@ On EVERY session, check `config/bootstrap-complete.json`. If missing:
 | Avg winner | 25-60%+ ROE |
 | Avg loser | -25 to -45% ROE |
 
+---
+
 ## Files
 
 | File | Purpose |
 |---|---|
 | `scripts/polar-scanner.py` | ETH thesis builder + re-evaluator + stalk/reload |
 | `scripts/polar_config.py` | Shared config, MCP helpers, state I/O |
-| `config/polar-config.json` | All configurable variables with DSL High Water tiers |
+| `config/polar-config.json` | All configurable variables |
+| `runtime.yaml` | Runtime config for plugin (DSL exit + position tracker) |
+
+---
 
 ## License
 

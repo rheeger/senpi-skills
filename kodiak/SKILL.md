@@ -2,10 +2,10 @@
 name: kodiak-strategy
 description: >-
   KODIAK v2.0 — SOL alpha hunter with position lifecycle. Thesis exit removed.
-  DSL manages all exits. DSL state includes wallet + strategyWalletAddress +
-  strategyId + size. Leverage capped at 7x. Retrace widened to 0.08.
+  DSL manages all exits. Leverage capped at 7x. Retrace widened to 0.08.
   v1.1.1's SOL SHORT ran 13 hours unprotected due to missing wallet fields —
   v2.0 prevents this.
+  DSL exit managed by plugin runtime via runtime.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
@@ -13,6 +13,8 @@ metadata:
   platform: senpi
   exchange: hyperliquid
   base_skill: grizzly-v2.0
+  requires:
+    - senpi-trading-runtime
 ---
 
 # 🐻 KODIAK v2.0 — SOL Alpha Hunter
@@ -35,18 +37,13 @@ DSL could trail them. v2.0 removes it entirely.
 
 ### RULE 4: Scanner output is AUTHORITATIVE
 
-### RULE 5: Write dslState directly — MUST update 'size' from clearinghouse
+### RULE 5: Verify runtime is installed on every session start
 
-The scanner provides a `dslState` block with `wallet`, `strategyWalletAddress`,
-`strategyId`, and `size: null`. After entry fills, read clearinghouse to get
-actual size (`abs(szi)`) and update the state file. **This was the exact bug
-that left a +$134 winner unprotected for 13 hours in v1.1.1.**
+Run `openclaw senpi runtime list`. Runtime must be listed. The position tracker and DSL exit are handled by the plugin runtime.
 
-### RULE 6: Verify BOTH crons on every session start
+### RULE 6: Never modify parameters. Never increase leverage above 7x.
 
-### RULE 7: Never modify parameters. Never increase leverage above 7x.
-
-### RULE 8: 120-minute cooldown after consecutive losses
+### RULE 7: 120-minute cooldown after consecutive losses
 
 ---
 
@@ -83,9 +80,9 @@ funding, OI, volume). Score 10+ to enter. When a position opens, switch to MODE 
 
 ### MODE 2 — RIDING
 
-Active position. **DSL manages the exit. Scanner outputs NO_REPLY.**
+Active position. **DSL manages the exit via the plugin runtime. Scanner outputs NO_REPLY.**
 The scanner does NOT re-evaluate the thesis. It does NOT close positions.
-DSL High Water trails the position through Phase 1 protection and Phase 2
+The plugin DSL trails the position through Phase 1 protection and Phase 2
 trailing tiers. When DSL closes the position → switch to MODE 3.
 
 ### MODE 3 — STALKING
@@ -106,22 +103,54 @@ Scanner (3 min, main):
 python3 /data/workspace/skills/kodiak-strategy/scripts/kodiak-scanner.py
 ```
 
-DSL (3 min, isolated):
-```
-python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-dir /data/workspace/skills/kodiak-strategy/state
-```
-
 ---
 
-## DSL Configuration (Conviction-Tiered)
+## How KODIAK Trades
 
-| Score | Floor | Timeout | Weak Peak | Dead Weight |
-|---|---|---|---|---|
-| 8-9 | -25% ROE | 45 min | 20 min | 15 min |
-| 10-11 | -30% ROE | 60 min | 30 min | 20 min |
-| 12+ | -35% ROE | 90 min | 45 min | 30 min |
+### Entry (score >= 10 required)
 
-Phase 1 retrace: 0.08 (8% ROE). Trailing tiers: 7%/40%, 12%/55%, 15%/75%, 20%/85%.
+Every 3 minutes, the scanner evaluates SOL across all signal sources:
+
+| Signal | Points | Required? |
+|---|---|---|
+| 4h trend structure (higher lows / lower highs) | 3 | **Yes** |
+| 1h trend agrees with 4h | 2 | **Yes** |
+| 15m momentum confirms direction | 0-1 | **Yes** |
+| 5m alignment (all 4 timeframes agree) | 1 | No |
+| SM aligned with direction | 2-3 | **Hard block if opposing** |
+| Funding pays to hold the direction | 2 | No |
+| Volume above average | 1-2 | No |
+| OI growing | 1 | No |
+| BTC confirms move | 1 | No |
+| RSI has room | 1 | No (blocks overbought/oversold) |
+| 4h momentum strength | 1 | No |
+
+Maximum score: ~18. Minimum to enter: 10.
+
+### Conviction-Scaled Leverage
+
+| Score | Leverage |
+|---|---|
+| 10-11 | 7x |
+| 12+ | 7x |
+
+### Conviction-Scaled Margin
+
+| Score | Margin |
+|---|---|
+| 10-11 | 20% of account |
+| 12-13 | 25% |
+| 14+ | 30% |
+
+## Exit Management
+
+DSL exit is handled by the plugin runtime via `runtime.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `runtime.yaml` for configuration details.
+
+**Monitor positions:**
+- `openclaw senpi dsl positions` — list all DSL-tracked positions
+- `openclaw senpi dsl inspect <ASSET>` — full position details
+
+## Why SOL-Only at 7x Leverage
 
 ---
 
@@ -134,7 +163,69 @@ Phase 1 retrace: 0.08 (8% ROE). Trailing tiers: 7%/40%, 12%/55%, 15%/75%, 20%/85
 | Phase 1 retrace | 0.08 |
 | Daily loss limit | 10% |
 | Cooldown | 120 min after 3 consecutive losses |
-| Stagnation TP | 10% ROE stale 45 min |
+
+---
+
+## Runtime Setup
+
+**Step 1:** Set your strategy wallet address in runtime.yaml:
+```bash
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/kodiak-strategy/runtime.yaml
+```
+Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
+
+**Step 2:** Set telegram chat ID for notifications:
+```bash
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/kodiak-strategy/runtime.yaml
+```
+Replace `<CHAT_ID>` with the actual Telegram chat ID.
+
+**Step 3:** Install the runtime:
+```bash
+openclaw senpi runtime create --path /data/workspace/skills/kodiak-strategy/runtime.yaml
+```
+
+**Step 4:** Verify:
+```bash
+openclaw senpi runtime list
+```
+
+---
+
+## Bootstrap Gate
+
+On EVERY session start, check `config/bootstrap-complete.json`. If missing:
+1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for runtime management and DSL position inspection.
+2. Verify Senpi MCP
+3. Set wallet in runtime.yaml: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/kodiak-strategy/runtime.yaml`
+4. Set Telegram in runtime.yaml: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/kodiak-strategy/runtime.yaml`
+5. Install runtime: `openclaw senpi runtime create --path /data/workspace/skills/kodiak-strategy/runtime.yaml`
+6. Verify runtime installed: `openclaw senpi runtime list`
+7. Remove old DSL cron (if upgrading): run `openclaw crons list`, delete any cron containing `dsl-v5.py` via `openclaw crons delete <id>`
+8. Create scanner cron (3 min, isolated)
+9. Write `config/bootstrap-complete.json`
+10. Send: "KODIAK is online. Watching SOL. DSL managed by plugin runtime. Silence = no conviction."
+
+If bootstrap exists, still verify runtime and scanner cron on every session start.
+
+---
+
+## Notification Policy
+
+**ONLY alert:** Position OPENED (direction, leverage, score, reasons), position CLOSED (DSL exit with P&L), risk guardian triggered, critical error.
+**NEVER alert:** Scanner found no thesis, thesis re-eval passed, any reasoning.
+
+---
+
+## Expected Behavior
+
+| Metric | Expected |
+|---|---|
+| Trades/day | 1-3 |
+| Avg hold time | 1-12 hours |
+| Win rate | ~45-55% |
+| Avg winner | 20-50%+ ROE |
+| Avg loser | -20 to -40% ROE |
 
 ---
 
@@ -142,9 +233,10 @@ Phase 1 retrace: 0.08 (8% ROE). Trailing tiers: 7%/40%, 12%/55%, 15%/75%, 20%/85
 
 | File | Purpose |
 |---|---|
-| `scripts/kodiak-scanner.py` | SOL thesis builder + stalk/reload + DSL state generation |
+| `scripts/kodiak-scanner.py` | SOL thesis builder + stalk/reload |
 | `scripts/kodiak_config.py` | Config helper (MCP, state, cooldowns) |
 | `config/kodiak-config.json` | Wallet, strategy ID, configurable variables |
+| `runtime.yaml` | Runtime config for plugin (DSL exit + position tracker) |
 
 ---
 
