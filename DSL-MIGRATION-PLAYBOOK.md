@@ -14,14 +14,13 @@ Create `{skill}/runtime.yaml` with the runtime config:
 
 ```yaml
 name: {skill}-tracker
-version: {version}
+version: 1.0.0
 description: >
   {SKILL} position tracker with DSL trailing stop-loss.
 
-strategies:
-  main:
-    wallet: "${WALLET_ADDRESS}"
-    enabled: true
+strategy:
+  wallet: "${WALLET_ADDRESS}"
+  enabled: true
 
 scanners:
   - name: position_tracker

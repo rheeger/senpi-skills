@@ -45,12 +45,14 @@ Hard rules:
 - Never use embedded wallet/injected wallet for runtime linking.
 - Never treat a wallet as a strategy wallet unless it exists in `strategy_list`.
 - Runtime install is blocked until strategy wallet validation passes.
+- Always confirm with the user before creating a new strategy wallet address, and explicitly confirm the budget (`initialBudget`) that will be used.
 
 Example MCP flow (tool names from Senpi MCP):
 
 ```text
 strategy_list({})
 if provided_wallet not in strategies[].strategyWalletAddress:
+  # confirm with user first: create new strategy wallet + initialBudget
   strategy_create_custom_strategy({
     initialBudget: <budget_usdc>,
     positions: [],
