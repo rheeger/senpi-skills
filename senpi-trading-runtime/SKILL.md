@@ -32,6 +32,37 @@ On-chain position tracker with automated DSL (Dynamic Stop-Loss) exit engine. Mo
 
 Never treat `openclaw senpi runtime create` as wallet creation.
 
+### Strategy wallet validation (mandatory before runtime create/install)
+
+Use this exact MCP-first guardrail to avoid using embedded wallets by mistake:
+
+1. Call `strategy_list` and collect `strategies[].strategyWalletAddress`.
+2. A runtime wallet is valid only if it appears in that list (case-insensitive match).
+3. If list is empty OR provided wallet is not in list: call `strategy_create_custom_strategy` to create a strategy wallet first.
+4. Use the newly created strategy wallet address directly as `WALLET_ADDRESS` in runtime YAML, then install runtime.
+
+Hard rules:
+- Never use embedded wallet/injected wallet for runtime linking.
+- Never treat a wallet as a strategy wallet unless it exists in `strategy_list`.
+- Runtime install is blocked until strategy wallet validation passes.
+
+Example MCP flow (tool names from Senpi MCP):
+
+```text
+strategy_list({})
+if provided_wallet not in strategies[].strategyWalletAddress:
+  strategy_create_custom_strategy({
+    initialBudget: <budget_usdc>,
+    positions: [],
+    skillName: <strategy_or_runtime_name>,
+    skillVersion: "1.0.0"
+  })
+```
+
+Notes:
+- `initialBudget` is required when creating the strategy wallet.
+- Use `positions: []` when you only need the strategy wallet created now and will trade later.
+
 ## CLI Commands
 
 All commands require the OpenClaw gateway running (`openclaw gateway run`).
