@@ -1,108 +1,128 @@
 ---
 name: phoenix-strategy
 description: >-
-  PHOENIX v1.0 — Contribution Velocity Scanner. Uses the contribution_pct_change_4h
-  field from leaderboard_get_markets — a pre-computed measure of how fast an asset's
-  share of top trader profits is growing. Single API call, no local state, no scan
-  history. Enters when SM profit share is accelerating AND price hasn't caught up yet.
-  The simplest scanner in the zoo with the strongest unused signal.
+  PHOENIX v1.0.1 — Contribution velocity scanner. Finds assets where SM profit
+  contribution is accelerating but price hasn't moved yet. This divergence is
+  the pre-move signal. One API call, zero state files, minimal complexity.
+  DSL exit managed by plugin runtime via recipe.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
   version: "1.0.1"
   platform: senpi
   exchange: hyperliquid
+  requires:
+    - senpi-trading-runtime
 ---
 
-# 🔥 PHOENIX v1.0 — Contribution Velocity Scanner
+# 🔥 PHOENIX v1.0.1 — Contribution Velocity Scanner
 
-The simplest scanner. The strongest unused signal.
+SM knows something the market doesn't. Find the divergence. Enter before the move.
 
-## Why PHOENIX Exists
+---
 
-Every scanner in the zoo reads rank, direction, trader count from `leaderboard_get_markets`. None read `contribution_pct_change_4h` — Senpi's server-side calculation of how fast an asset's share of top trader profits is changing over 4 hours.
+## ⛔ CRITICAL AGENT RULES — READ BEFORE ANYTHING ELSE
 
-This field is a leading indicator. When SM profit concentration in an asset is accelerating, it means traders are actively making money on it RIGHT NOW and the rate is increasing. Price moves follow. Rank changes follow. But the contribution velocity comes first.
+### RULE 1: Install path is `/data/workspace/skills/phoenix-strategy/`
 
-Look at the raw data from the March 17 snapshot:
-- BTC: contribution 29.55%, change_4h +32.19% — SM is flooding into BTC profits
-- HYPE: contribution 15.86%, change_4h +19.12% — significant acceleration
-- LIT: contribution 10.73%, change_4h +10.68% — building fast
-- ETH: contribution 11.49%, change_4h +11.98% — steady acceleration
-- SOL: contribution 4.50%, change_4h +5.27% — moderate
+The skill MUST be installed to exactly this path.
 
-The `contribution_pct_change_4h` tells you WHERE SM money is accelerating before rank climbing is visible. It's the signal our scanners have been leaving on the table.
+### RULE 2: MAX 3 POSITIONS — check before EVERY entry
 
-## How It Works
+Before opening ANY position, call `strategy_get_clearinghouse_state` and count open positions. If positions >= 3, SKIP.
 
+### RULE 3: THE SCANNER DOES NOT EXIT POSITIONS
+
+When the scanner sees active positions, it outputs NO_REPLY. DSL is the ONLY exit mechanism, managed by the plugin runtime. The scanner does NOT re-evaluate thesis.
+
+### RULE 4: Verify recipe is installed on every session start
+
+Run `openclaw senpi trading-recipe list`. Recipe must be listed. The position tracker and DSL exit are handled by the plugin runtime.
+
+### RULE 5: Never retry timed-out position creation
+
+If `create_position` times out, check clearinghouse state first.
+
+### RULE 6: Never modify your own configuration
+
+No adjustments to leverage, margin, scoring, or any parameter.
+
+### RULE 7: MAX 6 ENTRIES PER DAY — non-negotiable
+
+---
+
+## The Phoenix Signal
+
+Phoenix finds one specific pattern: **contribution velocity divergence**.
+
+When SM is rapidly accumulating in a direction (measured by `contribution_pct_change_4h`) but the price hasn't moved yet, smart money knows something the market doesn't. Phoenix enters before the crowd catches on.
+
+**Best trade:** HYPE SHORT — 54x divergence ratio, score 9. SM flooded into shorts while price was flat. Position held 2.6 days, peaked at +50.8% ROE, realized +$101.
+
+**One API call.** `leaderboard_get_markets` provides contribution change, price change, SM concentration, and trader count. No scan history needed. No state files. The divergence is computed fresh every scan.
+
+---
+
+## Exit Management
+
+DSL exit is handled by the plugin runtime via `recipe.yaml`. The `position_tracker` scanner auto-detects position opens/closes onchain. See `recipe.yaml` for configuration details.
+
+**Entry flow:**
+1. Scanner outputs signal
+2. Verify positions < 2
+3. Call `create_position`
+4. Send ONE notification: position opened
+5. `position_tracker` detects the new position automatically
+6. Plugin DSL monitor applies trailing stop-loss protection
+
+**Monitor positions:**
+- `openclaw senpi dsl positions` — list all DSL-tracked positions
+- `openclaw senpi dsl inspect <ASSET>` — full position details
+
+---
+
+## Recipe Setup
+
+**Step 1:** Set your strategy wallet address in the recipe:
+```bash
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/phoenix-strategy/recipe.yaml
 ```
-Every 90 seconds: ONE API call → leaderboard_get_markets
+Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
 
-For each asset:
-  ├─ contribution_pct_change_4h >= 5%?  (SM accelerating)
-  ├─ Rank 6-40?                          (not peaked, not invisible)
-  ├─ Contribution >= 1%?                 (meaningful SM share)
-  ├─ 30+ traders?                        (broad base, not one whale)
-  ├─ 4H price aligned with direction?    (trend confirmation)
-  ├─ Leverage >= 5x?                     (tradeable)
-  └─ XYZ banned?                         (no equities)
-      │
-      └─ SCORE by velocity, divergence, rank, depth
-          └─ Score >= 7 → ENTER best signal
+**Step 2:** Set telegram chat ID for notifications:
+```bash
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/phoenix-strategy/recipe.yaml
+```
+Replace `<CHAT_ID>` with the actual Telegram chat ID.
+
+**Step 3:** Install the trading recipe:
+```bash
+openclaw senpi trading-recipe create --path /data/workspace/skills/phoenix-strategy/recipe.yaml
 ```
 
-No scan history. No multi-scan climbing. No momentum events. Just: "where is SM profit share growing fastest?"
+**Step 4:** Verify:
+```bash
+openclaw senpi trading-recipe list
+```
 
-## The Divergence Signal
+---
 
-The most valuable sub-signal is **velocity vs price divergence**:
+## Bootstrap Gate
 
-- BTC contribution growing at +32% over 4h, but price only moved +0.7%
-- That's a 46x ratio — SM is making huge money on a tiny price move
-- This means SM entered BEFORE the price move and is sitting on leveraged gains
-- More SM enters → more buying pressure → price catches up
+On EVERY session start, check `config/bootstrap-complete.json`. If missing:
+1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md`
+2. Verify Senpi MCP
+3. Set wallet in recipe: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/phoenix-strategy/recipe.yaml`
+4. Set telegram in recipe: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/phoenix-strategy/recipe.yaml`
+5. Install recipe: `openclaw senpi trading-recipe create --path /data/workspace/skills/phoenix-strategy/recipe.yaml`
+6. Verify recipe installed: `openclaw senpi trading-recipe list`
+7. Create scanner cron (2 min, main)
+8. Write `config/bootstrap-complete.json`
+9. Send: "🔥 PHOENIX v1.0.1 online. Hunting divergences. Silence = no signal."
 
-PHOENIX scores this divergence directly. A 10x+ contrib/price ratio gets +2 points. A 5x+ ratio gets +1 point. This is the alpha window — the gap between SM profiting and price reflecting it.
+If bootstrap exists, still verify recipe and scanner cron on every session start.
 
-## Scoring (0-15 range)
-
-| Signal | Points |
-|---|---|
-| Extreme velocity (>30% 4h change) | 5 |
-| High velocity (>15% 4h change) | 3 |
-| Base velocity (>5% 4h change) | 2 |
-| Dominant SM (>10% of gains) | 2 |
-| Strong SM (>5% of gains) | 1 |
-| Sweet spot rank (10-20) | 2 |
-| Approaching top (6-10) or deep riser (20-30) | 1 |
-| Massive SM (150+ traders) | 2 |
-| Deep SM (80+ traders) | 1 |
-| Price lag (<1.5% move vs strong contrib) | 2 |
-| Early move (<3% price) | 1 |
-| Extreme divergence (10x+ contrib/price) | 2 |
-| Divergence (5x+ contrib/price) | 1 |
-
-Minimum score: 7.
-
-## Comparison
-
-| | Orca | RAPTOR | PHOENIX |
-|---|---|---|---|
-| Signal source | Leaderboard rank climbing | Tier 2 events + leaderboard | Contribution velocity |
-| API calls/scan | 1 | 2 | 1 |
-| Local state needed | Scan history (60 snapshots) | None | None |
-| Key field | rank change over scans | delta_pnl + TCS/TRP | contribution_pct_change_4h |
-| Expected trades/day | 134 signals, 6-10 entries | 3-5 | 5-10 |
-| Time to signal | 4.5 min (3 scans) | 90 sec | 90 sec (single scan) |
-| Warmup period | 3 scans minimum | None | None |
-
-## DSL Configuration
-
-- Phase 2 trigger at 5% ROE (lower than RAPTOR's 7% — capture gains earlier)
-- Extra tier at 30% ROE with 85% lock (for runners)
-- Stagnation TP at 8% ROE stale for 40 min
-- Conviction-scaled Phase 1 timing by score
-- All v1.1.1 fixes: `highWaterPrice: null`, correct field names, dynamic `absoluteFloorRoe`
+---
 
 ## Risk Management
 
@@ -110,69 +130,36 @@ Minimum score: 7.
 |---|---|
 | Max positions | 3 |
 | Max entries/day | 6 |
-| Margin | 20% base, 25% at score 9+, 30% at score 12+ |
-| Per-asset cooldown | 90 min (shorter than RAPTOR — velocity signals are faster) |
-| Leverage | 5-10x |
+| Leverage | 10x |
+| Daily loss limit | 10% |
+| Per-asset cooldown | 2 hours |
+| XYZ equities | Banned |
+| Min divergence ratio | 5x |
+| Min SM traders | 10 |
+| Min score | 7 |
 
-## Notification Policy (STRICT)
+---
 
-**ONLY alert:** Position OPENED (asset, direction, score, velocity, divergence ratio), position CLOSED.
+## Notification Policy
 
-**NEVER alert:** Scan with no velocity signals, any reasoning.
+**ONLY alert:** Position OPENED, position CLOSED (P&L + reason), critical error.
 
-## Cron Architecture
+**NEVER alert:** Scanner found nothing, any reasoning.
 
-| Cron | Interval | Session |
-|---|---|---|
-| Scanner | 90s | main |
-| DSL | 3 min | isolated |
-
-## Cron Setup (CRITICAL — Read This)
-
-The previous Phoenix deployment failed because the DSL cron was configured with a wrong command (`npx skills exec` instead of the Python script). Positions sat unmanaged for 10 hours. BTC lost -$76 and ETH lost -$73 that should have been cut within 30-45 minutes.
-
-**The exact cron commands:**
-
-Scanner cron (every 90 seconds, main session, systemEvent):
-```
-python3 /data/workspace/skills/phoenix-strategy/scripts/phoenix-scanner.py
-```
-
-DSL cron (every 3 minutes, isolated session, agentTurn):
-```
-python3 /data/workspace/skills/dsl-dynamic-stop-loss/scripts/dsl-v5.py --state-dir /data/workspace/skills/phoenix-strategy/state
-```
-
-**DO NOT use `npx skills exec` or any other wrapper.** Run the Python scripts directly. Verify both crons are `status: ok` after creation.
-
-## Bootstrap Gate
-
-On EVERY session, check `config/bootstrap-complete.json`. If missing:
-1. Verify Senpi MCP connected
-2. Create scanner cron (90s, main) with the EXACT command above
-3. Create DSL cron (3 min, isolated) with the EXACT command above
-4. Verify both crons show `status: ok` via `openclaw crons list`
-5. Write `config/bootstrap-complete.json`
-6. Send: "🔥 PHOENIX v1.0.1 online. Contribution velocity scanner active. Silence = no conviction."
+---
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `scripts/phoenix-scanner.py` | Contribution velocity scanner |
-| `scripts/phoenix_config.py` | Standalone config helper |
-| `config/phoenix-config.json` | Parameters |
+| `scripts/phoenix-scanner.py` | Contribution velocity divergence scanner |
+| `scripts/phoenix_config.py` | Config helper with MCP, state I/O |
+| `config/phoenix-config.json` | Config with wallet, strategy ID |
+| `recipe.yaml` | Trading recipe for plugin runtime (DSL exit + position tracker) |
+
+---
 
 ## License
 
 MIT — Built by Senpi (https://senpi.ai).
-
-## Changelog
-
-### v1.0.1
-- Added explicit cron commands to SKILL.md to prevent DSL cron misconfiguration
-- Added bootstrap gate with cron verification step
-- No scanner logic changes — v1.0 code was correct, the bug was agent-side cron setup
-
-### v1.0
-- Initial release — contribution velocity scanner using `contribution_pct_change_4h`
+Source: https://github.com/Senpi-ai/senpi-skills
