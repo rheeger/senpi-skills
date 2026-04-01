@@ -4,7 +4,7 @@ description: >-
   PHOENIX v1.0.1 — Contribution velocity scanner. Finds assets where SM profit
   contribution is accelerating but price hasn't moved yet. This divergence is
   the pre-move signal. One API call, zero state files, minimal complexity.
-  DSL exit managed by plugin runtime via recipe.yaml.
+  DSL exit managed by plugin runtime via runtime.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
@@ -35,9 +35,9 @@ Before opening ANY position, call `strategy_get_clearinghouse_state` and count o
 
 When the scanner sees active positions, it outputs NO_REPLY. DSL is the ONLY exit mechanism, managed by the plugin runtime. The scanner does NOT re-evaluate thesis.
 
-### RULE 4: Verify recipe is installed on every session start
+### RULE 4: Verify runtime is installed on every session start
 
-Run `openclaw senpi trading-recipe list`. Recipe must be listed. The position tracker and DSL exit are handled by the plugin runtime.
+Run `openclaw senpi runtime list`. Runtime must be listed. The position tracker and DSL exit are handled by the plugin runtime.
 
 ### RULE 5: Never retry timed-out position creation
 
@@ -65,7 +65,7 @@ When SM is rapidly accumulating in a direction (measured by `contribution_pct_ch
 
 ## Exit Management
 
-DSL exit is handled by the plugin runtime via `recipe.yaml`. The `position_tracker` scanner auto-detects position opens/closes onchain. See `recipe.yaml` for configuration details.
+DSL exit is handled by the plugin runtime via `runtime.yaml`. The `position_tracker` scanner auto-detects position opens/closes onchain. See `runtime.yaml` for configuration details.
 
 **Entry flow:**
 1. Scanner outputs signal
@@ -81,28 +81,28 @@ DSL exit is handled by the plugin runtime via `recipe.yaml`. The `position_track
 
 ---
 
-## Recipe Setup
+## Runtime Setup
 
 **Step 1:** Set your strategy wallet address in the recipe:
 ```bash
-sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/phoenix-strategy/recipe.yaml
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/phoenix-strategy/runtime.yaml
 ```
 Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
 
 **Step 2:** Set telegram chat ID for notifications:
 ```bash
-sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/phoenix-strategy/recipe.yaml
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/phoenix-strategy/runtime.yaml
 ```
 Replace `<CHAT_ID>` with the actual Telegram chat ID.
 
-**Step 3:** Install the trading recipe:
+**Step 3:** Install the runtime:
 ```bash
-openclaw senpi trading-recipe create --path /data/workspace/skills/phoenix-strategy/recipe.yaml
+openclaw senpi runtime create --path /data/workspace/skills/phoenix-strategy/runtime.yaml
 ```
 
 **Step 4:** Verify:
 ```bash
-openclaw senpi trading-recipe list
+openclaw senpi runtime list
 ```
 
 ---
@@ -112,15 +112,19 @@ openclaw senpi trading-recipe list
 On EVERY session start, check `config/bootstrap-complete.json`. If missing:
 1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md`
 2. Verify Senpi MCP
-3. Set wallet in recipe: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/phoenix-strategy/recipe.yaml`
-4. Set telegram in recipe: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/phoenix-strategy/recipe.yaml`
-5. Install recipe: `openclaw senpi trading-recipe create --path /data/workspace/skills/phoenix-strategy/recipe.yaml`
-6. Verify recipe installed: `openclaw senpi trading-recipe list`
-7. Create scanner cron (2 min, main)
-8. Write `config/bootstrap-complete.json`
-9. Send: "🔥 PHOENIX v1.0.1 online. Hunting divergences. Silence = no signal."
+3. Set wallet in runtime: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/phoenix-strategy/runtime.yaml`
+4. Set telegram in runtime: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/phoenix-strategy/runtime.yaml`
+5. Install runtime: `openclaw senpi runtime create --path /data/workspace/skills/phoenix-strategy/runtime.yaml`
+6. Verify runtime installed: `openclaw senpi runtime list`
+7. Check runtime health: `openclaw senpi status` — must show healthy
+8. Create scanner cron (2 min, main)
+9. Write `config/bootstrap-complete.json`
+10. Send: "🔥 PHOENIX v1.0.1 online. Hunting divergences. Silence = no signal."
 
-If bootstrap exists, still verify recipe and scanner cron on every session start.
+If bootstrap exists, still verify runtime, scanner cron, and health on every session start:
+- `openclaw senpi runtime list` — runtime running
+- `openclaw senpi status` — healthy
+- `openclaw crons list` — scanner cron present, no DSL cron
 
 ---
 
@@ -155,7 +159,7 @@ If bootstrap exists, still verify recipe and scanner cron on every session start
 | `scripts/phoenix-scanner.py` | Contribution velocity divergence scanner |
 | `scripts/phoenix_config.py` | Config helper with MCP, state I/O |
 | `config/phoenix-config.json` | Config with wallet, strategy ID |
-| `recipe.yaml` | Trading recipe for plugin runtime (DSL exit + position tracker) |
+| `runtime.yaml` | Runtime YAML for DSL plugin (position tracker + exit engine) |
 
 ---
 

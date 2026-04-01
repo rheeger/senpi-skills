@@ -9,6 +9,9 @@ description: >
 # ── STRATEGY ──
 strategy:
   wallet: "${WALLET_ADDRESS}"
+  budget: 1000
+  slots: 3
+  margin_per_slot: 200
   enabled: true
 
 # ── SCANNERS ──
