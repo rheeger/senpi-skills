@@ -1,62 +1,42 @@
+"""MANTIS Strategy — Shared config, MCP helpers, state I/O.
+Self-contained — does not depend on wolf_config."""
 # Copyright 2026 Senpi (https://senpi.ai)
 # Licensed under MIT
 # Source: https://github.com/Senpi-ai/senpi-skills
-
-"""
-HYDRA v1.0 — Standalone Config Helper
-======================================
-Self-contained utility module. No wolf_config dependency.
-
-v1.0.1 fixes:
-- mcporter_call uses subprocess CLI (matches all other skills)
-- get_positions unwraps main/xyz nesting correctly
-- get_wallet_balance unwraps marginSummary correctly
-"""
 
 import json
 import os
 import subprocess
 import sys
-import time
 import tempfile
+import time
+import glob
 from datetime import datetime, timezone
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
+WORKSPACE = os.environ.get("OPENCLAW_WORKSPACE", "/data/workspace")
+SKILL_DIR = Path(WORKSPACE) / "skills" / "mantis-strategy"
+CONFIG_PATH = SKILL_DIR / "config" / "mantis-config.json"
+STATE_DIR = SKILL_DIR / "state"
+HISTORY_FILE = os.path.join(WORKSPACE, "mantis-emerging-history.json")
+COOLDOWN_FILE = STATE_DIR / "asset-cooldowns.json"
 
-WORKSPACE = os.environ.get("OPENCLAW_WORKSPACE", os.environ.get("WORKSPACE", "/data/workspace"))
-SKILL_NAME = "hydra"
-SKILL_DIR = os.path.join(WORKSPACE, "skills", SKILL_NAME)
-STATE_DIR = os.path.join(SKILL_DIR, "state")
-OI_HISTORY_DIR = os.path.join(STATE_DIR, "oi-history")
-CONFIG_PATH = os.path.join(SKILL_DIR, "config", "hydra-config.json")
+STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def ensure_dirs():
-    """Create state and OI history directories if they don't exist."""
-    os.makedirs(STATE_DIR, exist_ok=True)
-    os.makedirs(OI_HISTORY_DIR, exist_ok=True)
+# ─── Atomic Write ────────────────────────────────────────────
 
-
-ensure_dirs()
-
-
-# ---------------------------------------------------------------------------
-# Atomic Write
-# ---------------------------------------------------------------------------
-
-def atomic_write(path: str, data) -> None:
-    """Write JSON via tmp file + atomic replace."""
-    dir_name = os.path.dirname(path)
+def atomic_write(path, data):
+    """Write JSON atomically via tmp file + os.replace."""
+    path = str(path)
+    dir_name = os.path.dirname(path) or "."
     os.makedirs(dir_name, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2, default=str)
+            json.dump(data, f, indent=2)
         os.replace(tmp_path, path)
-    except Exception:
+    except BaseException:
         try:
             os.unlink(tmp_path)
         except OSError:
@@ -64,262 +44,153 @@ def atomic_write(path: str, data) -> None:
         raise
 
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
+# ─── Config ──────────────────────────────────────────────────
 
-def load_config() -> dict:
-    try:
-        with open(CONFIG_PATH, "r") as f:
+def load_config():
+    if CONFIG_PATH.exists():
+        with open(CONFIG_PATH) as f:
             return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        log(f"Config load error: {e}")
-        return {}
+    return {}
 
 
-# ---------------------------------------------------------------------------
-# Wallet / Strategy
-# ---------------------------------------------------------------------------
-
-def get_wallet_and_strategy() -> tuple:
-    wallet = os.environ.get("HYDRA_WALLET", os.environ.get("WALLET_ADDRESS", ""))
-    strategy = os.environ.get("HYDRA_STRATEGY_ID", os.environ.get("STRATEGY_ID", ""))
-    if not wallet or not strategy:
-        cfg = load_config()
-        wallet = wallet or cfg.get("wallet", {}).get("address", cfg.get("wallet", ""))
-        strategy = strategy or cfg.get("wallet", {}).get("strategyId", cfg.get("strategyId", ""))
-    return wallet, strategy
+def get_wallet_and_strategy():
+    wallet = os.environ.get("MANTIS_WALLET", "")
+    strategy_id = os.environ.get("MANTIS_STRATEGY_ID", "")
+    if not wallet or not strategy_id:
+        config = load_config()
+        wallet = wallet or config.get("wallet", "")
+        strategy_id = strategy_id or config.get("strategyId", "")
+    return wallet, strategy_id
 
 
-# ---------------------------------------------------------------------------
-# DSL State I/O
-# ---------------------------------------------------------------------------
+# ─── State I/O ───────────────────────────────────────────────
 
-def load_state(coin: str) -> dict | None:
-    path = os.path.join(STATE_DIR, f"dsl-{coin}.json")
-    try:
-        with open(path, "r") as f:
+def load_state(filename="state.json"):
+    path = STATE_DIR / filename
+    if path.exists():
+        with open(path) as f:
             return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return None
+    return {}
 
 
-def save_state(coin: str, state: dict) -> None:
-    path = os.path.join(STATE_DIR, f"dsl-{coin}.json")
-    atomic_write(path, state)
+def save_state(data, filename="state.json"):
+    atomic_write(str(STATE_DIR / filename), data)
 
 
-def clear_state(coin: str) -> None:
-    path = os.path.join(STATE_DIR, f"dsl-{coin}.json")
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
+# ─── Trade Counter ───────────────────────────────────────────
 
-
-def list_active_dsl_states() -> list:
-    """List all active DSL state files. Returns list of (coin, state) tuples."""
-    active = []
-    for f in os.listdir(STATE_DIR):
-        if f.startswith("dsl-") and f.endswith(".json"):
-            coin = f[4:-5]
-            state = load_state(coin)
-            if state and state.get("active"):
-                active.append((coin, state))
-    return active
-
-
-# ---------------------------------------------------------------------------
-# Runtime State
-# ---------------------------------------------------------------------------
-
-def _runtime_path() -> str:
-    return os.path.join(STATE_DIR, "runtime.json")
-
-
-def load_runtime() -> dict:
-    path = _runtime_path()
-    try:
-        with open(path, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {
-            "entriesThisDay": 0,
-            "entriesDate": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-            "gate": "OPEN",
-            "gateExpiresAt": None,
-            "consecutiveLosses": 0,
-            "tradeLog": [],
-            "tierStats": {
-                "MEDIUM": {"trades": 0, "wins": 0, "losses": 0},
-                "HIGH": {"trades": 0, "wins": 0, "losses": 0},
-            },
-        }
-
-
-def save_runtime(runtime: dict) -> None:
-    atomic_write(_runtime_path(), runtime)
-
-
-def record_trade(runtime: dict, asset: str, tier: str, score: int,
-                 outcome: str, roe: float) -> dict:
-    runtime["tradeLog"].append({
-        "asset": asset, "tier": tier, "score": score,
-        "outcome": outcome, "roe": roe,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    })
-    if tier not in runtime["tierStats"]:
-        runtime["tierStats"][tier] = {"trades": 0, "wins": 0, "losses": 0}
-    runtime["tierStats"][tier]["trades"] += 1
-    if roe > 0:
-        runtime["tierStats"][tier]["wins"] += 1
-        runtime["consecutiveLosses"] = 0
-    else:
-        runtime["tierStats"][tier]["losses"] += 1
-        runtime["consecutiveLosses"] += 1
-    return runtime
-
-
-def check_gate(runtime: dict, config: dict) -> tuple:
+def load_trade_counter():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if runtime.get("entriesDate") != today:
-        runtime["entriesThisDay"] = 0
-        runtime["entriesDate"] = today
-        if runtime["gate"] == "CLOSED":
-            runtime["gate"] = "OPEN"
-
-    gate_cfg = config.get("gate", {})
-    max_entries = gate_cfg.get("maxEntriesPerDay", 6)
-    if runtime["entriesThisDay"] >= max_entries:
-        runtime["gate"] = "CLOSED"
-        return False, f"Daily limit reached ({runtime['entriesThisDay']}/{max_entries})"
-
-    if runtime["gate"] == "COOLDOWN":
-        expires = runtime.get("gateExpiresAt")
-        if expires and time.time() < expires:
-            return False, f"Cooldown active until {datetime.fromtimestamp(expires, tz=timezone.utc).isoformat()}"
-        runtime["gate"] = "OPEN"
-        runtime["gateExpiresAt"] = None
-
-    max_losses = gate_cfg.get("maxConsecutiveLosses", 3)
-    if runtime["consecutiveLosses"] >= max_losses:
-        cooldown_min = gate_cfg.get("cooldownMinutes", 30)
-        runtime["gate"] = "COOLDOWN"
-        runtime["gateExpiresAt"] = time.time() + (cooldown_min * 60)
-        return False, f"{runtime['consecutiveLosses']} consecutive losses → cooldown {cooldown_min}min"
-
-    return True, "OPEN"
-
-
-def is_tier_enabled(tier: str, runtime: dict, config: dict) -> bool:
-    tier_cfg = config.get("convictionTiers", {}).get(tier, {})
-    if tier_cfg.get("enabled") is False:
-        return False
-    learning_cfg = config.get("learning", {})
-    if not learning_cfg.get("enabled", True):
-        return True
-    stats = runtime.get("tierStats", {}).get(tier, {})
-    trades = stats.get("trades", 0)
-    min_trades = learning_cfg.get("minTradesForDisable", 8)
-    min_wr = learning_cfg.get("minWinRateForEnable", 0.15)
-    if trades >= min_trades:
-        wins = stats.get("wins", 0)
-        wr = wins / trades if trades > 0 else 0
-        if wr < min_wr:
-            return False
-    return True
+    path = STATE_DIR / "trade-counter.json"
+    default = {
+        "date": today, "entries": 0, "realizedPnl": 0,
+        "gate": "OPEN", "gateReason": None, "cooldownUntil": None,
+        "lastResults": [],
+        "stalkerResults": [],  # v1.2: track Stalker W/L for streak detection
+    }
+    if path.exists():
+        try:
+            with open(path) as f:
+                tc = json.load(f)
+            if tc.get("date") != today:
+                for k in ["entries", "realizedPnl"]:
+                    tc[k] = 0
+                tc["date"] = today
+                tc["gate"] = "OPEN"
+                tc["gateReason"] = None
+                tc["cooldownUntil"] = None
+                # NOTE: stalkerResults persists across days (streak spans sessions)
+            for k, v in default.items():
+                if k not in tc:
+                    tc[k] = v
+            return tc
+        except (json.JSONDecodeError, IOError):
+            pass
+    return dict(default)
 
 
-# ---------------------------------------------------------------------------
-# Cooldowns
-# ---------------------------------------------------------------------------
-
-def _cooldown_path() -> str:
-    return os.path.join(STATE_DIR, "asset-cooldowns.json")
+def save_trade_counter(tc):
+    tc["updatedAt"] = now_iso()
+    atomic_write(str(STATE_DIR / "trade-counter.json"), tc)
 
 
-def load_cooldowns() -> dict:
-    try:
-        with open(_cooldown_path(), "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+def record_stalker_result(tc, is_win):
+    """v1.2: Track Stalker trade results for streak detection.
+    If a win, reset the streak. Keep last 10 results."""
+    results = tc.get("stalkerResults", [])
+    results.append("W" if is_win else "L")
+    tc["stalkerResults"] = results[-10:]
+    save_trade_counter(tc)
 
 
-def save_cooldowns(cooldowns: dict) -> None:
-    atomic_write(_cooldown_path(), cooldowns)
+# ─── Asset Cooldowns ─────────────────────────────────────────
+
+def load_cooldowns():
+    if COOLDOWN_FILE.exists():
+        try:
+            with open(COOLDOWN_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {}
 
 
-def set_cooldown(asset: str, minutes: int = 120) -> None:
+def save_cooldowns(cooldowns):
+    atomic_write(str(COOLDOWN_FILE), cooldowns)
+
+
+def is_asset_cooled_down(token, cooldown_minutes=120):
+    """Check if an asset is in cooldown after a Phase 1 exit."""
     cooldowns = load_cooldowns()
-    cooldowns[asset] = {
-        "until": time.time() + (minutes * 60),
-        "set_at": datetime.now(timezone.utc).isoformat(),
+    if token not in cooldowns:
+        return False
+    exit_ts = cooldowns[token].get("exitTimestamp", 0)
+    elapsed_min = (now_ts() - exit_ts) / 60
+    return elapsed_min < cooldown_minutes
+
+
+def set_asset_cooldown(token, reason="phase1_exit"):
+    """Set a cooldown on an asset after Phase 1 exit."""
+    cooldowns = load_cooldowns()
+    cooldowns[token] = {
+        "exitTimestamp": now_ts(),
+        "reason": reason,
+        "setAt": now_iso(),
     }
     save_cooldowns(cooldowns)
 
 
-def is_on_cooldown(asset: str) -> bool:
-    cooldowns = load_cooldowns()
-    entry = cooldowns.get(asset)
-    if not entry:
-        return False
-    return time.time() < entry.get("until", 0)
+# ─── Scanner History ─────────────────────────────────────────
 
-
-# ---------------------------------------------------------------------------
-# OI History
-# ---------------------------------------------------------------------------
-
-def load_oi_history(asset: str) -> list:
-    path = os.path.join(OI_HISTORY_DIR, f"{asset}.json")
+def load_scan_history():
     try:
-        with open(path, "r") as f:
+        with open(HISTORY_FILE) as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return []
+        return {"scans": []}
 
 
-def append_oi_snapshot(asset: str, oi_value: float) -> None:
-    history = load_oi_history(asset)
-    now = time.time()
-    history.append({"oi": oi_value, "ts": now})
-    cutoff = now - (7 * 24 * 3600)
-    history = [h for h in history if h["ts"] > cutoff]
-    path = os.path.join(OI_HISTORY_DIR, f"{asset}.json")
-    atomic_write(path, history)
+def save_scan_history(history, max_scans=60):
+    if len(history["scans"]) > max_scans:
+        history["scans"] = history["scans"][-max_scans:]
+    atomic_write(HISTORY_FILE, history)
 
 
-def get_oi_at(history: list, hours_ago: float) -> float | None:
-    if not history:
-        return None
-    target_ts = time.time() - (hours_ago * 3600)
-    closest = min(history, key=lambda h: abs(h["ts"] - target_ts))
-    if abs(closest["ts"] - target_ts) > 1800:
-        return None
-    return closest["oi"]
+# ─── MCP Helpers ─────────────────────────────────────────────
 
-
-# ---------------------------------------------------------------------------
-# MCP Helper — uses mcporter CLI subprocess (matches all other skills)
-# ---------------------------------------------------------------------------
-
-def mcporter_call(tool_name: str, params: dict = None, retries: int = 2,
-                  timeout: int = 25) -> dict:
-    """Call a Senpi MCP tool via mcporter CLI."""
-    params = params or {}
+def mcporter_call(tool, retries=2, timeout=25, **params):
+    """Call a Senpi MCP tool via mcporter."""
     args = json.dumps(params) if params else "{}"
-    cmd = ["mcporter", "call", "senpi", tool_name, "--args", args]
-    for attempt in range(retries + 1):
+    cmd = ["mcporter", "call", "senpi", tool, "--args", args]
+    for attempt in range(retries):
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
             if r.returncode != 0:
-                if attempt < retries:
+                if attempt < retries - 1:
                     time.sleep(2)
                     continue
-                return {}
+                return None
             raw = json.loads(r.stdout)
-            # Unwrap MCP content envelope
             if isinstance(raw, dict) and "content" in raw:
                 content = raw["content"]
                 if isinstance(content, list) and content:
@@ -331,114 +202,57 @@ def mcporter_call(tool_name: str, params: dict = None, retries: int = 2,
                             pass
             return raw
         except subprocess.TimeoutExpired:
-            if attempt < retries:
+            if attempt < retries - 1:
                 time.sleep(2)
                 continue
-            return {}
-        except (json.JSONDecodeError, Exception) as e:
-            if attempt < retries:
-                time.sleep(2)
-                continue
-            log(f"MCP call {tool_name} failed: {e}")
-            return {}
-    return {}
+            return None
+        except (json.JSONDecodeError, Exception):
+            return None
+    return None
 
 
-# ---------------------------------------------------------------------------
-# Position Helper — correct clearinghouse unwrapping
-# ---------------------------------------------------------------------------
-
-def get_positions(wallet: str = None) -> list:
-    """Get current open positions. Correctly unwraps main/xyz nesting."""
+def get_clearinghouse(wallet):
     if not wallet:
-        wallet, _ = get_wallet_and_strategy()
-    if not wallet:
-        return []
-    result = mcporter_call("strategy_get_clearinghouse_state",
-                           {"strategy_wallet": wallet})
-    if not result or not isinstance(result, dict):
-        return []
-
-    data = result.get("data", result)
-    positions = []
-    for section in ("main", "xyz"):
-        s = data.get(section, {})
-        if not isinstance(s, dict):
-            continue
-        for ap in s.get("assetPositions", []):
-            pos = ap.get("position", ap)
-            szi = float(pos.get("szi", pos.get("size", 0)))
-            if szi == 0:
-                continue
-            positions.append({
-                "coin": pos.get("coin", ""),
-                "direction": "LONG" if szi > 0 else "SHORT",
-                "szi": szi,
-                "upnl": float(pos.get("unrealizedPnl", 0)),
-                "margin": float(pos.get("marginUsed", 0)),
-                "entryPrice": float(pos.get("entryPx", 0)),
-                "markPrice": float(pos.get("markPx", 0)),
-                "size": abs(szi),
-                "leverage": float(
-                    pos.get("leverage", {}).get("value", 10)
-                    if isinstance(pos.get("leverage"), dict)
-                    else pos.get("leverage", 10)
-                ),
-            })
-    return positions
+        return None
+    return mcporter_call("strategy_get_clearinghouse_state", strategy_wallet=wallet)
 
 
-def get_wallet_balance(wallet: str = None) -> float:
-    """Get wallet balance. Correctly unwraps main.marginSummary."""
-    if not wallet:
-        wallet, _ = get_wallet_and_strategy()
-    if not wallet:
-        return 0.0
-    result = mcporter_call("strategy_get_clearinghouse_state",
-                           {"strategy_wallet": wallet})
-    if not result or not isinstance(result, dict):
-        return 0.0
-
-    data = result.get("data", result)
-    total = 0.0
+def get_positions(wallet):
+    ch = get_clearinghouse(wallet)
+    if not ch:
+        return 0, []
+    data = ch.get("data", ch)
+    positions, account_value = [], 0
     for section in ("main", "xyz"):
         s = data.get(section, {})
         if not isinstance(s, dict):
             continue
         ms = s.get("marginSummary", {})
-        if isinstance(ms, dict):
-            val = ms.get("accountValue", ms.get("equity", 0))
-            try:
-                total += float(val)
-            except (TypeError, ValueError):
-                pass
-    return total
+        account_value += float(ms.get("accountValue", 0))
+        for ap in s.get("assetPositions", []):
+            pos = ap.get("position", ap)
+            szi = float(pos.get("szi", 0))
+            if szi == 0:
+                continue
+            positions.append({
+                "coin": pos.get("coin", ""),
+                "direction": "LONG" if szi > 0 else "SHORT",
+                "upnl": float(pos.get("unrealizedPnl", 0)),
+                "margin": float(pos.get("marginUsed", 0)),
+                "entryPrice": float(pos.get("entryPx", 0)),
+                "size": abs(szi),
+            })
+    return account_value, positions
 
 
-def get_deployed_margin(positions: list) -> float:
-    """Calculate total margin currently deployed."""
-    total = 0.0
-    for pos in positions:
-        margin = float(pos.get("margin", pos.get("marginUsed", 0)))
-        if margin > 0:
-            total += margin
-        else:
-            szi = abs(float(pos.get("szi", pos.get("size", 0))))
-            entry = float(pos.get("entryPrice", pos.get("entryPx", 0)))
-            leverage = float(pos.get("leverage", 1))
-            if entry > 0 and leverage > 0:
-                total += (szi * entry) / leverage
-    return total
-
-
-# ---------------------------------------------------------------------------
-# Output
-# ---------------------------------------------------------------------------
-
-def output(data: dict) -> None:
-    print(json.dumps(data, indent=2, default=str))
+def output(data):
+    print(json.dumps(data))
     sys.stdout.flush()
 
 
-def log(msg: str) -> None:
-    print(f"[HYDRA] {msg}", file=sys.stderr)
+def now_ts():
+    return time.time()
+
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()

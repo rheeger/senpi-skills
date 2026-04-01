@@ -1,881 +1,475 @@
+#!/usr/bin/env python3
+# Senpi HYDRA Scanner v2.0
 # Copyright 2026 Senpi (https://senpi.ai)
 # Licensed under MIT
-# Source: https://github.com/Senpi-ai/senpi-skills
+"""HYDRA v2.0 — Squeeze Detector.
 
+Detects crowded trades about to unwind. The thesis: when funding is extreme
+(longs paying shorts heavily, or vice versa) AND smart money is positioned
+AGAINST the crowd AND price starts moving against the crowd — that's a squeeze.
+
+v1.0 had a 20% win rate because it fired on funding anomalies alone (FDD + LCD
+at minimum 55 conviction) on illiquid tokens (BLUR, STABLE, DOOD). v2.0 fixes
+everything:
+
+How it works:
+1. SCAN: Find assets with extreme funding (crowd is piled one direction)
+2. CONFIRM: SM is positioned AGAINST the funding crowd
+3. VALIDATE: Price is starting to move against the crowd (the squeeze is beginning)
+4. FILTER: Only trade assets with $20M+ daily volume (no illiquid garbage)
+
+The scanner goes OPPOSITE to the crowd:
+- Funding extreme positive (longs paying shorts) → crowd is LONG → Hydra goes SHORT
+- Funding extreme negative (shorts paying longs) → crowd is SHORT → Hydra goes LONG
+
+Two API calls per scan: market_get_prices (funding rates) + leaderboard_get_markets (SM positioning).
+Runs every 5 minutes.
+
+DSL exit managed by plugin runtime. Scanner does NOT manage exits.
 """
-HYDRA v1.0 — Multi-Source Squeeze Scanner
-==========================================
-Detects crowded positions across 200+ crypto assets using 6 independent
-signal sources, scores candidates, and outputs entry signals with
-entry signals.
 
-Signal Sources:
-  1. FDD — Funding Divergence Detector (30/110, PRIMARY GATE)
-  2. LCD — Liquidation Cascade Detector (25/110)
-  3. OIS — Open Interest Surge Detector (20/110)
-  4. MED — Momentum Exhaustion Detector (-10 to +5, dual role)
-  5. EM  — Emerging Movers from SM leaderboard (-8 to +15)
-  6. OPP — Opportunity Scanner, hourly trend gate (-999 to +10)
-"""
-
+import json
 import sys
 import os
-import math
+import time
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from hydra_config import (
-    load_config, load_runtime, save_runtime, load_cooldowns,
-    get_positions, get_wallet_balance, get_deployed_margin,
-    mcporter_call, output, log, is_on_cooldown,
-    is_tier_enabled, check_gate, append_oi_snapshot,
-    load_oi_history, get_oi_at,
-)
+import hydra_config as cfg
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Helpers
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+# HARDCODED CONSTANTS
+# ═══════════════════════════════════════════════════════════════
 
-def safe_float(val, default=0.0) -> float:
+MIN_LEVERAGE = 5
+MAX_LEVERAGE = 7
+DEFAULT_LEVERAGE = 7
+MAX_POSITIONS = 2
+MAX_DAILY_ENTRIES = 4
+COOLDOWN_MINUTES = 120
+MARGIN_PCT = 0.18                   # 18% of account per trade
+MIN_SCORE = 7
+XYZ_BANNED = True
+
+# Funding thresholds — what constitutes "extreme" crowding
+FUNDING_EXTREME = 0.0005            # >0.05%/hr = heavy crowding
+FUNDING_VERY_EXTREME = 0.001        # >0.1%/hr = extreme crowding
+FUNDING_MINIMUM = 0.0002            # Below this, no signal
+
+# Liquidity gate
+MIN_DAILY_VOLUME = 20_000_000       # $20M minimum daily volume
+BANNED_ASSETS = {
+    "BLUR", "STABLE", "DOOD", "DEGEN",  # Illiquid garbage from v1.0
+}
+
+# SM confirmation
+MIN_SM_PCT = 3.0                    # SM must have meaningful presence
+MIN_SM_TRADERS = 10
+
+
+# ═══════════════════════════════════════════════════════════════
+# HELPERS
+# ═══════════════════════════════════════════════════════════════
+
+def safe_float(val, default=0.0):
     try:
         return float(val)
     except (TypeError, ValueError):
         return default
 
 
-def safe_int(val, default=0) -> int:
-    try:
-        return int(val)
-    except (TypeError, ValueError):
-        return default
+def now_date():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ═══════════════════════════════════════════════════════════════
+# DATA FETCHING
+# ═══════════════════════════════════════════════════════════════
+
+def fetch_funding_rates():
+    """Get funding rates for all assets."""
+    data = cfg.mcporter_call("market_get_prices")
+    if not data:
+        return {}
+
+    prices = data.get("data", data)
+    if isinstance(prices, dict):
+        prices = prices.get("prices", prices)
+
+    funding_map = {}
+    if isinstance(prices, dict):
+        for asset, info in prices.items():
+            if isinstance(info, dict):
+                funding = safe_float(info.get("funding", info.get("fundingRate", 0)))
+                volume = safe_float(info.get("dayNtlVlm", info.get("volume24h", 0)))
+                mid = safe_float(info.get("mid", info.get("markPx", 0)))
+                funding_map[asset.upper()] = {
+                    "funding": funding,
+                    "volume": volume,
+                    "price": mid,
+                }
+    elif isinstance(prices, list):
+        for p in prices:
+            if isinstance(p, dict):
+                asset = str(p.get("asset", p.get("coin", ""))).upper()
+                funding = safe_float(p.get("funding", p.get("fundingRate", 0)))
+                volume = safe_float(p.get("dayNtlVlm", p.get("volume24h", 0)))
+                mid = safe_float(p.get("mid", p.get("markPx", 0)))
+                if asset:
+                    funding_map[asset] = {
+                        "funding": funding,
+                        "volume": volume,
+                        "price": mid,
+                    }
+
+    return funding_map
+
+
+def fetch_sm_data():
+    """Get SM positioning from leaderboard."""
+    raw = cfg.mcporter_call("leaderboard_get_markets")
+    if not raw:
+        return {}
 
-
-def no_reply(note: str) -> dict:
-    return {"status": "ok", "heartbeat": "NO_REPLY", "note": note}
-
-
-def is_xyz(asset: str) -> bool:
-    """Check if asset is an XYZ equity. HYDRA never trades these."""
-    return asset.lower().startswith("xyz") or asset.lower().startswith("xyz:")
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Source 1: Funding Divergence Detector (FDD) — 0-30 pts
-# ═══════════════════════════════════════════════════════════════════════════
-
-def source_fdd(asset: str, config: dict, asset_data: dict = None) -> dict:
-    """
-    Analyze 7-day hourly funding rate history.
-    Detect SHORT_CROWDING (deeply negative → longs profit)
-    or LONG_CROWDING (deeply positive → shorts profit).
-    """
-    fdd_cfg = config.get("scanner", {}).get("sources", {}).get("fdd", {})
-    max_score = fdd_cfg.get("maxScore", 30)
-    min_confidence = config.get("scanner", {}).get("minFddConfidence", 40)
-
-    data = asset_data
-    if not data or not isinstance(data, dict):
-        data = mcporter_call("market_get_asset_data", {"asset": asset})
-    if not data or not isinstance(data, dict):
-        return {"score": 0, "signal": None, "confidence": 0}
-
-    # Extract funding rate info
-    funding_rate = safe_float(data.get("funding", data.get("fundingRate",
-                              data.get("currentFunding", 0))))
-
-    # Try to get funding history for percentile calculation
-    funding_history = data.get("fundingHistory", data.get("funding_history", []))
-    if isinstance(funding_history, list) and len(funding_history) >= 24:
-        rates = [safe_float(h.get("rate", h.get("fundingRate", 0))) for h in funding_history]
-        rates_sorted = sorted(rates)
-        # Find percentile of current rate
-        below = sum(1 for r in rates_sorted if r < funding_rate)
-        percentile = (below / len(rates_sorted)) * 100
-    else:
-        # Fallback: use absolute funding rate as proxy
-        # Typical range: -0.01% to +0.01% per hour
-        # Extreme: beyond ±0.05%
-        if abs(funding_rate) < 0.0001:
-            return {"score": 0, "signal": None, "confidence": 0}
-        percentile = 5 if funding_rate < -0.0003 else (95 if funding_rate > 0.0003 else 50)
-
-    signal = None
-    confidence = 0
-
-    if percentile <= 10:
-        signal = "SHORT_CROWDING"
-        confidence = (10 - percentile) * 10  # 0-100
-    elif percentile >= 90:
-        signal = "LONG_CROWDING"
-        confidence = (percentile - 90) * 10
-
-    # Persistence bonus: if we can detect consecutive hours of crowding
-    if isinstance(funding_history, list) and len(funding_history) >= 4:
-        recent_4h = funding_history[-4:]
-        if signal == "SHORT_CROWDING" and all(safe_float(h.get("rate", 0)) < 0 for h in recent_4h):
-            confidence += 10
-        elif signal == "LONG_CROWDING" and all(safe_float(h.get("rate", 0)) > 0 for h in recent_4h):
-            confidence += 10
-
-    confidence = min(confidence, 100)
-
-    if confidence < min_confidence:
-        return {"score": 0, "signal": signal, "confidence": confidence}
-
-    score = int(max_score * min(confidence / 100, 1.0))
-
-    direction = "long" if signal == "SHORT_CROWDING" else "short" if signal == "LONG_CROWDING" else None
-
-    return {"score": score, "signal": signal, "confidence": confidence, "direction": direction,
-            "fundingRate": funding_rate, "percentile": percentile}
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Source 2: Liquidation Cascade Detector (LCD) — 0-25 pts
-# ═══════════════════════════════════════════════════════════════════════════
-
-def source_lcd(asset: str, direction: str, config: dict, asset_data: dict = None) -> dict:
-    """
-    Estimate liquidation cluster proximity.
-    """
-    lcd_cfg = config.get("scanner", {}).get("sources", {}).get("lcd", {})
-    max_score = lcd_cfg.get("maxScore", 25)
-    cascade_bonus = lcd_cfg.get("cascadeBonus", 10)
-    cluster_dist = lcd_cfg.get("clusterDistancePct", 2.0)
-
-    data = asset_data
-    if not data or not isinstance(data, dict):
-        data = mcporter_call("market_get_asset_data", {"asset": asset})
-    if not data or not isinstance(data, dict):
-        return {"score": 0, "signal": None, "confidence": 0}
-
-    price = safe_float(data.get("price", data.get("markPrice", data.get("midPrice", 0))))
-    oi = safe_float(data.get("openInterest", data.get("oi", 0)))
-    funding = safe_float(data.get("funding", data.get("fundingRate", 0)))
-    price_change_1h = safe_float(data.get("priceChange1h", data.get("price_change_1h", 0)))
-
-    if price <= 0 or oi <= 0:
-        return {"score": 0, "signal": None, "confidence": 0}
-
-    # Estimate liquidation cluster proximity from funding skew
-    # Deeply negative funding = shorts crowded = short liquidation clusters above price
-    # Deeply positive funding = longs crowded = long liquidation clusters below price
-    confidence = 0
-    signal = None
-    is_cascade = False
-
-    if direction == "long" and funding < -0.0002:
-        # Short liquidation risk — clusters above current price
-        signal = "SHORT_LIQUIDATION_RISK"
-        funding_magnitude = abs(funding) / 0.001  # normalize to 0-1 scale
-        confidence = min(funding_magnitude * 60, 80)
-
-        # Active cascade: price moving up sharply while shorts crowded
-        if price_change_1h > cluster_dist:
-            is_cascade = True
-            signal = "ACTIVE_LIQUIDATION_CASCADE"
-            confidence = min(confidence + 20, 100)
-
-    elif direction == "short" and funding > 0.0002:
-        signal = "LONG_LIQUIDATION_RISK"
-        funding_magnitude = abs(funding) / 0.001
-        confidence = min(funding_magnitude * 60, 80)
-
-        if price_change_1h < -cluster_dist:
-            is_cascade = True
-            signal = "ACTIVE_LIQUIDATION_CASCADE"
-            confidence = min(confidence + 20, 100)
-
-    score = int(max_score * min(confidence / 100, 1.0))
-    if is_cascade:
-        score = min(score + cascade_bonus, max_score + cascade_bonus)
-
-    return {"score": score, "signal": signal, "confidence": confidence,
-            "isCascade": is_cascade, "openInterest": oi}
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Source 3: Open Interest Surge Detector (OIS) — 0-20 pts
-# ═══════════════════════════════════════════════════════════════════════════
-
-def source_ois(asset: str, direction: str, config: dict, asset_data: dict = None) -> dict:
-    """
-    Track OI changes via local snapshots.
-    """
-    ois_cfg = config.get("scanner", {}).get("sources", {}).get("ois", {})
-    max_score = ois_cfg.get("maxScore", 20)
-    surge_1h = ois_cfg.get("surgeThreshold1h", 1.05)
-    surge_4h = ois_cfg.get("surgeThreshold4h", 1.10)
-
-    # Get current OI from cached data
-    data = asset_data
-    if not data or not isinstance(data, dict):
-        data = mcporter_call("market_get_asset_data", {"asset": asset})
-    if not data or not isinstance(data, dict):
-        return {"score": 0, "signal": None, "confidence": 0}
-
-    current_oi = safe_float(data.get("openInterest", data.get("oi", 0)))
-    if current_oi <= 0:
-        return {"score": 0, "signal": None, "confidence": 0}
-
-    # Record snapshot for future use
-    append_oi_snapshot(asset, current_oi)
-
-    # Load history
-    history = load_oi_history(asset)
-    if len(history) < 3:
-        return {"score": 0, "signal": None, "confidence": 0, "note": "Insufficient OI history"}
-
-    oi_1h = get_oi_at(history, 1.0)
-    oi_4h = get_oi_at(history, 4.0)
-
-    signal = None
-    confidence = 0
-
-    if oi_1h and oi_4h:
-        ratio_1h = current_oi / oi_1h if oi_1h > 0 else 1.0
-        ratio_4h = current_oi / oi_4h if oi_4h > 0 else 1.0
-
-        if ratio_1h >= surge_1h and ratio_4h >= surge_4h:
-            signal = "OI_SURGE"
-            magnitude = ((ratio_1h - 1.0) + (ratio_4h - 1.0)) / 2
-            confidence = min(magnitude * 200, 100)
-
-        elif ratio_1h <= (2.0 - surge_1h):  # e.g., <= 0.95
-            signal = "OI_UNWIND"
-            if direction == "long":
-                signal = "OI_UNWIND_SHORT_SQUEEZE"
-            else:
-                signal = "OI_UNWIND_LONG_LIQUIDATION"
-            magnitude = (1.0 - ratio_1h)
-            confidence = min(magnitude * 200, 100)
-
-    elif oi_1h:
-        ratio_1h = current_oi / oi_1h if oi_1h > 0 else 1.0
-        if ratio_1h >= surge_1h:
-            signal = "OI_SURGE"
-            confidence = min((ratio_1h - 1.0) * 200, 70)  # capped lower without 4h data
-
-    score = int(max_score * min(confidence / 100, 1.0))
-
-    return {"score": score, "signal": signal, "confidence": confidence,
-            "currentOI": current_oi, "oi1h": oi_1h, "oi4h": oi_4h}
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Source 4: Momentum Exhaustion Detector (MED) — -10 to +5 pts
-# ═══════════════════════════════════════════════════════════════════════════
-
-def source_med(asset: str, direction: str, config: dict, asset_data: dict = None) -> dict:
-    """
-    Detect trend exhaustion.
-    CLEAR = +5, FADE = -5, EXHAUSTED = -10.
-    """
-    med_cfg = config.get("scanner", {}).get("sources", {}).get("med", {})
-    clear_bonus = med_cfg.get("clearBonus", 5)
-    fade_penalty = med_cfg.get("fadePenalty", -5)
-    exhaustion_penalty = med_cfg.get("exhaustionPenalty", -10)
-
-    data = asset_data
-    if not data or not isinstance(data, dict):
-        data = mcporter_call("market_get_asset_data", {"asset": asset})
-    if not data or not isinstance(data, dict):
-        return {"score": 0, "signal": "UNKNOWN", "regime": "UNKNOWN"}
-
-    # Analyze momentum via price changes across timeframes
-    price_change_1h = safe_float(data.get("priceChange1h", data.get("price_change_1h", 0)))
-    price_change_4h = safe_float(data.get("priceChange4h", data.get("price_change_4h",
-                                  data.get("token_price_change_pct_4h", 0))))
-    price_change_24h = safe_float(data.get("priceChange24h", data.get("price_change_24h", 0)))
-
-    # Volume trend (if available)
-    vol_change = safe_float(data.get("volumeChange4h", data.get("volume_change_4h", 0)))
-
-    # Exhaustion detection:
-    # If 24h move is large but 1h move is small/opposite → trend exhausting
-    # If 1h and 4h agree with 24h → trend intact
-    is_long_trade = direction == "long"
-    trend_24h = price_change_24h
-    trend_1h = price_change_1h
-
-    if is_long_trade:
-        # For long trade: we want upward momentum intact
-        if trend_24h > 2 and trend_1h < -0.5:
-            signal = "EXHAUSTED"
-            score = exhaustion_penalty
-        elif trend_24h > 1 and trend_1h < 0:
-            signal = "FADE"
-            score = fade_penalty
-        else:
-            signal = "CLEAR"
-            score = clear_bonus
-    else:
-        # For short trade: we want downward momentum intact
-        if trend_24h < -2 and trend_1h > 0.5:
-            signal = "EXHAUSTED"
-            score = exhaustion_penalty
-        elif trend_24h < -1 and trend_1h > 0:
-            signal = "FADE"
-            score = fade_penalty
-        else:
-            signal = "CLEAR"
-            score = clear_bonus
-
-    return {"score": score, "signal": signal}
-
-
-def detect_market_regime(config: dict, markets_cache: list = None) -> str:
-    """
-    Scan multiple assets to determine market-wide regime.
-    Returns: TRENDING, MIXED, or RANGE.
-    v1.0.1: Uses cached leaderboard data when available.
-    """
-    markets = markets_cache or []
-    if not markets:
-        raw = mcporter_call("leaderboard_get_markets")
-        if isinstance(raw, dict):
-            markets = raw.get("markets", raw.get("data", []))
-        elif isinstance(raw, list):
-            markets = raw
-
-    if not markets:
-        return "UNKNOWN"
-
-    exhausted_count = 0
-    total_checked = 0
-
-    for m in markets[:50]:  # Check top 50 assets
-        if not isinstance(m, dict):
-            continue
-        if str(m.get("dex", "")).lower() == "xyz":
-            continue
-
-        price_4h = safe_float(m.get("token_price_change_pct_4h", 0))
-        # Simple heuristic: small 4h moves on many assets = range-bound
-        if abs(price_4h) < 0.5:
-            exhausted_count += 1
-        total_checked += 1
-
-    if total_checked == 0:
-        return "UNKNOWN"
-
-    exhaustion_pct = exhausted_count / total_checked
-    if exhaustion_pct < 0.30:
-        return "TRENDING"
-    elif exhaustion_pct < 0.60:
-        return "MIXED"
-    else:
-        return "RANGE"
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Source 5: Emerging Movers (EM) — -8 to +15 pts
-# ═══════════════════════════════════════════════════════════════════════════
-
-def source_em(asset: str, direction: str, config: dict, markets_cache: list = None) -> dict:
-    """
-    Check SM consensus from leaderboard_get_markets and leaderboard_get_top.
-    v1.0.1: Uses cached leaderboard data when available.
-    """
-    em_cfg = config.get("scanner", {}).get("sources", {}).get("em", {})
-    max_score = em_cfg.get("maxScore", 15)
-    opposing_penalty = em_cfg.get("opposingPenalty", -8)
-    min_conv = em_cfg.get("minConviction", 2)
-    strong_conv = em_cfg.get("strongConviction", 3)
-    strong_traders = em_cfg.get("strongTraderCount", 50)
-
-    # Use cached leaderboard data
-    markets = markets_cache or []
-    if not markets:
-        raw_markets = mcporter_call("leaderboard_get_markets")
-        if isinstance(raw_markets, dict):
-            markets = raw_markets.get("markets", raw_markets.get("data", []))
-        elif isinstance(raw_markets, list):
-            markets = raw_markets
-
-    sm_direction = None
-    sm_conviction = 0
-    sm_traders = 0
-
-    for m in markets:
-        if not isinstance(m, dict):
-            continue
-        token = str(m.get("token", m.get("asset", ""))).upper()
-        if token != asset.upper():
-            continue
-        if str(m.get("dex", "")).lower() == "xyz":
-            continue
-
-        sm_direction = str(m.get("direction", "")).lower()
-        contribution = safe_float(m.get("pct_of_top_traders_gain", 0))
-        sm_traders = safe_int(m.get("trader_count", 0))
-
-        # Conviction from contribution level
-        if contribution >= 5.0:
-            sm_conviction = 3
-        elif contribution >= 2.0:
-            sm_conviction = 2
-        elif contribution >= 0.5:
-            sm_conviction = 1
-        break
-
-    # Also check leaderboard_get_top for additional validation
-    raw_top = mcporter_call("leaderboard_get_top")
-    top_traders = []
-    if isinstance(raw_top, dict):
-        top_traders = raw_top.get("traders", raw_top.get("data", []))
-    elif isinstance(raw_top, list):
-        top_traders = raw_top
-
-    top_has_asset = False
-    for trader in top_traders:
-        if not isinstance(trader, dict):
-            continue
-        top_markets = trader.get("top_markets", trader.get("topMarkets", []))
-        if isinstance(top_markets, list):
-            for mkt in top_markets:
-                name = str(mkt.get("asset", mkt) if isinstance(mkt, dict) else mkt).upper()
-                if name == asset.upper():
-                    top_has_asset = True
-                    break
-
-    # Scoring
-    if sm_conviction == 0:
-        return {"score": 0, "signal": None, "smDirection": None, "smConviction": 0}
-
-    same_direction = (sm_direction == direction)
-
-    if same_direction:
-        if sm_conviction >= strong_conv and sm_traders >= strong_traders:
-            score = max_score  # +15
-        elif sm_conviction >= min_conv:
-            score = 9
-        else:
-            score = 0
-        # Bonus for top trader confirmation
-        if top_has_asset and score > 0:
-            score = min(score + 2, max_score)
-    else:
-        if sm_conviction >= strong_conv:
-            score = opposing_penalty  # -8
-        else:
-            score = 0
-
-    return {"score": score, "signal": "SM_ALIGNED" if same_direction else "SM_OPPOSING",
-            "smDirection": sm_direction, "smConviction": sm_conviction,
-            "smTraders": sm_traders, "inTopTraders": top_has_asset}
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Source 6: Opportunity Scanner (OPP) — -999 to +10 pts
-# ═══════════════════════════════════════════════════════════════════════════
-
-def source_opp(asset: str, direction: str, config: dict, asset_data: dict = None) -> dict:
-    """
-    Multi-pillar scoring with hourly trend alignment.
-    Counter-trend = hard skip (-999).
-    """
-    opp_cfg = config.get("scanner", {}).get("sources", {}).get("opp", {})
-    max_score = opp_cfg.get("maxScore", 10)
-    counter_penalty = opp_cfg.get("counterTrendPenalty", -999)
-
-    data = asset_data
-    if not data or not isinstance(data, dict):
-        data = mcporter_call("market_get_asset_data", {"asset": asset})
-    if not data or not isinstance(data, dict):
-        return {"score": 0, "signal": None}
-
-    price_change_1h = safe_float(data.get("priceChange1h", data.get("price_change_1h", 0)))
-
-    # Hourly trend alignment check
-    is_long = direction == "long"
-    if is_long and price_change_1h < -1.0:
-        return {"score": counter_penalty, "signal": "COUNTER_TREND",
-                "note": f"Long entry but 1h change = {price_change_1h:.2f}%"}
-    if not is_long and price_change_1h > 1.0:
-        return {"score": counter_penalty, "signal": "COUNTER_TREND",
-                "note": f"Short entry but 1h change = {price_change_1h:.2f}%"}
-
-    # Multi-pillar scoring
-    score = 0
-
-    # Price alignment (0-4)
-    if is_long and price_change_1h > 0.5:
-        score += min(int(price_change_1h * 2), 4)
-    elif not is_long and price_change_1h < -0.5:
-        score += min(int(abs(price_change_1h) * 2), 4)
-
-    # Volume confirmation (0-3)
-    vol_change = safe_float(data.get("volumeChange1h", data.get("volume_change_1h", 0)))
-    if vol_change > 20:
-        score += 3
-    elif vol_change > 10:
-        score += 2
-    elif vol_change > 5:
-        score += 1
-
-    # Spread quality (0-3)
-    bid = safe_float(data.get("bid", data.get("bestBid", 0)))
-    ask = safe_float(data.get("ask", data.get("bestAsk", 0)))
-    price = safe_float(data.get("price", data.get("markPrice", 0)))
-    if bid > 0 and ask > 0 and price > 0:
-        spread_pct = (ask - bid) / price * 100
-        if spread_pct <= 0.05:
-            score += 3
-        elif spread_pct <= 0.1:
-            score += 2
-        elif spread_pct <= 0.2:
-            score += 1
-
-    score = min(score, max_score)
-    return {"score": score, "signal": "CONFIRMED" if score >= 5 else "WEAK"}
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Candidate Discovery
-# ═══════════════════════════════════════════════════════════════════════════
-
-def discover_candidates(config: dict) -> tuple:
-    """
-    Get candidate assets from leaderboard_get_markets.
-    Filter out xyz: assets. Returns (list of asset names, raw markets list).
-    v1.0.1: Returns raw markets for caching — avoids redundant API calls.
-    """
-    raw = mcporter_call("leaderboard_get_markets")
     markets = []
     if isinstance(raw, dict):
         markets = raw.get("markets", raw.get("data", []))
     elif isinstance(raw, list):
         markets = raw
 
-    candidates = []
-    seen = set()
+    sm_map = {}
     for m in markets:
         if not isinstance(m, dict):
             continue
+        token = str(m.get("token", "")).upper()
         dex = str(m.get("dex", "")).lower()
-        if dex == "xyz":
+
+        if XYZ_BANNED and dex == "xyz":
             continue
-        token = str(m.get("token", m.get("asset", m.get("coin", "")))).upper()
-        if not token or token in seen:
-            continue
-        seen.add(token)
-        candidates.append(token)
-
-    return candidates, markets
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Conviction Tier Resolution
-# ═══════════════════════════════════════════════════════════════════════════
-
-def resolve_tier(score: int, config: dict) -> str | None:
-    """Map score to conviction tier. Returns None if below threshold."""
-    tiers = config.get("convictionTiers", {})
-    if score >= tiers.get("HIGH", {}).get("minScore", 75):
-        return "HIGH"
-    elif score >= tiers.get("MEDIUM", {}).get("minScore", 55):
-        return "MEDIUM"
-    elif score >= tiers.get("LOW", {}).get("minScore", 40):
-        return "LOW"
-    return None
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Sizing
-# ═══════════════════════════════════════════════════════════════════════════
-
-def calculate_sizing(score: int, tier: str, asset: str, wallet_balance: float,
-                     config: dict, markets_cache: list = None) -> dict:
-    """Calculate margin and leverage for a position."""
-    sizing_cfg = config.get("sizing", {})
-    tier_sizing = sizing_cfg.get("tiers", {}).get(tier, {})
-
-    base_size_pct = sizing_cfg.get("baseSizePct", 0.15)
-    margin_mult = tier_sizing.get("marginMultiplier", 0.60)
-    lev_range_low = tier_sizing.get("leverageRangeLow", 0.50)
-    lev_range_high = tier_sizing.get("leverageRangeHigh", 0.65)
-    leverage_cap = sizing_cfg.get("leverageCap", 10)
-    max_per_asset = sizing_cfg.get("maxPerAssetPct", 0.25)
-
-    # Base margin
-    margin = wallet_balance * base_size_pct * margin_mult
-
-    # Cap per-asset
-    margin = min(margin, wallet_balance * max_per_asset)
-
-    margin_pct = (margin / wallet_balance * 100) if wallet_balance > 0 else 0
-
-    # Leverage: lerp within tier range based on intra-tier position
-    tier_cfg = config.get("convictionTiers", {}).get(tier, {})
-    tier_min = tier_cfg.get("minScore", 55)
-    tier_max = tier_cfg.get("maxScore", 74)
-    intra_fraction = (score - tier_min) / max(tier_max - tier_min, 1)
-    intra_fraction = max(0, min(1, intra_fraction))
-
-    # Get asset max leverage
-    asset_max_lev = get_asset_max_leverage(asset, markets_cache=markets_cache)
-    lev_pct = lev_range_low + (lev_range_high - lev_range_low) * intra_fraction
-    leverage = asset_max_lev * lev_pct
-
-    # Cap
-    leverage = min(leverage, leverage_cap)
-    leverage = max(1, round(leverage, 1))
-
-    return {
-        "margin": round(margin, 2),
-        "marginPercent": round(margin_pct, 2),
-        "leverage": leverage,
-        "assetMaxLeverage": asset_max_lev,
-    }
-
-
-def get_asset_max_leverage(asset: str, markets_cache: list = None) -> float:
-    """Get max leverage for an asset. v1.0.1: Uses cached leaderboard data."""
-    markets = markets_cache or []
-    if not markets:
-        raw = mcporter_call("leaderboard_get_markets")
-        if isinstance(raw, dict):
-            markets = raw.get("markets", raw.get("data", []))
-        elif isinstance(raw, list):
-            markets = raw
-
-    for m in markets:
-        if not isinstance(m, dict):
-            continue
-        token = str(m.get("token", m.get("asset", ""))).upper()
-        if token == asset.upper():
-            return safe_float(m.get("max_leverage", m.get("maxLeverage", 20)))
-
-    return 20.0  # default
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Main Scanner
-# ═══════════════════════════════════════════════════════════════════════════
-
-def run():
-    log("=" * 60)
-    log(f"Scanner run — {datetime.now(timezone.utc).isoformat()}")
-    log("=" * 60)
-
-    config = load_config()
-    runtime = load_runtime()
-
-    # ── Gate check ───────────────────────────────────────────────────────
-    gate_open, gate_reason = check_gate(runtime, config)
-    save_runtime(runtime)
-    if not gate_open:
-        log(f"Gate: {gate_reason}")
-        output(no_reply(f"Gate: {gate_reason}"))
-        return
-
-    # ── Position check ───────────────────────────────────────────────────
-    sizing_cfg = config.get("sizing", {})
-    max_positions = sizing_cfg.get("maxPositions", 3)
-    positions = get_positions()
-    active_coins = set()
-    for p in positions:
-        coin = str(p.get("coin", p.get("asset", ""))).upper()
-        active_coins.add(coin)
-
-    if len(positions) >= max_positions:
-        log(f"Max positions ({len(positions)}/{max_positions}). NO_REPLY.")
-        output(no_reply(f"Max positions reached: {len(positions)}/{max_positions}"))
-        return
-
-    # ── Deployment cap ───────────────────────────────────────────────────
-    wallet_balance = get_wallet_balance()
-    if wallet_balance <= 0:
-        log("Cannot read wallet balance. NO_REPLY.")
-        output(no_reply("Wallet balance unavailable"))
-        return
-
-    deployed = get_deployed_margin(positions)
-    max_deployed_pct = sizing_cfg.get("maxDeployedPct", 0.55)
-    if deployed / wallet_balance >= max_deployed_pct:
-        log(f"Deployment cap reached ({deployed:.2f}/{wallet_balance * max_deployed_pct:.2f}). NO_REPLY.")
-        output(no_reply("Deployment cap reached"))
-        return
-
-    # ── Discover candidates (v1.0.1: returns cached markets for reuse) ────
-    candidates, _markets_cache = discover_candidates(config)
-    log(f"Discovered {len(candidates)} non-xyz candidates.")
-
-    if not candidates:
-        output(no_reply("No candidates from leaderboard"))
-        return
-
-    # ── Market regime (v1.0.1: uses cached markets) ──────────────────────
-    regime = detect_market_regime(config, markets_cache=_markets_cache)
-    log(f"Market regime: {regime}")
-
-    # ── Score each candidate ─────────────────────────────────────────────
-    best_signal = None
-    best_score = -999
-
-    for asset in candidates:
-        # Skip if already positioned
-        if asset.upper() in active_coins:
-            continue
-        # Skip if on cooldown
-        if is_on_cooldown(asset):
-            continue
-        # Skip xyz (double-check)
-        if is_xyz(asset):
+        if not token:
             continue
 
-        # v1.0.1: Fetch asset data ONCE per candidate, pass to all sources
-        asset_data = mcporter_call("market_get_asset_data", {"asset": asset})
-        if not asset_data or not isinstance(asset_data, dict):
-            continue
-
-        # Source 1: FDD (primary gate)
-        fdd = source_fdd(asset, config, asset_data=asset_data)
-        if not fdd.get("signal") or fdd["score"] == 0:
-            continue  # No FDD signal = no trade
-
-        direction = fdd.get("direction")
-        if not direction:
-            continue
-
-        log(f"  {asset}: FDD={fdd['score']} ({fdd['signal']}, conf={fdd.get('confidence', 0)})")
-
-        # Source 2: LCD
-        lcd = source_lcd(asset, direction, config, asset_data=asset_data)
-
-        # Source 3: OIS
-        ois = source_ois(asset, direction, config, asset_data=asset_data)
-
-        # Source 4: MED
-        med = source_med(asset, direction, config, asset_data=asset_data)
-
-        # Source 5: EM (uses cached leaderboard, not asset_data)
-        em = source_em(asset, direction, config, markets_cache=_markets_cache)
-
-        # Source 6: OPP
-        opp = source_opp(asset, direction, config, asset_data=asset_data)
-
-        # Total score
-        total = fdd["score"] + lcd["score"] + ois["score"] + med["score"] + em["score"] + opp["score"]
-
-        breakdown = {
-            "fdd": fdd["score"], "lcd": lcd["score"], "ois": ois["score"],
-            "med": med["score"], "em": em["score"], "opp": opp["score"],
+        sm_map[token] = {
+            "direction": str(m.get("direction", "")).upper(),
+            "pct": safe_float(m.get("pct_of_top_traders_gain", 0)),
+            "traders": int(m.get("trader_count", 0)),
+            "price_chg_4h": safe_float(m.get("token_price_change_pct_4h", 0)),
+            "price_chg_1h": safe_float(m.get("token_price_change_pct_1h",
+                                       m.get("price_change_1h", 0))),
         }
 
-        log(f"  {asset}: Total={total} "
-            f"(fdd={fdd['score']}, lcd={lcd['score']}, ois={ois['score']}, "
-            f"med={med['score']}, em={em['score']}, opp={opp['score']})")
+    return sm_map
 
-        # OPP counter-trend hard skip
-        if opp["score"] <= -999:
-            log(f"  {asset}: OPP counter-trend. SKIP.")
+
+# ═══════════════════════════════════════════════════════════════
+# SQUEEZE DETECTION
+# ═══════════════════════════════════════════════════════════════
+
+def detect_squeezes(funding_map, sm_map):
+    """Find assets where funding crowd is about to get squeezed.
+
+    Logic:
+    1. Funding extreme → crowd is piled one direction
+    2. SM positioned OPPOSITE to the crowd → smart money disagrees
+    3. Price moving against the crowd → squeeze is starting
+    4. Sufficient volume → can exit cleanly
+    """
+
+    candidates = []
+
+    for asset, fdata in funding_map.items():
+        funding = fdata["funding"]
+        volume = fdata["volume"]
+
+        # Skip low funding — no crowd signal
+        if abs(funding) < FUNDING_MINIMUM:
             continue
 
-        # Resolve tier
-        tier = resolve_tier(total, config)
-        if not tier:
+        # Liquidity gate
+        if volume < MIN_DAILY_VOLUME:
             continue
 
-        # Check tier enabled (config + self-learning)
-        if not is_tier_enabled(tier, runtime, config):
-            log(f"  {asset}: Tier {tier} disabled. SKIP.")
+        # Ban list
+        if asset in BANNED_ASSETS:
             continue
 
-        # Regime filter
-        if regime == "MIXED" and tier not in ("MEDIUM", "HIGH"):
-            continue
-        if regime == "RANGE" and tier != "HIGH":
+        # Determine crowd direction from funding
+        # Positive funding = longs pay shorts = crowd is LONG
+        # Negative funding = shorts pay longs = crowd is SHORT
+        if funding > 0:
+            crowd_direction = "LONG"
+            squeeze_direction = "SHORT"  # We go against the crowd
+        else:
+            crowd_direction = "SHORT"
+            squeeze_direction = "LONG"
+
+        # Get SM data for this asset
+        sm = sm_map.get(asset)
+        if not sm:
             continue
 
-        # Track best
-        if total > best_score:
-            best_score = total
-            best_signal = {
+        # SM must have meaningful presence
+        if sm["pct"] < MIN_SM_PCT or sm["traders"] < MIN_SM_TRADERS:
+            continue
+
+        # SM must be positioned AGAINST the crowd (or at least not with them)
+        sm_direction = sm["direction"]
+        sm_against_crowd = sm_direction == squeeze_direction
+
+        if not sm_against_crowd:
+            continue  # SM agrees with crowd — no squeeze
+
+        # Price starting to move against the crowd (squeeze beginning)
+        p4h = sm["price_chg_4h"]
+        p1h = sm["price_chg_1h"]
+        price_against_crowd = False
+        if squeeze_direction == "SHORT" and p4h < 0:
+            price_against_crowd = True
+        elif squeeze_direction == "LONG" and p4h > 0:
+            price_against_crowd = True
+
+        candidates.append({
+            "asset": asset,
+            "squeeze_direction": squeeze_direction,
+            "crowd_direction": crowd_direction,
+            "funding": funding,
+            "volume": volume,
+            "sm_direction": sm_direction,
+            "sm_pct": sm["pct"],
+            "sm_traders": sm["traders"],
+            "price_chg_4h": p4h,
+            "price_chg_1h": p1h,
+            "price_against_crowd": price_against_crowd,
+        })
+
+    return candidates
+
+
+# ═══════════════════════════════════════════════════════════════
+# SCORING
+# ═══════════════════════════════════════════════════════════════
+
+def score_squeeze(cand):
+    """Score a squeeze candidate. Returns (score, reasons)."""
+    score = 0
+    reasons = []
+
+    # ── 1. Funding extremity (0-3 points) ────────────────────
+    abs_funding = abs(cand["funding"])
+    if abs_funding >= FUNDING_VERY_EXTREME:
+        score += 3
+        reasons.append(f"EXTREME_FUNDING {cand['funding']*100:.4f}%/hr")
+    elif abs_funding >= FUNDING_EXTREME:
+        score += 2
+        reasons.append(f"HIGH_FUNDING {cand['funding']*100:.4f}%/hr")
+    elif abs_funding >= FUNDING_MINIMUM:
+        score += 1
+        reasons.append(f"ELEVATED_FUNDING {cand['funding']*100:.4f}%/hr")
+
+    # ── 2. SM conviction against crowd (0-3 points) ──────────
+    sm_pct = cand["sm_pct"]
+    sm_traders = cand["sm_traders"]
+    if sm_pct >= 10:
+        score += 3
+        reasons.append(f"SM_STRONG_AGAINST {sm_pct:.1f}% ({sm_traders}t) {cand['sm_direction']}")
+    elif sm_pct >= 5:
+        score += 2
+        reasons.append(f"SM_AGAINST {sm_pct:.1f}% ({sm_traders}t) {cand['sm_direction']}")
+    else:
+        score += 1
+        reasons.append(f"SM_POSITIONED {sm_pct:.1f}% ({sm_traders}t) {cand['sm_direction']}")
+
+    # ── 3. Price moving against crowd (0-2 points) ───────────
+    if cand["price_against_crowd"]:
+        p4h = abs(cand["price_chg_4h"])
+        if p4h >= 2.0:
+            score += 2
+            reasons.append(f"SQUEEZE_ACTIVE {cand['price_chg_4h']:+.1f}% 4H")
+        elif p4h >= 0.5:
+            score += 1
+            reasons.append(f"SQUEEZE_STARTING {cand['price_chg_4h']:+.1f}% 4H")
+    else:
+        # Price not yet moving — early signal, lower conviction
+        reasons.append(f"PRICE_FLAT {cand['price_chg_4h']:+.2f}% 4H (pre-squeeze)")
+
+    # ── 4. 1H momentum confirming (0-1 point) ────────────────
+    p1h = cand["price_chg_1h"]
+    squeeze_dir = cand["squeeze_direction"]
+    if squeeze_dir == "SHORT" and p1h < -0.2:
+        score += 1
+        reasons.append(f"1H_CONFIRMS {p1h:.2f}%")
+    elif squeeze_dir == "LONG" and p1h > 0.2:
+        score += 1
+        reasons.append(f"1H_CONFIRMS +{p1h:.2f}%")
+
+    # ── 5. Volume (0-1 point) ────────────────────────────────
+    vol = cand["volume"]
+    if vol >= 100_000_000:
+        score += 1
+        reasons.append(f"HIGH_VOLUME ${vol/1e6:.0f}M")
+
+    return score, reasons
+
+
+# ═══════════════════════════════════════════════════════════════
+# TRADE COUNTER & COOLDOWN
+# ═══════════════════════════════════════════════════════════════
+
+def load_trade_counter():
+    p = os.path.join(cfg.STATE_DIR, "trade-counter.json")
+    if os.path.exists(p):
+        try:
+            with open(p) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {"date": now_date(), "entries": 0}
+
+
+def save_trade_counter(tc):
+    if tc.get("date") != now_date():
+        tc = {"date": now_date(), "entries": 0}
+    cfg.atomic_write(os.path.join(cfg.STATE_DIR, "trade-counter.json"), tc)
+
+
+def is_on_cooldown(asset):
+    p = os.path.join(cfg.STATE_DIR, "cooldowns.json")
+    if not os.path.exists(p):
+        return False
+    try:
+        with open(p) as f:
+            cooldowns = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return False
+    entry = cooldowns.get(asset)
+    if not entry:
+        return False
+    return time.time() < entry.get("until", 0)
+
+
+# ═══════════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════════
+
+def run():
+    wallet, strategy_id = cfg.get_wallet_and_strategy()
+    if not wallet:
+        cfg.output({"status": "ok", "heartbeat": "NO_REPLY", "note": "no wallet"})
+        return
+
+    # ── Check existing positions (NO thesis exit) ─────────────
+    account_value, positions = cfg.get_positions(wallet)
+    if account_value <= 0:
+        cfg.output({"status": "ok", "heartbeat": "NO_REPLY", "note": "cannot read account"})
+        return
+
+    if len(positions) >= MAX_POSITIONS:
+        cfg.output({"status": "ok", "heartbeat": "NO_REPLY",
+                     "note": f"{len(positions)} positions active. DSL manages exit.",
+                     "_v2_no_thesis_exit": True})
+        return
+
+    # ── Trade counter ─────────────────────────────────────────
+    tc = load_trade_counter()
+    if tc.get("date") != now_date():
+        tc = {"date": now_date(), "entries": 0}
+        save_trade_counter(tc)
+    if tc.get("entries", 0) >= MAX_DAILY_ENTRIES:
+        cfg.output({"status": "ok", "heartbeat": "NO_REPLY",
+                    "note": f"Daily entry limit ({MAX_DAILY_ENTRIES}) reached"})
+        return
+
+    # ── Fetch data (2 API calls) ──────────────────────────────
+    funding_map = fetch_funding_rates()
+    sm_map = fetch_sm_data()
+
+    if not funding_map or not sm_map:
+        cfg.output({"status": "ok", "heartbeat": "NO_REPLY",
+                    "note": "Failed to fetch funding or SM data"})
+        return
+
+    # ── Detect squeezes ───────────────────────────────────────
+    candidates = detect_squeezes(funding_map, sm_map)
+
+    if not candidates:
+        cfg.output({"status": "ok", "heartbeat": "NO_REPLY",
+                    "note": f"No squeeze signals. {len(funding_map)} assets scanned."})
+        return
+
+    # ── Score and filter ──────────────────────────────────────
+    for cand in candidates:
+        cand["score"], cand["reasons"] = score_squeeze(cand)
+
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+
+    for cand in candidates:
+        asset = cand["asset"]
+
+        if cand["score"] < MIN_SCORE:
+            continue
+        if is_on_cooldown(asset):
+            continue
+        if any(p["coin"].upper() == asset.upper() for p in positions):
+            continue
+
+        # ── Entry ─────────────────────────────────────────────
+        margin = round(account_value * MARGIN_PCT, 2)
+
+        tc["entries"] = tc.get("entries", 0) + 1
+        save_trade_counter(tc)
+
+        cfg.output({
+            "status": "ok",
+            "signal": {
                 "asset": asset,
-                "direction": direction,
-                "score": total,
-                "tier": tier,
-                "breakdown": breakdown,
-                "fddSignal": fdd.get("signal"),
-                "fddConfidence": fdd.get("confidence", 0),
-                "regime": regime,
-                "sources": {
-                    "fdd": fdd, "lcd": lcd, "ois": ois,
-                    "med": med, "em": em, "opp": opp,
-                },
-            }
-
-    if not best_signal:
-        output(no_reply("No candidates reached conviction threshold"))
+                "direction": cand["squeeze_direction"],
+                "score": cand["score"],
+                "mode": "SQUEEZE",
+                "reasons": cand["reasons"],
+                "crowdDirection": cand["crowd_direction"],
+                "funding": cand["funding"],
+                "smPct": cand["sm_pct"],
+                "smTraders": cand["sm_traders"],
+                "volume": cand["volume"],
+                "priceChg4h": cand["price_chg_4h"],
+            },
+            "entry": {
+                "asset": asset,
+                "direction": cand["squeeze_direction"],
+                "leverage": DEFAULT_LEVERAGE,
+                "margin": margin,
+                "orderType": "FEE_OPTIMIZED_LIMIT",
+            },
+            "constraints": {
+                "maxPositions": MAX_POSITIONS,
+                "maxLeverage": MAX_LEVERAGE,
+                "maxDailyEntries": MAX_DAILY_ENTRIES,
+                "cooldownMinutes": COOLDOWN_MINUTES,
+                "xyzBanned": XYZ_BANNED,
+                "_v2_no_thesis_exit": True,
+                "_note": "DSL managed by plugin runtime. Scanner does NOT manage exits.",
+            },
+            "_hydra_version": "2.0",
+        })
         return
 
-    # ── Build entry ──────────────────────────────────────────────────────
-    asset = best_signal["asset"]
-    direction = best_signal["direction"]
-    score = best_signal["score"]
-    tier = best_signal["tier"]
+    cfg.output({"status": "ok", "heartbeat": "NO_REPLY",
+                "note": f"{len(candidates)} squeeze candidates, none passed score {MIN_SCORE}. "
+                        f"Top: {candidates[0]['asset']} score {candidates[0]['score']} "
+                        f"({', '.join(candidates[0]['reasons'][:3])})"
+                        if candidates else "No candidates"})
 
-    # Stack guard: verify no on-chain position for this asset
-    if asset.upper() in active_coins:
-        log(f"Stack guard: {asset} already has position. NO_REPLY.")
-        output(no_reply(f"Stack guard: {asset} already positioned"))
-        return
-
-    sizing = calculate_sizing(score, tier, asset, wallet_balance, config, markets_cache=_markets_cache)
-    leverage = sizing["leverage"]
-    margin_pct = sizing["marginPercent"]
-
-    log(f"*** SIGNAL: {direction.upper()} {asset} "
-        f"(score={score}, tier={tier}, lev={leverage}x, margin={margin_pct}%) ***")
-
-    # Update runtime
-    runtime["entriesThisDay"] += 1
-    save_runtime(runtime)
-
-    result = {
-        "status": "ok",
-        "signal": {
-            "asset": asset,
-            "direction": direction,
-            "score": score,
-            "tier": tier,
-            "breakdown": best_signal["breakdown"],
-            "fddSignal": best_signal["fddSignal"],
-            "fddConfidence": best_signal["fddConfidence"],
-            "regime": regime,
-        },
-        "entry": {
-            "asset": asset,
-            "direction": direction,
-            "leverage": leverage,
-            "marginPercent": margin_pct,
-            "marginUsd": sizing["margin"],
-            "orderType": config.get("sizing", {}).get("orderType", "FEE_OPTIMIZED_LIMIT"),
-        },
-        "constraints": {
-            "maxPositions": max_positions,
-            "cooldownMinutes": config.get("risk", {}).get("cooldownMinutes", 120),
-            "xyzBanned": True,
-        },
-    }
-
-    output(result)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Entry Point
-# ═══════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     try:
         run()
     except Exception as e:
-        log(f"CRITICAL ERROR: {e}")
+        cfg.log(f"CRITICAL ERROR: {e}")
         import traceback
         traceback.print_exc(file=sys.stderr)
-        output({"status": "error", "error": str(e)})
-        sys.exit(1)
+        cfg.output({"status": "error", "error": str(e)})

@@ -1,12 +1,9 @@
 ---
-name: hydra
+name: hydra-strategy
 description: >-
-  HYDRA v2.0 — Multi-source squeeze scanner. Detects crowded positions across
-  200+ crypto assets using 6 independent signal sources (FDD, LCD, OIS, MED, EM,
-  OPP), scores candidates on a 0-110 scale, enters with conviction-based sizing,
-  and manages positions with trailing stops. Includes independent
-  monitor watchdog (3rd cron) for account health, signal reversal detection,
-  and force-close capabilities. XYZ banned. Leverage capped at 10x.
+  HYDRA v2.0 — Squeeze Detector. Finds crowded trades about to unwind.
+  Funding extreme + SM positioned against the crowd + price starting to move.
+  Goes opposite to the funding crowd. Only liquid assets ($20M+ volume).
   DSL exit managed by plugin runtime via runtime.yaml.
 license: MIT
 metadata:
@@ -14,152 +11,95 @@ metadata:
   version: "2.0"
   platform: senpi
   exchange: hyperliquid
-  config_source: liquidity-hunter-v3-refactored
   requires:
     - senpi-trading-runtime
 ---
 
-# 🐉 HYDRA v2.0 — Multi-Source Squeeze Scanner
+# 🐉 HYDRA v2.0 — Squeeze Detector
 
-Six signal sources. One conviction score. Cut losers fast, let winners run to Tier 4.
+Find the crowd. Go against them. Ride the cascade.
 
 ---
 
-## ⛔ CRITICAL AGENT RULES — READ BEFORE ANYTHING ELSE
+## ⛔ CRITICAL AGENT RULES
 
-### RULE 1: Install path is `/data/workspace/skills/hydra/`
+### RULE 1: Install path is `/data/workspace/skills/hydra-strategy/`
 
-The skill MUST be installed to exactly this path.
+### RULE 2: THE SCANNER DOES NOT EXIT POSITIONS
 
-### RULE 2: MAX 3 POSITIONS — check before EVERY entry
+DSL is the ONLY exit mechanism. v1.0 had missing wallet fields causing
+positions to run 3+ days unprotected. v2.0 uses the plugin runtime.
 
-Before opening ANY position, call `strategy_get_clearinghouse_state` and count open positions. If positions >= 3, SKIP. The scanner also checks this, but you MUST verify independently.
-
-### RULE 3: Scanner output is AUTHORITATIVE — never override from memory
-
-If the scanner says leverage 5x, you use 5x. Not 10x from memory. Not 50x from "what worked before." The scanner calculates leverage dynamically based on conviction tier and asset max leverage, capped at 10x. The scanner is the single source of truth.
+### RULE 3: MAX 2 POSITIONS at a time
 
 ### RULE 4: Verify runtime is installed on every session start
 
-Run `openclaw senpi runtime list`. Runtime must be listed. The position tracker and DSL exit are handled by the plugin runtime.
+### RULE 5: Never modify parameters.
 
-### RULE 5: Never retry timed-out position creation
+### RULE 6: MAX 4 ENTRIES PER DAY
 
-If `create_position` times out, check clearinghouse state. If position exists, the position tracker will pick it up automatically. If not, wait for next scan.
+### RULE 7: 120-minute per-asset cooldown
 
-### RULE 6: Never modify your own configuration
-
-Do not adjust leverage, margin, scoring weights, tier thresholds, or any other parameter. Every agent that self-modified made things worse.
-
-### RULE 7: Respect the monitor's force-close actions
-
-If the monitor outputs a `FORCE_CLOSE` or `FORCE_CLOSE_ALL` action, execute it immediately. Do not second-guess, delay, or override the monitor. It runs independently for a reason.
+### RULE 8: NEVER trade illiquid assets (BLUR, STABLE, DOOD, DEGEN, etc.)
 
 ---
 
-## Core Thesis
+## v1.0 Post-Mortem
 
-When too many traders pile into one side (usually shorts), they become vulnerable to a liquidation squeeze. HYDRA detects this crowding across 6 independent signals, waits for sufficient confluence, and enters the counter-trade. The edge is cutting losers fast and letting winners run to upper trailing tiers — a "Tier 4 hunter."
+- 30 trades, 20% win rate, -$161 loss
+- Only 2 of 6 signal sources ever fired (FDD + LCD at minimum 55 conviction)
+- Traded illiquid garbage (BLUR, STABLE, DOOD) with wide spreads
+- 100% LONG bias — missed short squeezes entirely
+- FDD threshold bug (0.0001 instead of 0.001) let weak signals through
+- Missing wallet fields left positions unprotected for 3+ days
 
----
+## What v2.0 Fixes
 
-## Signal Sources (6)
-
-### Source 1: FDD — Funding Divergence Detector (0-30 pts, PRIMARY GATE)
-
-No trade is considered without an FDD signal. Analyzes funding rate to detect SHORT_CROWDING (deeply negative → go long) or LONG_CROWDING (deeply positive → go short). Confidence from percentile extremity + persistence (consecutive hours crowded).
-
-### Source 2: LCD — Liquidation Cascade Detector (0-25 pts)
-
-Estimates liquidation cluster proximity from OI, funding, and price action. Detects SHORT_LIQUIDATION_RISK / LONG_LIQUIDATION_RISK. +10 cascade bonus if price is already moving through the cluster.
-
-### Source 3: OIS — Open Interest Surge Detector (0-20 pts)
-
-Tracks OI changes via local snapshots (state/oi-history/). Detects OI_SURGE (new leverage piling in) and OI_UNWIND. Requires history accumulation — first few scans will have insufficient data.
-
-### Source 4: MED — Momentum Exhaustion Detector (-10 to +5 pts)
-
-Dual role: +5 if momentum intact (CLEAR), -5 if fading (FADE), -10 if exhausted (EXHAUSTED). Also drives market regime detection (TRENDING/MIXED/RANGE).
-
-### Source 5: EM — Emerging Movers (-8 to +15 pts)
-
-SM consensus from leaderboard_get_markets + leaderboard_get_top. +15 for strong same-direction confirmation (conviction 3+, 50+ traders). -8 for strong opposing SM.
-
-### Source 6: OPP — Opportunity Scanner (-999 to +10 pts)
-
-Final gate: hourly trend alignment. Counter-trend = hard skip (-999). Multi-pillar scoring: price alignment, volume, spread quality.
+| v1.0 | v2.0 |
+|---|---|
+| 6 sources, only 2 fired | 2 clean sources: funding + SM divergence |
+| Min conviction 55 | Min score 7 with multi-source confirmation |
+| Any asset | $20M+ daily volume only |
+| 100% LONG | Direction-agnostic (goes against funding crowd) |
+| FDD threshold bug | Clean funding threshold |
+| Missing wallet fields | Plugin runtime handles everything |
 
 ---
 
-## Conviction Tiers & Sizing
+## The Squeeze Thesis
 
-```
-Score = FDD(0-30) + LCD(0-25) + OIS(0-20) + MED(-10 to +5) + EM(-8 to +15) + OPP(-999 to +10)
-Maximum possible: 110
-```
+1. **Funding extreme** → crowd is piled one direction and paying for it
+2. **SM against the crowd** → smart money disagrees with the crowd
+3. **Price starting to move** → the squeeze is beginning
+4. **Hydra enters opposite to the crowd** → rides the liquidation cascade
 
-| Tier | Score | Status | Margin | Leverage |
-|---|---|---|---|---|
-| NO_TRADE | < 55 | Blocked | — | — |
-| LOW | 40-54 | PERMANENTLY DISABLED | — | — |
-| MEDIUM | 55-74 | Active | base × 60% | 50-65% of asset max, cap 10x |
-| HIGH | 75-110 | Active | base × 100% | 70-85% of asset max, cap 10x |
-
-Base margin = wallet × 15%. Per-asset cap 25%. Total deployed cap 55%.
+Positive funding = crowd is LONG → Hydra goes SHORT.
+Negative funding = crowd is SHORT → Hydra goes LONG.
 
 ---
 
-## Exit Management
+## Scoring (10 points max)
 
-DSL exit is handled by the plugin runtime via `runtime.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `runtime.yaml` for configuration details.
+| Signal | Points | Description |
+|---|---|---|
+| Funding extremity | 1-3 | How crowded is the trade? |
+| SM against crowd | 1-3 | How committed is smart money against the crowd? |
+| Price moving against crowd | 0-2 | Is the squeeze starting? |
+| 1H momentum confirms | 0-1 | Short-term follow-through |
+| Volume | 0-1 | High volume = more liquidations |
 
-**Monitor positions:**
-- `openclaw senpi dsl positions` — list all DSL-tracked positions
-- `openclaw senpi dsl inspect <ASSET>` — full position details
-
----
-
-## Monitor Watchdog
-
-Runs independently. Checks:
-1. **Account health** — drawdown cap 25%
-2. **Capital exposure** — deployed margin vs 60% threshold
-3. **Signal reversal** — re-runs FDD: if original thesis flipped, force-close
-4. **Daily loss limit** — 10% cumulative
-5. **Consecutive losses** — 3 → cooldown gate
-
-Can output: FORCE_CLOSE (single position), FORCE_CLOSE_ALL (account health), GATE_CLOSE/GATE_COOLDOWN.
-
----
-
-## Self-Learning
-
-Per-tier win/loss stats tracked in runtime.json. If a tier's win rate drops below 15% over 8+ trades, that tier is auto-disabled. LOW tier is permanently disabled (0% WR proven in production).
+**Min score: 7.** Requires strong funding + SM divergence + at least one confirming signal.
 
 ---
 
 ## Runtime Setup
 
-**Step 1:** Set your strategy wallet address in runtime.yaml:
 ```bash
-sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/hydra/runtime.yaml
-```
-Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
-
-**Step 2:** Set telegram chat ID for notifications:
-```bash
-sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/hydra/runtime.yaml
-```
-Replace `<CHAT_ID>` with the actual Telegram chat ID.
-
-**Step 3:** Install the runtime:
-```bash
-openclaw senpi runtime create --path /data/workspace/skills/hydra/runtime.yaml
-```
-
-**Step 4:** Verify:
-```bash
+sed -i 's/${WALLET_ADDRESS}/<WALLET>/' /data/workspace/skills/hydra-strategy/runtime.yaml
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/hydra-strategy/runtime.yaml
+openclaw senpi runtime create --path /data/workspace/skills/hydra-strategy/runtime.yaml
 openclaw senpi runtime list
+openclaw senpi status
 ```
 
 ---
@@ -167,57 +107,27 @@ openclaw senpi runtime list
 ## Bootstrap Gate
 
 On EVERY session start, check `config/bootstrap-complete.json`. If missing:
-1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for runtime management and DSL position inspection.
+1. Read senpi-trading-runtime skill
 2. Verify Senpi MCP
-3. Set wallet in runtime.yaml: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/hydra/runtime.yaml`
-4. Set Telegram in runtime.yaml: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/hydra/runtime.yaml`
-5. Install runtime: `openclaw senpi runtime create --path /data/workspace/skills/hydra/runtime.yaml`
-6. Verify runtime installed: `openclaw senpi runtime list`
-7. Remove old DSL cron (if upgrading): run `openclaw crons list`, delete any cron containing `dsl-v5.py` via `openclaw crons delete <id>`
-8. Create scanner cron (5 min, main)
-8. Create monitor cron (5 min, isolated)
-9. Write `config/bootstrap-complete.json`
-10. Send: "🐉 HYDRA v2.0 online. 6-source squeeze scanner + monitor watchdog. FDD primary gate. DSL managed by plugin runtime. Silence = no squeeze."
-
-If bootstrap exists, still verify runtime and scanner cron on every session start.
+3. Set wallet and telegram in runtime.yaml
+4. Install runtime
+5. Verify: `openclaw senpi runtime list` and `openclaw senpi status`
+6. Create scanner cron (5 min, main)
+7. Write `config/bootstrap-complete.json`
+8. Send: "🐉 HYDRA v2.0 online. Hunting squeezes. Silence = no crowding."
 
 ---
 
-## Risk Management
+## Risk
 
 | Rule | Value |
 |---|---|
-| Max positions | 3 |
-| Max entries/day | 6 |
-| Leverage cap | 10x |
-| Total deployed cap | 55% of wallet |
-| Per-asset cap | 25% of wallet |
-| Daily loss limit | 10% |
-| Drawdown cap | 25% |
-| Per-asset cooldown | 120 min |
-| Consecutive losses | 3 → 30 min cooldown |
-| XYZ equities | Banned |
-| LOW tier | Permanently disabled |
-
----
-
-## Notification Policy
-
-**ONLY alert:** Position OPENED (asset, direction, score, tier, FDD signal), position CLOSED (P&L, reason), monitor force-close (asset, reason), risk guardian triggered, critical error.
-
-**NEVER alert:** Scanner found no squeeze signals, signals filtered, monitor all-clear, any reasoning.
-
----
-
-## Expected Behavior
-
-| Metric | Expected |
-|---|---|
-| Trades/day | 2-5 (some zero-trade days in RANGE regime) |
-| Win rate | ~40% |
-| Avg winner | 3-5x larger than avg loser (Tier 4 hunter) |
-| Max concurrent | 3 positions |
-| Scan cycle | 5 min scanner, 5 min monitor |
+| Max positions | 2 |
+| Max entries/day | 4 |
+| Leverage | 7x |
+| Min daily volume | $20M |
+| Cooldown | 120 min |
+| Banned assets | BLUR, STABLE, DOOD, DEGEN |
 
 ---
 
@@ -225,15 +135,13 @@ If bootstrap exists, still verify runtime and scanner cron on every session star
 
 | File | Purpose |
 |---|---|
-| `scripts/hydra-scanner.py` | 6-source scoring + signal output |
-| `scripts/hydra-monitor.py` | Independent watchdog (account health, reversal, loss limits) |
-| `scripts/hydra_config.py` | Config helper (mcporter CLI, clearinghouse parsing, cooldowns, OI history) |
-| `config/hydra-config.json` | All configurable parameters |
-| `runtime.yaml` | Runtime config for plugin (DSL exit + position tracker) |
+| `scripts/hydra-scanner.py` | Squeeze detector — funding crowd vs SM divergence |
+| `scripts/hydra_config.py` | Config helper |
+| `config/hydra-config.json` | Wallet, strategy ID |
+| `runtime.yaml` | Runtime YAML for DSL plugin |
 
 ---
 
 ## License
 
 MIT — Built by Senpi (https://senpi.ai).
-Source: https://github.com/Senpi-ai/senpi-skills
