@@ -20,7 +20,7 @@ The core configuration block that defines the trading context:
 
 | Field | Description |
 |---|---|
-| `wallet` | The on-chain wallet address holding positions and executing trades. Set via `${WALLET_ADDRESS}` so credentials are not hardcoded. This is the actual trading wallet the runtime monitors and acts on. |
+| `wallet` | The on-chain wallet address holding positions and executing trades. Keep this as `${WALLET_ADDRESS}`; the skill resolves and auto-fills it at link time by validating an existing strategy wallet (`strategy_list`) or creating a new strategy wallet (`strategy_create_custom_strategy`) and then linking that strategy wallet to the runtime. This is the actual trading wallet the runtime monitors and acts on. |
 | `enabled` | Boolean flag to activate or pause the skill. When `false`, the runtime loads the config but takes no action. |
 
 ---
