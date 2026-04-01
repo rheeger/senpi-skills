@@ -1,421 +1,444 @@
 #!/usr/bin/env python3
-# Senpi CHEETAH Scanner v1.0
+# Senpi CHEETAH Scanner v2.0
 # Copyright 2026 Senpi (https://senpi.ai)
 # Licensed under MIT
-# Source: https://github.com/Senpi-ai/senpi-skills
-"""CHEETAH Scanner — HYPE Alpha Hunter.
+"""CHEETAH v2.0 — The Ultimate HYPE Predator.
 
-Single-asset focus on HYPE. Reads every signal available — SM positioning,
-funding, OI, multi-timeframe trend, volume, BTC correlation — to build
-highest-conviction HYPE entries at 5-10x leverage.
+Single asset: HYPE. Every signal source. Maximum patience.
 
-HYPE is more volatile than BTC: bigger moves, sharper reversals, lower max
-leverage. Tiers are wider early, BTC alignment is a score booster
-(not a gate), and funding signals are stronger because HYPE funding
-tends to extreme faster.
+HYPE is unique: Hyperliquid's native token, narrative-driven, lower BTC
+correlation, routinely wicks 5-10% intraday, SM positioning often extreme.
 
+v1.0 had zero trades because the entry gates were too strict for choppy
+conditions (required 1H to confirm 4H while SM was opposing). v2.0 keeps
+high conviction requirements but adds flexibility:
+
+- SM COMMITMENT gate: SM must be 80%+ one direction (not just aligned)
+- BTC is a booster, never a gate
+- Funding extreme is a bonus signal, not a block
+- 4H trend required, 1H confirms for bonus points but doesn't block
+- OI building = conviction growing
+- Volume surge = the move is real
+
+Score 8+ to enter. Leverage 5-7x (HYPE is volatile enough).
+Max 3 entries/day. 120 min cooldown.
+
+DSL exit managed by plugin runtime. Scanner does NOT manage exits.
+
+Uses: leaderboard_get_markets + market_get_asset_data
 Runs every 3 minutes.
 """
 
+import json
 import sys
 import os
+import time
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cheetah_config as cfg
 
 
-# ─── Technical Helpers ────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+# HARDCODED CONSTANTS
+# ═══════════════════════════════════════════════════════════════
 
-def price_momentum(candles, n_bars=1):
-    if len(candles) < n_bars + 1:
-        return 0
-    old = float(candles[-(n_bars + 1)].get("close", candles[-(n_bars + 1)].get("c", 0)))
-    new = float(candles[-1].get("close", candles[-1].get("c", 0)))
-    if old == 0:
-        return 0
-    return ((new - old) / old) * 100
+ASSET = "HYPE"                      # Single asset — nothing else
+MIN_LEVERAGE = 5
+MAX_LEVERAGE = 7                    # HYPE is volatile — 7x max
+DEFAULT_LEVERAGE = 7
+MAX_POSITIONS = 1                   # One HYPE position at a time
+MAX_DAILY_ENTRIES = 3               # Patient — 3 max
+COOLDOWN_MINUTES = 120
+MARGIN_PCT = 0.25                   # 25% of account
+MIN_SCORE = 8                       # High conviction required
+XYZ_BANNED = True
 
+# SM commitment thresholds — HYPE needs extreme SM conviction
+MIN_SM_PCT = 3.0                    # Minimum SM concentration
+MIN_SM_TRADERS = 15                 # HYPE has fewer SM traders than BTC/ETH
+SM_COMMITMENT_PCT = 80              # SM must be 80%+ one direction
 
-def trend_structure(candles, lookback=6):
-    if len(candles) < lookback:
-        return "NEUTRAL", 0
-    lows = [float(c.get("low", c.get("l", 0))) for c in candles[-lookback:]]
-    highs = [float(c.get("high", c.get("h", 0))) for c in candles[-lookback:]]
-    higher_lows = sum(1 for i in range(1, len(lows)) if lows[i] > lows[i - 1])
-    lower_highs = sum(1 for i in range(1, len(highs)) if highs[i] < highs[i - 1])
-    total = lookback - 1
-    if higher_lows >= total * 0.6:
-        return "BULLISH", higher_lows / total
-    elif lower_highs >= total * 0.6:
-        return "BEARISH", lower_highs / total
-    return "NEUTRAL", 0
+# Funding thresholds
+FUNDING_EXTREME_THRESHOLD = 0.0003  # >0.03%/hr = extreme
+FUNDING_CONFIRMS_THRESHOLD = 0.0001 # >0.01%/hr = confirms pressure
 
 
-def volume_ratio(candles, lookback=10):
-    if len(candles) < lookback + 1:
-        return 1.0
-    vols = [float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles[-(lookback + 1):-1]]
-    avg = sum(vols) / len(vols) if vols else 1
-    latest = float(candles[-1].get("volume", candles[-1].get("v", candles[-1].get("vlm", 0))))
-    return latest / avg if avg > 0 else 1.0
+# ═══════════════════════════════════════════════════════════════
+# HELPERS
+# ═══════════════════════════════════════════════════════════════
+
+def safe_float(val, default=0.0):
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
 
 
-def volume_trend(candles, lookback=6):
-    if len(candles) < lookback + 2:
-        return 0
-    vols = [float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles[-(lookback + 2):]]
-    half = lookback // 2
-    recent = sum(vols[-half:]) / half if half > 0 else 1
-    earlier = sum(vols[:half]) / half if half > 0 else 1
-    if earlier == 0:
-        return 0
-    return ((recent - earlier) / earlier) * 100
+def now_date():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
-def calc_rsi(closes, period=14):
-    if len(closes) < period + 1:
-        return 50
-    gains, losses = [], []
-    for i in range(1, len(closes)):
-        d = closes[i] - closes[i - 1]
-        gains.append(max(0, d))
-        losses.append(max(0, -d))
-    g, l = gains[-period:], losses[-period:]
-    avg_g, avg_l = sum(g) / period, sum(l) / period
-    if avg_l == 0:
-        return 100.0
-    return 100.0 - (100.0 / (1.0 + avg_g / avg_l))
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
 
 
-# ─── HYPE-Specific Data ──────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+# SIGNAL SOURCES
+# ═══════════════════════════════════════════════════════════════
 
-def get_hype_full_picture():
-    data = cfg.mcporter_call("market_get_asset_data", asset="HYPE",
-                              candle_intervals=["5m", "15m", "1h", "4h"],
-                              include_funding=True, include_order_book=False)
-    if not data or not data.get("success"):
+def fetch_hype_sm_data():
+    """Get HYPE SM positioning from leaderboard."""
+    raw = cfg.mcporter_call("leaderboard_get_markets")
+    if not raw:
         return None
-    return data.get("data", data)
 
+    markets = []
+    if isinstance(raw, dict):
+        markets = raw.get("markets", raw.get("data", []))
+    elif isinstance(raw, list):
+        markets = raw
 
-def get_btc_macro():
-    """BTC trend as macro context — booster when aligned, penalty when opposing."""
-    data = cfg.mcporter_call("market_get_asset_data", asset="BTC",
-                              candle_intervals=["1h", "4h"],
-                              include_funding=False, include_order_book=False)
-    if not data or not data.get("success"):
-        return "NEUTRAL", 0, 0
-    candles_1h = data.get("data", {}).get("candles", {}).get("1h", [])
-    candles_4h = data.get("data", {}).get("candles", {}).get("4h", [])
-    trend_4h, strength = trend_structure(candles_4h)
-    mom_1h = price_momentum(candles_1h, 1) if len(candles_1h) >= 2 else 0
-    return trend_4h, strength, mom_1h
-
-
-def get_hype_sm_direction():
-    data = cfg.mcporter_call("leaderboard_get_markets")
-    if not data or not data.get("success"):
-        return None, 0, 0
-    markets = data.get("data", data)
-    if isinstance(markets, dict):
-        markets = markets.get("markets", markets.get("leaderboard", []))
     for m in markets:
-        if m.get("coin", m.get("asset", "")) == "HYPE":
-            long_pct = float(m.get("longPct", m.get("pctOfGainsLong", 50)))
-            trader_count = int(m.get("traderCount", m.get("numTraders", 0)))
-            if long_pct > 58:
-                return "LONG", long_pct, trader_count
-            elif long_pct < 42:
-                return "SHORT", 100 - long_pct, trader_count
-            return "NEUTRAL", 50, trader_count
-    return None, 0, 0
+        if not isinstance(m, dict):
+            continue
+        token = str(m.get("token", "")).upper()
+        if token == ASSET:
+            return {
+                "direction": str(m.get("direction", "")).upper(),
+                "pct": safe_float(m.get("pct_of_top_traders_gain", 0)),
+                "traders": int(m.get("trader_count", 0)),
+                "price_chg_4h": safe_float(m.get("token_price_change_pct_4h", 0)),
+                "price_chg_1h": safe_float(m.get("token_price_change_pct_1h",
+                                           m.get("price_change_1h", 0))),
+                "contrib_change": safe_float(m.get("contribution_pct_change_4h", 0)),
+                "rank": int(m.get("rank", m.get("position", 999))),
+            }
+    return None
 
 
-# ─── Thesis Builder (HYPE Only) ──────────────────────────────
-
-def build_hype_thesis(entry_cfg):
-    hype_data = get_hype_full_picture()
-    if not hype_data:
+def fetch_hype_market_data():
+    """Get HYPE funding, OI, volume from market data."""
+    data = cfg.mcporter_call("market_get_asset_data",
+                              asset=ASSET,
+                              candle_intervals=["1h"],
+                              include_funding=True)
+    if not data:
         return None
 
-    candles_5m = hype_data.get("candles", {}).get("5m", [])
-    candles_15m = hype_data.get("candles", {}).get("15m", [])
-    candles_1h = hype_data.get("candles", {}).get("1h", [])
-    candles_4h = hype_data.get("candles", {}).get("4h", [])
-    funding = float(hype_data.get("funding", 0))
-
-    if len(candles_5m) < 12 or len(candles_15m) < 8 or len(candles_1h) < 8 or len(candles_4h) < 6:
+    ad = data.get("data", data)
+    if not isinstance(ad, dict):
         return None
 
-    price = float(candles_5m[-1].get("close", candles_5m[-1].get("c", 0)))
+    ac = ad.get("asset_context", ad.get("assetContext", {}))
+    if not isinstance(ac, dict):
+        return {}
 
-    # ── REQUIRED: 4h trend structure ──────────────────────────
-    trend_4h, trend_strength_4h = trend_structure(candles_4h)
-    if trend_4h == "NEUTRAL":
-        return None
+    funding = safe_float(ac.get("funding", ac.get("fundingRate", 0)))
+    oi = safe_float(ac.get("openInterest", ac.get("oi", 0)))
+    volume_24h = safe_float(ac.get("dayNtlVlm", ac.get("volume24h", 0)))
+    prev_day_volume = safe_float(ac.get("prevDayNtlVlm", 0))
 
-    direction = "LONG" if trend_4h == "BULLISH" else "SHORT"
-
-    # ── REQUIRED: 1h trend agrees ─────────────────────────────
-    trend_1h, _ = trend_structure(candles_1h)
-    if trend_1h != trend_4h:
-        return None
-
-    # ── BTC macro context (booster, not a gate) ────────────────
-    # HYPE has independent catalysts — protocol revenue, vault flows, ecosystem
-    # growth. It can and does trend against BTC. BTC alignment is a confidence
-    # booster, not a requirement.
-    btc_trend, _, btc_mom_1h = get_btc_macro()
-    btc_aligned = (btc_trend == trend_4h)
-    btc_opposing = (btc_trend != "NEUTRAL" and btc_trend != trend_4h)
-
-    # ── REQUIRED: 15m momentum confirms ───────────────────────
-    mom_5m = price_momentum(candles_5m, 1)
-    mom_15m = price_momentum(candles_15m, 1)
-    mom_1h = price_momentum(candles_1h, 2)
-    mom_4h = price_momentum(candles_4h, 1)
-
-    min_mom_15m = entry_cfg.get("minMom15mPct", 0.2)
-    if direction == "LONG" and mom_15m < min_mom_15m:
-        return None
-    if direction == "SHORT" and mom_15m > -min_mom_15m:
-        return None
-
-    # ── SCORING ───────────────────────────────────────────────
-    score = 0
-    reasons = []
-
-    # 4h trend (3 pts)
-    score += 3
-    reasons.append(f"4h_{trend_4h.lower()}_{trend_strength_4h:.0%}")
-
-    # 1h confirms (2 pts)
-    score += 2
-    reasons.append(f"1h_confirms_{mom_1h:+.2f}%")
-
-    # BTC alignment (booster +2 / penalty -1 / neutral 0)
-    if btc_aligned:
-        score += 2
-        reasons.append(f"btc_aligned_{btc_trend.lower()}")
-    elif btc_opposing:
-        score -= 1
-        reasons.append(f"btc_opposing_{btc_trend.lower()}")
-        # Note: NOT a hard block — HYPE has independent catalysts
-
-    # 15m momentum strength
-    if abs(mom_15m) > min_mom_15m * 2:
-        score += 1
-        reasons.append(f"15m_strong_{mom_15m:+.2f}%")
-
-    # 5m alignment — all 4 TFs agree
-    if (direction == "LONG" and mom_5m > 0) or (direction == "SHORT" and mom_5m < 0):
-        score += 1
-        reasons.append("4TF_aligned")
-
-    # SM positioning (HYPE-specific — fewer traders means each signal is stronger)
-    sm_dir, sm_pct, sm_count = get_hype_sm_direction()
-    if sm_dir == direction:
-        score += 2
-        reasons.append(f"sm_aligned_{sm_pct:.0f}%_{sm_count}traders")
-        if sm_pct > 65:
-            score += 1
-            reasons.append("sm_strongly_tilted")
-    elif sm_dir and sm_dir != "NEUTRAL" and sm_dir != direction:
-        return None  # SM opposes — hard block
-
-    # Funding (HYPE funding goes extreme faster — stronger signal)
-    if (direction == "LONG" and funding < -0.001):
-        score += 2
-        reasons.append(f"funding_pays_longs_{funding:+.4f}")
-    elif (direction == "SHORT" and funding > 0.001):
-        score += 2
-        reasons.append(f"funding_pays_shorts_{funding:+.4f}")
-    elif (direction == "LONG" and funding > 0.008) or (direction == "SHORT" and funding < -0.004):
-        score -= 1
-        reasons.append(f"funding_crowded_{funding:+.4f}")
-
-    # Volume
-    vol_1h = volume_ratio(candles_1h)
-    if vol_1h >= entry_cfg.get("minVolRatio", 1.3):
-        score += 1
-        reasons.append(f"vol_{vol_1h:.1f}x")
-
-    vol_trend_1h = volume_trend(candles_1h)
-    if vol_trend_1h > 15:
-        score += 1
-        reasons.append(f"vol_rising_{vol_trend_1h:+.0f}%")
-
-    # OI proxy
-    vol_recent = sum(float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles_1h[-3:])
-    vol_earlier = sum(float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles_1h[-6:-3])
-    oi_proxy = ((vol_recent - vol_earlier) / vol_earlier * 100) if vol_earlier > 0 else 0
-    if oi_proxy > 10:
-        score += 1
-        reasons.append(f"oi_growing_{oi_proxy:+.0f}%")
-
-    # RSI
-    closes_1h = [float(c.get("close", c.get("c", 0))) for c in candles_1h]
-    rsi = calc_rsi(closes_1h)
-    if direction == "LONG" and rsi > entry_cfg.get("rsiMaxLong", 72):
-        return None
-    if direction == "SHORT" and rsi < entry_cfg.get("rsiMinShort", 28):
-        return None
-    if (direction == "LONG" and rsi < 50) or (direction == "SHORT" and rsi > 50):
-        score += 1
-        reasons.append(f"rsi_room_{rsi:.0f}")
-
-    # 4h momentum
-    if abs(mom_4h) > 2.0:
-        score += 1
-        reasons.append(f"4h_momentum_{mom_4h:+.1f}%")
+    # Volume ratio
+    vol_ratio = 0
+    if prev_day_volume > 0:
+        vol_ratio = volume_24h / prev_day_volume
 
     return {
-        "coin": "HYPE", "direction": direction, "score": score, "reasons": reasons,
-        "price": price, "trend_4h": trend_4h, "trend_1h": trend_1h,
-        "momentum": {"5m": mom_5m, "15m": mom_15m, "1h": mom_1h, "4h": mom_4h},
-        "btc_trend": btc_trend, "sm_direction": sm_dir, "funding": funding, "rsi": rsi,
+        "funding": funding,
+        "oi": oi,
+        "volume_24h": volume_24h,
+        "vol_ratio": vol_ratio,
     }
 
 
-# ─── Thesis Re-Evaluation ────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+# SCORING — 14-point system
+# ═══════════════════════════════════════════════════════════════
 
-def evaluate_hype_position(direction, entry_cfg):
-    hype_data = get_hype_full_picture()
-    if not hype_data:
-        return True, ["data_unavailable_hold"]
+def score_hype(sm_data, market_data):
+    """Score HYPE across all signal sources. Returns (score, reasons, direction)."""
+    if not sm_data:
+        return 0, ["NO_SM_DATA"], None
 
-    candles_1h = hype_data.get("candles", {}).get("1h", [])
-    candles_4h = hype_data.get("candles", {}).get("4h", [])
-    funding = float(hype_data.get("funding", 0))
+    score = 0
+    reasons = []
+    direction = sm_data["direction"]
 
-    if len(candles_4h) < 6:
-        return True, ["insufficient_data_hold"]
+    if direction not in ("LONG", "SHORT"):
+        return 0, ["NO_DIRECTION"], None
 
-    invalidations = []
+    # ── 1. SM COMMITMENT (0-4 points) ────────────────────────
+    # This is the primary signal. SM must be committed.
+    pct = sm_data["pct"]
+    traders = sm_data["traders"]
 
-    # 4h trend flipped?
-    trend_4h, _ = trend_structure(candles_4h)
-    if direction == "LONG" and trend_4h == "BEARISH":
-        invalidations.append("4h_trend_flipped_bearish")
-    elif direction == "SHORT" and trend_4h == "BULLISH":
-        invalidations.append("4h_trend_flipped_bullish")
+    if pct < MIN_SM_PCT or traders < MIN_SM_TRADERS:
+        return 0, [f"SM_WEAK ({pct:.1f}%, {traders}t)"], None
 
-    # BTC macro turned against us? (warning, not invalidation — HYPE has independent catalysts)
-    btc_trend, _, _ = get_btc_macro()
-    # Only flag if BTC is actively trending against AND HYPE's own 4h trend also broke
-    # BTC opposing alone is not enough to exit — HYPE runs independently
+    if pct >= 15:
+        score += 4
+        reasons.append(f"SM_DOMINANT {pct:.1f}% ({traders}t)")
+    elif pct >= 8:
+        score += 3
+        reasons.append(f"SM_STRONG {pct:.1f}% ({traders}t)")
+    elif pct >= 5:
+        score += 2
+        reasons.append(f"SM_SOLID {pct:.1f}% ({traders}t)")
+    else:
+        score += 1
+        reasons.append(f"SM_BASE {pct:.1f}% ({traders}t)")
 
-    # SM flipped?
-    sm_dir, _, _ = get_hype_sm_direction()
-    if sm_dir and sm_dir != "NEUTRAL" and sm_dir != direction:
-        invalidations.append(f"sm_flipped_{sm_dir}")
+    # ── 2. TREND ALIGNMENT (0-3 points) ──────────────────────
+    p4h = sm_data["price_chg_4h"]
+    p1h = sm_data["price_chg_1h"]
 
-    # Funding extreme?
-    threshold = entry_cfg.get("fundingExtremeThreshold", 0.015)
-    if direction == "LONG" and funding > threshold:
-        invalidations.append(f"funding_extreme_{funding:+.4f}")
-    elif direction == "SHORT" and funding < -threshold:
-        invalidations.append(f"funding_extreme_{funding:+.4f}")
+    # 4H trend is required — must agree with SM direction
+    if direction == "LONG" and p4h > 0.3:
+        score += 2
+        reasons.append(f"4H_BULLISH +{p4h:.1f}%")
+    elif direction == "SHORT" and p4h < -0.3:
+        score += 2
+        reasons.append(f"4H_BEARISH {p4h:.1f}%")
+    elif direction == "LONG" and p4h > 0:
+        score += 1
+        reasons.append(f"4H_POSITIVE +{p4h:.2f}%")
+    elif direction == "SHORT" and p4h < 0:
+        score += 1
+        reasons.append(f"4H_POSITIVE {p4h:.2f}%")
+    else:
+        # 4H opposes SM — hard block
+        return 0, [f"4H_OPPOSES ({p4h:+.1f}% vs SM {direction})"], None
 
-    # Volume died?
-    if len(candles_1h) >= 12:
-        recent_vols = [float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles_1h[-3:]]
-        avg_vol = sum(float(c.get("volume", c.get("v", c.get("vlm", 0)))) for c in candles_1h[-12:-3]) / 9
-        if avg_vol > 0 and all(v < avg_vol * 0.3 for v in recent_vols):
-            invalidations.append("volume_dried_up_3h")
+    # 1H confirms for bonus (not required)
+    if direction == "LONG" and p1h > 0.2:
+        score += 1
+        reasons.append(f"1H_CONFIRMS +{p1h:.2f}%")
+    elif direction == "SHORT" and p1h < -0.2:
+        score += 1
+        reasons.append(f"1H_CONFIRMS {p1h:.2f}%")
 
-    return (len(invalidations) == 0), invalidations
+    # ── 3. CONTRIBUTION VELOCITY (0-2 points) ────────────────
+    contrib = sm_data["contrib_change"]
+    if abs(contrib) >= 0.05:
+        score += 2
+        reasons.append(f"CONTRIB_SURGE +{abs(contrib)*100:.1f}%")
+    elif abs(contrib) >= 0.01:
+        score += 1
+        reasons.append(f"CONTRIB_ACCEL +{abs(contrib)*100:.2f}%")
+
+    # ── 4. FUNDING (0-2 points) ──────────────────────────────
+    if market_data:
+        funding = market_data.get("funding", 0)
+        # Funding paying your direction = pressure building
+        if direction == "SHORT" and funding > FUNDING_EXTREME_THRESHOLD:
+            score += 2
+            reasons.append(f"FUNDING_EXTREME +{funding*100:.4f}%/hr")
+        elif direction == "SHORT" and funding > FUNDING_CONFIRMS_THRESHOLD:
+            score += 1
+            reasons.append(f"FUNDING_CONFIRMS +{funding*100:.4f}%/hr")
+        elif direction == "LONG" and funding < -FUNDING_EXTREME_THRESHOLD:
+            score += 2
+            reasons.append(f"FUNDING_EXTREME {funding*100:.4f}%/hr")
+        elif direction == "LONG" and funding < -FUNDING_CONFIRMS_THRESHOLD:
+            score += 1
+            reasons.append(f"FUNDING_CONFIRMS {funding*100:.4f}%/hr")
+
+    # ── 5. VOLUME (0-1 point) ────────────────────────────────
+    if market_data:
+        vol_ratio = market_data.get("vol_ratio", 0)
+        if vol_ratio >= 1.5:
+            score += 1
+            reasons.append(f"VOL_SURGE {vol_ratio:.1f}x")
+
+    # ── 6. BTC BOOSTER (0-1 point) ───────────────────────────
+    # BTC alignment is a bonus, never a gate
+    btc_data = fetch_btc_direction()
+    if btc_data:
+        if btc_data == direction:
+            score += 1
+            reasons.append("BTC_CONFIRMS")
+
+    # ── 7. RANK POSITION (0-1 point) ─────────────────────────
+    rank = sm_data.get("rank", 999)
+    if 5 <= rank <= 20:
+        score += 1
+        reasons.append(f"RANK_SWEET_SPOT #{rank}")
+
+    return score, reasons, direction
 
 
-# ─── Main ─────────────────────────────────────────────────────
+def fetch_btc_direction():
+    """Quick check: what direction is BTC trending?"""
+    raw = cfg.mcporter_call("leaderboard_get_markets")
+    if not raw:
+        return None
+
+    markets = []
+    if isinstance(raw, dict):
+        markets = raw.get("markets", raw.get("data", []))
+    elif isinstance(raw, list):
+        markets = raw
+
+    for m in markets:
+        if not isinstance(m, dict):
+            continue
+        token = str(m.get("token", "")).upper()
+        if token == "BTC":
+            p4h = safe_float(m.get("token_price_change_pct_4h", 0))
+            if p4h > 0.3:
+                return "LONG"
+            elif p4h < -0.3:
+                return "SHORT"
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════
+# TRADE COUNTER
+# ═══════════════════════════════════════════════════════════════
+
+def load_trade_counter():
+    p = os.path.join(cfg.STATE_DIR, "trade-counter.json")
+    if os.path.exists(p):
+        try:
+            with open(p) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {"date": now_date(), "entries": 0}
+
+
+def save_trade_counter(tc):
+    if tc.get("date") != now_date():
+        tc = {"date": now_date(), "entries": 0}
+    cfg.atomic_write(os.path.join(cfg.STATE_DIR, "trade-counter.json"), tc)
+
+
+def is_on_cooldown():
+    p = os.path.join(cfg.STATE_DIR, "cooldowns.json")
+    if not os.path.exists(p):
+        return False
+    try:
+        with open(p) as f:
+            cooldowns = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return False
+    entry = cooldowns.get(ASSET)
+    if not entry:
+        return False
+    return time.time() < entry.get("until", 0)
+
+
+# ═══════════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════════
 
 def run():
-    config = cfg.load_config()
-    wallet, _ = cfg.get_wallet_and_strategy()
-
+    wallet, strategy_id = cfg.get_wallet_and_strategy()
     if not wallet:
-        cfg.output({"success": True, "heartbeat": "NO_REPLY", "note": "no wallet"})
+        cfg.output({"status": "ok", "heartbeat": "NO_REPLY", "note": "no wallet"})
         return
 
-    tc = cfg.load_trade_counter()
-    if tc.get("gate") != "OPEN":
-        cfg.output({"success": True, "heartbeat": "NO_REPLY", "note": f"gate={tc['gate']}"})
-        return
-
+    # ── Check existing positions (NO thesis exit) ─────────────
     account_value, positions = cfg.get_positions(wallet)
-    entry_cfg = config.get("entry", {})
-    hype_position = next((p for p in positions if p["coin"] == "HYPE"), None)
-
-    # CHECK 1: Re-evaluate thesis if holding HYPE
-    if hype_position:
-        still_valid, reasons = evaluate_hype_position(hype_position["direction"], entry_cfg)
-        if not still_valid:
-            cfg.output({
-                "success": True, "action": "thesis_exit",
-                "exits": [{"coin": "HYPE", "direction": hype_position["direction"],
-                           "reasons": reasons, "upnl": hype_position.get("upnl", 0)}],
-                "note": "HYPE thesis invalidated",
-            })
-            return
-        cfg.output({"success": True, "heartbeat": "NO_REPLY",
-                     "note": f"HYPE {hype_position['direction']} thesis intact"})
+    if account_value <= 0:
+        cfg.output({"status": "ok", "heartbeat": "NO_REPLY", "note": "cannot read account"})
         return
 
-    # CHECK 2: Entry cap
-    dynamic = entry_cfg.get("dynamicSlots", {})
-    if dynamic.get("enabled", True):
-        base_max = dynamic.get("baseMax", 3)
-        day_pnl = tc.get("realizedPnl", 0)
-        effective_max = base_max
-        for t in dynamic.get("unlockThresholds", []):
-            if day_pnl >= t.get("pnl", 999999):
-                effective_max = t.get("maxEntries", effective_max)
-        max_entries = min(effective_max, dynamic.get("absoluteMax", 6))
-    else:
-        max_entries = config.get("risk", {}).get("maxEntriesPerDay", 4)
+    hype_positions = [p for p in positions if p["coin"].upper() == ASSET]
 
-    if tc.get("entries", 0) >= max_entries:
-        cfg.output({"success": True, "heartbeat": "NO_REPLY", "note": f"max entries ({max_entries})"})
+    if hype_positions:
+        # RIDING mode — DSL manages exit. Scanner does NOT re-evaluate.
+        cfg.output({"status": "ok", "heartbeat": "NO_REPLY",
+                     "note": f"RIDING: HYPE {hype_positions[0]['direction']} — DSL manages exit.",
+                     "_v2_no_thesis_exit": True})
         return
 
-    # CHECK 3: Build HYPE thesis
-    thesis = build_hype_thesis(entry_cfg)
-    min_score = entry_cfg.get("minScore", 9)
-
-    if not thesis or thesis["score"] < min_score:
-        note = "no HYPE thesis" if not thesis else f"HYPE score {thesis['score']} below {min_score}"
-        cfg.output({"success": True, "heartbeat": "NO_REPLY", "note": note})
+    if len(positions) >= MAX_POSITIONS:
+        cfg.output({"status": "ok", "heartbeat": "NO_REPLY",
+                     "note": f"{len(positions)} positions active. Max {MAX_POSITIONS}.",
+                     "_v2_no_thesis_exit": True})
         return
 
-    # Conviction-scaled leverage (HYPE max is 10x)
-    lev_cfg = config.get("leverage", {})
-    if thesis["score"] >= 14:
-        leverage = lev_cfg.get("max", 10)
-    elif thesis["score"] >= 12:
-        leverage = lev_cfg.get("high", 8)
-    elif thesis["score"] >= 9:
-        leverage = lev_cfg.get("default", 7)
-    else:
-        leverage = lev_cfg.get("min", 5)
+    # ── Trade counter ─────────────────────────────────────────
+    tc = load_trade_counter()
+    if tc.get("date") != now_date():
+        tc = {"date": now_date(), "entries": 0}
+        save_trade_counter(tc)
+    if tc.get("entries", 0) >= MAX_DAILY_ENTRIES:
+        cfg.output({"status": "ok", "heartbeat": "NO_REPLY",
+                    "note": f"Daily entry limit ({MAX_DAILY_ENTRIES}) reached"})
+        return
 
-    # Conviction-scaled margin
-    base_margin_pct = entry_cfg.get("marginPctBase", 0.30)
-    if thesis["score"] >= 14:
-        margin_pct = base_margin_pct * 1.5
-    elif thesis["score"] >= 12:
-        margin_pct = base_margin_pct * 1.25
-    else:
-        margin_pct = base_margin_pct
-    margin = round(account_value * margin_pct, 2)
+    # ── Cooldown ──────────────────────────────────────────────
+    if is_on_cooldown():
+        cfg.output({"status": "ok", "heartbeat": "NO_REPLY",
+                    "note": f"HYPE on cooldown ({COOLDOWN_MINUTES} min)"})
+        return
+
+    # ── Fetch all HYPE data ───────────────────────────────────
+    sm_data = fetch_hype_sm_data()
+    market_data = fetch_hype_market_data()
+
+    if not sm_data:
+        cfg.output({"status": "ok", "heartbeat": "NO_REPLY",
+                    "note": "HYPE not in SM leaderboard"})
+        return
+
+    # ── Score it ──────────────────────────────────────────────
+    score, reasons, direction = score_hype(sm_data, market_data)
+
+    if score < MIN_SCORE or not direction:
+        cfg.output({"status": "ok", "heartbeat": "NO_REPLY",
+                    "note": f"HYPE {direction or '?'} score {score} < {MIN_SCORE}. "
+                            f"Reasons: {', '.join(reasons)}"})
+        return
+
+    # ── Entry ─────────────────────────────────────────────────
+    margin = round(account_value * MARGIN_PCT, 2)
+
+    tc["entries"] = tc.get("entries", 0) + 1
+    save_trade_counter(tc)
 
     cfg.output({
-        "success": True, "signal": thesis,
-        "entry": {"coin": "HYPE", "direction": thesis["direction"],
-                  "leverage": leverage, "margin": margin,
-                  "orderType": config.get("execution", {}).get("entryOrderType", "FEE_OPTIMIZED_LIMIT")},
+        "status": "ok",
+        "signal": {
+            "asset": ASSET,
+            "direction": direction,
+            "score": score,
+            "mode": "HYPE_PREDATOR",
+            "reasons": reasons,
+            "smPct": sm_data["pct"],
+            "smTraders": sm_data["traders"],
+            "priceChg4h": sm_data["price_chg_4h"],
+            "priceChg1h": sm_data["price_chg_1h"],
+            "contribChange": sm_data.get("contrib_change", 0),
+            "funding": market_data.get("funding", 0) if market_data else 0,
+        },
+        "entry": {
+            "asset": ASSET,
+            "direction": direction,
+            "leverage": DEFAULT_LEVERAGE,
+            "margin": margin,
+            "orderType": "FEE_OPTIMIZED_LIMIT",
+        },
+        "constraints": {
+            "maxPositions": MAX_POSITIONS,
+            "maxLeverage": MAX_LEVERAGE,
+            "maxDailyEntries": MAX_DAILY_ENTRIES,
+            "cooldownMinutes": COOLDOWN_MINUTES,
+            "_v2_no_thesis_exit": True,
+            "_note": "DSL managed by plugin runtime. Scanner does NOT manage exits.",
+        },
+        "_cheetah_version": "2.0",
     })
 
 
 if __name__ == "__main__":
-    run()
+    try:
+        run()
+    except Exception as e:
+        cfg.log(f"CRITICAL ERROR: {e}")
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        cfg.output({"status": "error", "error": str(e)})

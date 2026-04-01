@@ -1,123 +1,188 @@
 ---
 name: cheetah-strategy
 description: >-
-  CHEETAH — HYPE alpha hunter. Single-asset focus at 5-10x leverage. Reads every HYPE signal
-  (SM positioning, funding, OI, 4-timeframe trend, volume, BTC macro correlation) to build
-  highest-conviction entries. BTC macro as confidence booster (not a gate — HYPE has independent catalysts). Thesis-based
-  re-evaluation exits. DSL High Water Mode (mandatory) with HYPE-specific extra-wide tiers.
+  CHEETAH v2.0 — The Ultimate HYPE Predator. Single asset, every signal source,
+  maximum patience. SM commitment required (80%+ one direction). BTC is a booster,
+  never a gate. Wide DSL tiers for HYPE's 5-10% intraday wicks.
+  DSL exit managed by plugin runtime via runtime.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
-  version: "1.0"
+  version: "2.0"
   platform: senpi
   exchange: hyperliquid
+  requires:
+    - senpi-trading-runtime
 ---
 
-# CHEETAH — HYPE Alpha Hunter
+# 🐆 CHEETAH v2.0 — The Ultimate HYPE Predator
 
-One asset. Every signal. 5-10x leverage. HYPE runs on its own narrative.
+One asset. Every signal. Strike when SM is committed.
 
-CHEETAH stares at HYPE and nothing else. Every signal source — SM positioning, funding rate, OI, 4-timeframe trend, volume, BTC macro direction — feeds into a single thesis. BTC alignment boosts confidence but is not required — HYPE has independent catalysts (protocol revenue, vault flows, ecosystem growth) and can trend against BTC.
+---
 
-**maxPositions: 1.** One HYPE trade at a time.
+## ⛔ CRITICAL AGENT RULES
 
-## MANDATORY: DSL High Water Mode
+### RULE 1: Install path is `/data/workspace/skills/cheetah-strategy/`
 
-**CHEETAH MUST use DSL High Water Mode. This is not optional. Do not substitute standard DSL tiers.**
+### RULE 2: THE SCANNER DOES NOT EXIT POSITIONS
 
-Spec: https://github.com/Senpi-ai/senpi-skills/blob/main/dsl-dynamic-stop-loss/dsl-high-water-spec%201.0.md
+When the scanner sees an active HYPE position, it outputs NO_REPLY. DSL is the
+ONLY exit mechanism. v1.0 had thesis exit active. v2.0 removes it entirely.
 
-When creating DSL state files for any CHEETAH position, you MUST include:
+### RULE 3: MAX 1 POSITION — HYPE only
 
-```json
-{
-  "lockMode": "pct_of_high_water",
-  "phase2TriggerRoe": 8,
-  "tiers": [
-    {"triggerPct": 8,   "lockHwPct": 15, "consecutiveBreachesRequired": 3},
-    {"triggerPct": 15,  "lockHwPct": 35, "consecutiveBreachesRequired": 3},
-    {"triggerPct": 25,  "lockHwPct": 55, "consecutiveBreachesRequired": 2},
-    {"triggerPct": 40,  "lockHwPct": 70, "consecutiveBreachesRequired": 1},
-    {"triggerPct": 60,  "lockHwPct": 85, "consecutiveBreachesRequired": 1}
-  ]
-}
-```
+### RULE 4: Verify runtime is installed on every session start
 
-**If `tiers` or `lockMode` is missing from the state file, the DSL engine falls back to flat 1.5% retrace and High Water Mode is silently disabled. Always verify.**
+Run `openclaw senpi runtime list`. Runtime must be listed and healthy.
+Run `openclaw senpi status` to confirm.
 
-**FALLBACK:** Use `tiersLegacyFallback` from config until engine supports `pct_of_high_water`.
+### RULE 5: Never modify parameters. Never increase leverage above 7x.
 
-## Why HYPE-Only
+### RULE 6: MAX 3 ENTRIES PER DAY
 
-HYPE is Hyperliquid's native token — highest community attention, strongest narrative momentum, and extreme funding rate swings. Compared to BTC:
+### RULE 7: 120-minute cooldown between trades
 
-- **More volatile** — bigger moves (5-15% days are common), but sharper reversals
-- **Lower max leverage** — 10x max vs BTC's 20x
-- **Funding goes extreme faster** — crowded longs/shorts build quickly, reversals are violent
-- **Independent narrative** — can trend with or against BTC. Protocol revenue, vault flows, ecosystem growth, and token burns drive HYPE-specific moves
-- **Fewer whales, stronger SM signal** — each whale's positioning matters more
+---
 
-## How CHEETAH Trades
+## Why HYPE Is Different
 
-### Entry (score ≥ 9)
+HYPE is Hyperliquid's native token. It moves on protocol narratives, not just
+crypto macro. Lower BTC correlation. Routinely wicks 5-10% intraday then reverses.
+SM positioning is often extreme (100% one direction). Funding swings dramatically.
+
+Cheetah is built specifically for these characteristics:
+- **SM commitment gate:** SM must be 80%+ one direction (not just "aligned")
+- **BTC is a booster, never a gate:** HYPE moves independently
+- **Wide DSL tiers:** lock only 15% at +5% ROE because HYPE wicks hard
+- **No time-based cuts:** HYPE trends develop over 4-12 hours
+- **7x max leverage:** HYPE is volatile enough without amplification
+
+---
+
+## Scoring System (14 points max)
 
 | Signal | Points | Required? |
 |---|---|---|
-| 4h trend structure | 3 | **Yes** |
-| 1h trend agrees | 2 | **Yes** |
-| BTC macro alignment | 0-2 | No (booster +2 if aligned, -1 if opposing) |
-| 15m momentum confirms | 0-1 | **Yes** |
-| 5m alignment (4TF agree) | 1 | No |
-| SM aligned | 2-3 | **Hard block if opposing** |
-| Funding pays to hold | 2 | No |
-| Volume above average | 1-2 | No |
-| OI growing | 1 | No |
-| RSI has room | 1 | No |
-| 4h momentum strength | 1 | No |
+| SM commitment (3-15%+ concentration) | 1-4 | **Yes (min 3% + 15 traders)** |
+| 4H trend aligned with SM | 1-2 | **Yes (hard block if opposing)** |
+| 1H confirms direction | 0-1 | No (bonus) |
+| Contribution velocity accelerating | 0-2 | No |
+| Funding confirms direction | 0-2 | No |
+| Volume surge (1.5x+) | 0-1 | No |
+| BTC confirms direction | 0-1 | No (booster only) |
+| Rank sweet spot (#5-20) | 0-1 | No |
 
-### Conviction-Scaled Leverage
+**Min score to enter: 8.** Ensures at least SM + trend + 2 confirming signals.
 
-| Score | Leverage |
-|---|---|
-| 9-11 | 7x |
-| 12-13 | 8x |
-| 14+ | 10x |
+---
 
-### Thesis Re-Evaluation (every 3 min)
+## Exit Management
 
-Holds as long as: 4h trend intact, SM not flipped, funding not extreme, volume not dead. BTC opposing alone does not invalidate — HYPE has its own catalysts. ANY break = thesis exit.
+DSL exit handled by plugin runtime via `runtime.yaml`.
 
-### DSL Tiers (HYPE-specific — wider than GRIZZLY)
+**Entry flow:**
+1. Scanner outputs signal (score 8+, SM committed, 4H aligned)
+2. Verify no existing HYPE position
+3. Call `create_position`
+4. `position_tracker` detects the new position automatically
+5. Plugin DSL applies trailing stop-loss protection
 
-| Tier | Trigger ROE | Lock (% of HW) | Breaches |
-|---|---|---|---|
-| 1 | 8% | 15% | 3 |
-| 2 | 15% | 35% | 3 |
-| 3 | 25% | 55% | 2 |
-| 4 | 40% | 70% | 1 |
-| 5 | 60%+ | 85% | 1 |
+**Monitor:**
+- `openclaw senpi dsl positions` — DSL-tracked positions
+- `openclaw senpi dsl inspect HYPE` — full position details
+- `openclaw senpi status` — runtime health
 
-Wider early tiers than GRIZZLY because HYPE wicks 5-10% ROE routinely during trends. Phase 1 floor: 5% notional. Stagnation TP: 15% ROE stale 60min.
+---
 
-## Notification Policy
+## Runtime Setup
 
-**ONLY alert:** HYPE position OPENED or CLOSED, risk guardian triggered, critical error.
-**NEVER alert:** Scanner found nothing, thesis re-eval passed, DSL routine, any reasoning.
-All crons isolated. `NO_REPLY` for idle cycles.
+**Step 1:** Set wallet:
+```bash
+sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET>/' /data/workspace/skills/cheetah-strategy/runtime.yaml
+```
+
+**Step 2:** Set telegram:
+```bash
+sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/cheetah-strategy/runtime.yaml
+```
+
+**Step 3:** Install:
+```bash
+openclaw senpi runtime create --path /data/workspace/skills/cheetah-strategy/runtime.yaml
+```
+
+**Step 4:** Verify:
+```bash
+openclaw senpi runtime list
+openclaw senpi status
+```
+
+---
 
 ## Bootstrap Gate
 
-Check `config/bootstrap-complete.json` every session. If missing: verify MCP, create scanner cron (3min isolated) + DSL cron (3min isolated), write completion file, send: "🐆 CHEETAH is online. Watching HYPE. DSL High Water active. Silence = no conviction."
+On EVERY session start, check `config/bootstrap-complete.json`. If missing:
+1. Read senpi-trading-runtime skill
+2. Verify Senpi MCP
+3. Set wallet and telegram in runtime.yaml
+4. Install runtime: `openclaw senpi runtime create --path /data/workspace/skills/cheetah-strategy/runtime.yaml`
+5. Verify: `openclaw senpi runtime list` and `openclaw senpi status`
+6. Create scanner cron (3 min, main)
+7. Write `config/bootstrap-complete.json`
+8. Send: "🐆 CHEETAH v2.0 online. Hunting HYPE. Silence = no conviction."
+
+If bootstrap exists, verify runtime + status + scanner cron on every session start.
+
+---
+
+## DSL Configuration (HYPE-Specific)
+
+| Setting | Value | Why |
+|---|---|---|
+| Hard timeout | 180 min | HYPE trends develop over hours |
+| Weak peak cut | **Disabled** | HYPE wicks kill patience strategies |
+| Dead weight cut | **Disabled** | Same reason |
+| Max loss | 25% ROE | At 7x = 3.6% price move |
+| Retrace | 8% ROE | Wide for HYPE's volatility |
+| Consecutive breaches | 3 | Survive HYPE's violent wicks |
+
+**Phase 2 Tiers (HYPE-specific wide locks):**
+
+| Trigger | Lock | Why |
+|---|---|---|
+| +5% ROE | 15% | Barely lock — HYPE wicks through +5% constantly |
+| +10% | 30% | Starting to lock — the move is real |
+| +15% | 50% | Half locked — meaningful trend |
+| +20% | 65% | Locked in — strong runner |
+| +30% | 80% | Hard lock — exceptional move |
+| +50% | 90% | Maximum lock — generational trade |
+
+---
+
+## Risk
+
+| Rule | Value |
+|---|---|
+| Max positions | 1 (HYPE only) |
+| Max leverage | 7x |
+| Max entries/day | 3 |
+| Cooldown | 120 min |
+| Min score | 8 |
+
+---
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `scripts/cheetah-scanner.py` | HYPE thesis builder + re-evaluator |
-| `scripts/cheetah_config.py` | Shared config, MCP helpers |
-| `config/cheetah-config.json` | All variables with HW tiers + legacy fallback |
+| `scripts/cheetah-scanner.py` | HYPE predator scanner — multi-signal scoring |
+| `scripts/cheetah_config.py` | Config helper (MCP, state, cooldowns) |
+| `config/cheetah-config.json` | Wallet, strategy ID |
+| `runtime.yaml` | Runtime YAML for DSL plugin (HYPE-specific wide tiers) |
+
+---
 
 ## License
 
-MIT — Built by Senpi (https://senpi.ai). 
-Source: https://github.com/Senpi-ai/senpi-skills
+MIT — Built by Senpi (https://senpi.ai).
