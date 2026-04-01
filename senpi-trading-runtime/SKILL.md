@@ -285,6 +285,7 @@ For full DSL configuration with all fields, time-based cuts, close reasons, and 
 
 ## References
 
+- [Runtime Concepts](references/runtime-concepts.md) — Conceptual explanation of scanners, actions, DSL phases, and what every field controls in trading terms
 - [YAML Schema Reference](references/yaml-schema.md) — All runtime YAML fields and DSL preset options
 - [DSL Configuration Reference](references/dsl-configuration.md) — Full DSL exit engine: phases, tiers, time cuts, close reasons, events
 - [Strategy Examples](references/strategy-examples.md) — Ready-to-use YAML examples with different DSL tuning profiles
