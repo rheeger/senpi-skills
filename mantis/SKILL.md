@@ -1,138 +1,45 @@
 ---
 name: mantis-strategy
 description: >-
-  MANTIS v3.0 — Dual-mode emerging movers scanner. All live trading lessons
-  applied, plus one experimental tweak: contribution acceleration threshold
-  raised from 0.001 to 0.003 and the weak +1 tier (CONTRIB_POSITIVE) eliminated.
-  Only genuine SM acceleration earns contribution points. Stalker minScore 7,
-  minTotalClimb 8, tighter Phase 1 for low-score entries, consecutive-loss
-  streak gate. XYZ banned. Leverage 7-10x. DSL exit managed by plugin runtime via runtime.yaml.
+  MANTIS v4.0 — Striker-Only SM Explosion Scanner. Stalker removed.
+  Detects violent rank jumps across 50+ markets. Fast-cycling DSL.
+  DSL exit managed by plugin runtime via runtime.yaml.
 license: MIT
 metadata:
   author: jason-goldberg
   version: "4.0"
   platform: senpi
   exchange: hyperliquid
-  config_source: mantis-v2-plus-contrib-threshold-experiment
   requires:
     - senpi-trading-runtime
 ---
 
-# 🦗 MANTIS v3.0 — Dual-Mode Scanner + Contribution Threshold Experiment
+# 🦗 MANTIS v4.0 — Striker-Only SM Explosion Scanner
 
-Patient. Precise. Only strikes when SM acceleration is real.
+Stalker is dead. Only explosions.
 
 ---
 
-## ⛔ CRITICAL AGENT RULES — READ BEFORE ANYTHING ELSE
+## ⛔ CRITICAL AGENT RULES
 
 ### RULE 1: Install path is `/data/workspace/skills/mantis-strategy/`
-
-The skill MUST be installed to exactly this path.
-
-### RULE 2: MAX 3 POSITIONS — check before EVERY entry
-
-Before opening ANY position, call `strategy_get_clearinghouse_state` and count open positions. If positions >= 3, SKIP.
-
-### RULE 3: Scanner output is AUTHORITATIVE — never override from memory
-
-The scanner is the single source of truth for all trading parameters.
-
-### RULE 4: Verify runtime is installed on every session start
-
-Run `openclaw senpi runtime list`. Runtime must be listed. The position tracker and DSL exit are handled by the plugin runtime.
-
-### RULE 5: Never retry timed-out position creation
-
-If `create_position` times out, check clearinghouse state first.
-
-### RULE 6: Never modify your own configuration
-
-No adjustments to leverage, margin, scoring, or any parameter.
-
-### RULE 7: Record Stalker results for streak tracking
-
-After every Stalker position closes, call `record_stalker_result(tc, is_win)`.
-
----
-
-## The MANTIS v3.0 Experiment
-
-**Hypothesis:** Fox v1.0's weak Stalker trades often carried the CONTRIB_POSITIVE reason — a +1 score bonus for contribution velocity between 0 and 0.001 per scan. This is technically "positive" but so weak it's effectively noise. A contribution delta of 0.0005 means SM interest grew by 0.05% per scan — statistically indistinguishable from random fluctuation. Meanwhile, the +2 CONTRIB_ACCEL signal (delta > 0.001) correlated with actual winning trades where SM was genuinely building.
-
-**The tweak:** Contribution acceleration threshold raised from 0.001 to 0.003. The +1 tier (CONTRIB_POSITIVE: delta between 0 and threshold) is eliminated entirely. This is the ONLY difference from the base scanner.
-
-**What this changes in scoring:**
-- Old: delta 0.0005 → +1 (CONTRIB_POSITIVE). New: delta 0.0005 → +0 (ignored)
-- Old: delta 0.0015 → +2 (CONTRIB_ACCEL). New: delta 0.0015 → +0 (below new threshold)
-- Old: delta 0.004 → +2 (CONTRIB_ACCEL). New: delta 0.004 → +2 (CONTRIB_ACCEL, passes)
-
-**Expected effect:** Stalker max theoretical score drops from +8 to +7 for assets with weak acceleration. Only assets with strong SM momentum (delta > 0.003) get the +2 contribution bonus. This should eliminate the "barely climbing with barely growing interest" chop trades while preserving entries where SM is genuinely accelerating.
-
----
-
-## Dual-Mode Entry
-
-### MODE A — STALKER (Accumulation) — Score >= 7
-- SM rank climbing steadily over 3+ consecutive scans
-- Total climb >= 8 ranks
-- Contribution building each scan
-- 4H trend aligned
-- **v3.0: Contribution acceleration must exceed 0.003 for +2 bonus. No +1 tier.**
-- **Streak gate:** 3 consecutive Stalker losses → minScore raised to 9
-
-### MODE B — STRIKER (Explosion) — Score >= 9, min 4 reasons
-- FIRST_JUMP or IMMEDIATE_MOVER (10+ rank jump from #25+)
-- Rank jump >= 15 OR velocity > 15
-- Raw volume >= 1.5x of 6h average
-- Unchanged
-
----
-
-## Exit Management
-
-DSL exit is handled by the plugin runtime via `runtime.yaml`. The `position_tracker` scanner auto-detects position opens/closes on-chain. See `runtime.yaml` for configuration details.
-
-**Entry flow:**
-1. Scanner outputs signal
-2. Verify positions < 3
-3. Verify exchange max leverage >= 7
-4. Call `create_position`
-5. Send ONE notification: position opened
-6. `position_tracker` detects the new position automatically
-7. Plugin DSL monitor applies trailing stop-loss protection
-
-**Monitor positions:**
-- `openclaw senpi dsl positions` — list all DSL-tracked positions
-- `openclaw senpi dsl inspect <ASSET>` — full position details
-
-**On position close:**
-8. Call `record_stalker_result(tc, is_win)` if Stalker entry
+### RULE 2: THE SCANNER DOES NOT EXIT POSITIONS — DSL only.
+### RULE 3: MAX 3 POSITIONS
+### RULE 4: Verify runtime on every session start
+### RULE 5: Never modify parameters
+### RULE 6: MAX 6 ENTRIES PER DAY
+### RULE 7: 120-minute per-asset cooldown
 
 ---
 
 ## Runtime Setup
 
-**Step 1:** Set your strategy wallet address in runtime.yaml:
 ```bash
-sed -i 's/${WALLET_ADDRESS}/<STRATEGY_WALLET_ADDRESS>/' /data/workspace/skills/mantis-strategy/runtime.yaml
-```
-Replace `<STRATEGY_WALLET_ADDRESS>` with the actual wallet address.
-
-**Step 2:** Set telegram chat ID for notifications:
-```bash
+sed -i 's/${WALLET_ADDRESS}/<WALLET>/' /data/workspace/skills/mantis-strategy/runtime.yaml
 sed -i 's/${TELEGRAM_CHAT_ID}/<CHAT_ID>/' /data/workspace/skills/mantis-strategy/runtime.yaml
-```
-Replace `<CHAT_ID>` with the actual Telegram chat ID.
-
-**Step 3:** Install the runtime:
-```bash
 openclaw senpi runtime create --path /data/workspace/skills/mantis-strategy/runtime.yaml
-```
-
-**Step 4:** Verify:
-```bash
 openclaw senpi runtime list
+openclaw senpi status
 ```
 
 ---
@@ -140,41 +47,26 @@ openclaw senpi runtime list
 ## Bootstrap Gate
 
 On EVERY session start, check `config/bootstrap-complete.json`. If missing:
-1. Read the senpi-trading-runtime skill: `cat /data/workspace/skills/senpi-trading-runtime/SKILL.md` — this provides all CLI commands for runtime management and DSL position inspection.
+1. Read senpi-trading-runtime skill
 2. Verify Senpi MCP
-3. Set wallet in runtime.yaml: `sed -i 's/${WALLET_ADDRESS}/ACTUAL_ADDRESS/' /data/workspace/skills/mantis-strategy/runtime.yaml`
-4. Set Telegram in runtime.yaml: `sed -i 's/${TELEGRAM_CHAT_ID}/CHAT_ID/' /data/workspace/skills/mantis-strategy/runtime.yaml`
-5. Install runtime: `openclaw senpi runtime create --path /data/workspace/skills/mantis-strategy/runtime.yaml`
-6. Verify runtime installed: `openclaw senpi runtime list`
-7. Remove old DSL cron (if upgrading): run `openclaw crons list`, delete any cron containing `dsl-v5.py` via `openclaw crons delete <id>`
-8. Create scanner cron (90s, main)
-9. Write `config/bootstrap-complete.json`
-10. Send: "🦗 MANTIS v3.0 online. Contrib threshold 0.003, no weak tier. Silence = no conviction."
-
-If bootstrap exists, still verify runtime and scanner cron on every session start.
+3. Set wallet and telegram in runtime.yaml
+4. Install runtime
+5. Verify: `openclaw senpi runtime list` and `openclaw senpi status`
+6. Create scanner cron (90s, main)
+7. Write `config/bootstrap-complete.json`
+8. Send: "🦗 MANTIS v4.0 online. Striker-only. Silence = no explosions."
 
 ---
 
-## Risk Management
+## Risk
 
 | Rule | Value |
 |---|---|
 | Max positions | 3 |
 | Max entries/day | 6 |
-| Leverage | 7-10x |
-| Daily loss limit | 10% |
-| Per-asset cooldown | 2 hours |
-| XYZ equities | Banned |
-| Contrib accel threshold | 0.003 (experiment, was 0.001) |
-| Stalker streak gate | 3 losses → minScore 9 |
-
----
-
-## Notification Policy
-
-**ONLY alert:** Position OPENED, position CLOSED (P&L + reason), streak gate activated/deactivated, critical error.
-
-**NEVER alert:** Scanner found nothing, any reasoning.
+| Leverage | 7x |
+| Cooldown | 120 min per asset |
+| Min Striker score | 9 |
 
 ---
 
@@ -182,14 +74,13 @@ If bootstrap exists, still verify runtime and scanner cron on every session star
 
 | File | Purpose |
 |---|---|
-| `scripts/mantis-scanner.py` | Dual-mode scanner with contrib threshold experiment |
-| `scripts/mantis_config.py` | Config helper with stalkerResults tracking |
-| `config/mantis-config.json` | Config with Mantis v3.0 thresholds |
-| `runtime.yaml` | Runtime config for plugin (DSL exit + position tracker) |
+| `scripts/mantis-scanner.py` | Striker-only SM explosion scanner |
+| `scripts/mantis_config.py` | Config helper |
+| `config/mantis-config.json` | Wallet, strategy ID |
+| `runtime.yaml` | Runtime YAML for DSL plugin (fast-cycling) |
 
 ---
 
 ## License
 
 MIT — Built by Senpi (https://senpi.ai).
-Source: https://github.com/Senpi-ai/senpi-skills
