@@ -1,39 +1,5 @@
 {
   "strategyId": "",
   "wallet": "",
-  "chatId": "",
-  "maxPositions": 1,
-  "leverage": {"default": 10, "min": 7, "max": 10},
-  "entry": {
-    "minScore": 10,
-    "minMom15mPct": 0.1,
-    "marginPctBase": 0.25,
-    "fundingExtremeThreshold": 0.012,
-    "stalking": {
-      "maxStalkHours": 4,
-      "minReloadVolPct": 50,
-      "crowdedFundingAnnPct": 50
-    },
-    "dynamicSlots": {
-      "enabled": true,
-      "baseMax": 3,
-      "absoluteMax": 6,
-      "unlockThresholds": [
-        {"pnl": 100, "maxEntries": 4},
-        {"pnl": 250, "maxEntries": 5}
-      ]
-    }
-  },
-  "risk": {
-    "maxEntriesPerDay": 4,
-    "maxDailyLossPct": 10,
-    "maxDrawdownPct": 25,
-    "maxConsecutiveLosses": 3,
-    "cooldownMinutes": 60
-  },
-  "execution": {
-    "entryOrderType": "FEE_OPTIMIZED_LIMIT",
-    "exitOrderType": "MARKET",
-    "slOrderType": "MARKET"
-  }
+  "chatId": ""
 }
