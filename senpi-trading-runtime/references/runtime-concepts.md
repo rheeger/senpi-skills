@@ -4,6 +4,27 @@ This document explains the conceptual behavior of every major component in `runt
 
 ---
 
+## Top-Level Fields
+
+These fields sit at the root of every `runtime.yaml` and identify the skill to the runtime.
+
+| Field | Description |
+|---|---|
+| `name` | Unique identifier for this skill/tracker. Used by the runtime to reference and manage the running instance. Should be a short, descriptive slug. |
+| `version` | Runtime schema version. Fixed at `1.0.0` — every skill must use this value. Tells the runtime which configuration format and feature set to expect. |
+| `description` | Human-readable summary of the skill's strategy and tuning philosophy. Informational only — not used by the runtime engine. |
+
+### `strategy`
+
+The core configuration block that defines the trading context:
+
+| Field | Description |
+|---|---|
+| `wallet` | The on-chain wallet address holding positions and executing trades. Set via `${WALLET_ADDRESS}` so credentials are not hardcoded. This is the actual trading wallet the runtime monitors and acts on. |
+| `enabled` | Boolean flag to activate or pause the skill. When `false`, the runtime loads the config but takes no action. |
+
+---
+
 ## The Big Picture
 
 The runtime operates as a three-layer pipeline:
